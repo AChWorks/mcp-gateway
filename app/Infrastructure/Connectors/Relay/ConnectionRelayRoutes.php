@@ -14,6 +14,14 @@ use Illuminate\Support\Collection;
  */
 final readonly class ConnectionRelayRoutes
 {
+    /** @return array<string,list<string>> */
+    public static function selectionRules(): array
+    {
+        return [
+            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
+        ];
+    }
+
     /** @return Collection<int,ConnectionRelay> */
     public function selectable(): Collection
     {
@@ -75,6 +83,15 @@ final readonly class ConnectionRelayRoutes
                 ['failure_stage' => 'connection_setup'], true,
             );
         }
+    }
+
+    /**
+     * Resolve the current route only if it still belongs to the admitted
+     * Target snapshot. HTTP connectors use the same dispatch fence.
+     */
+    public function httpRouteForSnapshot(Target $target): ?LocalSocks5Route
+    {
+        return $this->httpRouteAtEpoch((string) $target->getKey(), (int) $target->relay_binding_revision);
     }
 
     public function httpRouteForRecord(string $targetRecordId): ?LocalSocks5Route

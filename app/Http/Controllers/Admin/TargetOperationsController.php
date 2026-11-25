@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Access\GatewayRole;
 use App\Domain\Targets\Target;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
@@ -18,12 +17,10 @@ final class TargetOperationsController extends Controller
 {
     public function update(Request $request, string $target, ActivityRecorder $activity): RedirectResponse
     {
-        // A scalar route parameter prevents Laravel implicit model binding
-        // from resolving Target existence BEFORE the Owner-only gate. All
-        // non-Owners receive 403 for both existing and nonexistent IDs.
-        abort_unless((string) $request->user()?->getRawOriginal('role') === GatewayRole::Owner->value, 403);
+        // Check the global ceiling before resolving the requested Target.
+        Gate::authorize(GatewayPermission::TargetsOperationsManage->value);
         $target = Target::query()->where('target_id', $target)->firstOrFail();
-        Gate::authorize(GatewayPermission::TargetsView->value, $target);
+        Gate::authorize(GatewayPermission::TargetsOperationsManage->value, $target);
         $validated = $request->validate([
             'state' => ['required', Rule::in(['paused', 'enabled'])],
         ]);
@@ -32,7 +29,7 @@ final class TargetOperationsController extends Controller
         DB::transaction(static function () use ($target, $activity, $paused): void {
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
             if ((bool) $locked->operations_paused === $paused) {
-                return; // Idempotent repeated Owner submission.
+                return; // Idempotent repeated submission.
             }
 
             $locked->forceFill(['operations_paused' => $paused])->save();

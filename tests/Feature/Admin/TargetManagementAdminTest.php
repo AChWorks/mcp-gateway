@@ -79,6 +79,26 @@ final class TargetManagementAdminTest extends TestCase
             ->assertSee('Authorize this Target to connect WordPress securely');
     }
 
+    public function test_create_only_user_returns_to_registration_without_requiring_inventory_access(): void
+    {
+        $creator = $this->user('administrator', 'all');
+        DB::table('user_permission_denials')->insert([
+            'user_id' => $creator->getKey(),
+            'permission' => GatewayPermission::TargetsView->value,
+        ]);
+        $this->actingAs($creator)->get('/admin/targets/create')
+            ->assertOk()->assertDontSee('Back to Targets');
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge',
+            'target_id' => 'created-without-view',
+            'display_name' => 'Created without view',
+            'base_url' => 'https://wordpress.example.test/',
+        ])->assertAdminRedirect('/admin/targets/create')->assertSessionHasNoErrors();
+        $this->assertDatabaseHas('targets', ['target_id' => 'created-without-view']);
+        $this->get('/admin/targets')->assertForbidden();
+        $this->get('/admin/targets/created-without-view')->assertForbidden();
+    }
+
     #[Group('database-access')]
     public function test_selected_creator_can_manage_only_self_created_targets_when_owner_enables_scope_option(): void
     {
@@ -113,7 +133,7 @@ final class TargetManagementAdminTest extends TestCase
         $this->assertDatabaseMissing('user_target_access', [
             'user_id' => $creator->id, 'target_record_id' => $created->id,
         ]);
-        $this->get('/admin/targets')->assertOk()->assertSee('creator-wp')->assertDontSee('unrelated');
+        $this->get('/admin/targets')->assertOk()->assertSee('creator-wp')->assertSee('Confirm Pause')->assertDontSee('unrelated');
         $this->get('/admin/targets/creator-wp')->assertOk();
         $this->get('/admin/targets/unrelated')->assertForbidden();
 
@@ -1053,7 +1073,7 @@ A second line.', $target->refresh()->ai_guidance);
         $this->actingAs($viewer)->get('/admin/targets/unreachable-wp')->assertForbidden();
     }
 
-    public function test_offline_removal_is_owner_only_and_requires_exact_id_password_and_both_acknowledgments(): void
+    public function test_offline_removal_obeys_scoped_remove_permission_and_requires_exact_id_password_and_both_acknowledgments(): void
     {
         $target = $this->target('offline-protected', 'wp_ai_bridge');
         $target->forceFill(['connection_state' => 'connected'])->save();
@@ -1064,13 +1084,17 @@ A second line.', $target->refresh()->ai_guidance);
             'current_password' => 'ThisIsATestSecret!234',
         ];
         $path = '/admin/targets/offline-protected/forget';
-        $this->actingAs($this->user('administrator', 'all'));
+        $administrator = $this->user('administrator', 'all');
+        $this->actingAs($administrator);
         $this->get('/admin/targets/offline-protected')->assertOk()
-            ->assertDontSee('Permanently remove Target locally');
+            ->assertSee('Permanently remove Target locally');
+        DB::table('user_permission_denials')->insert(['user_id' => $administrator->id, 'permission' => 'targets.remove']);
+        $this->get('/admin/targets/offline-protected')->assertOk()->assertDontSee('Permanently remove Target locally');
         $this->delete($path, $input)->assertForbidden();
         $this->actingAs($this->user('viewer', 'all'))
             ->delete($path, $input)->assertForbidden();
-        $this->actingAs($this->user('owner', 'all'));
+        DB::table('user_permission_denials')->where('user_id', $administrator->id)->delete();
+        $this->actingAs($administrator);
         $this->delete($path)->assertSessionHasErrors([
             'confirm_target_id',
             'confirm_local_only',
@@ -1085,6 +1109,8 @@ A second line.', $target->refresh()->ai_guidance);
         self::assertSame(1, Target::query()->whereKey($target->getKey())->count());
         self::assertSame(0, DB::table('activity_events')
             ->where('target_id', 'offline-protected')->where('operation', 'target-forget-local')->count());
+        $this->delete($path, $input)->assertAdminRedirect('/admin/targets');
+        self::assertSame(0, Target::query()->whereKey($target->getKey())->count());
         Http::assertNothingSent();
     }
 

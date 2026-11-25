@@ -46,7 +46,6 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
     public function registrationRules(): array
     {
         return [
-            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
             'ssh_host' => ['required', 'string', 'max:253'],
             'ssh_port' => ['required', 'integer', 'min:1', 'max:65535'],
             'ssh_username' => ['required', 'string', 'max:128'],
@@ -67,7 +66,7 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
     {
         // ssh_host_key is the server's PUBLIC pin; no login secrets are flashed.
         return [
-            'connection_relay_id', 'ssh_host', 'ssh_port', 'ssh_username', 'ssh_host_key',
+            'ssh_host', 'ssh_port', 'ssh_username', 'ssh_host_key',
             'ssh_auth_method', 'ssh_trust_confirmed', 'ssh_route_mode',
             'ssh_reverse_port', 'ssh_tunnel_identity',
         ];
@@ -76,7 +75,6 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
     public function preflightRules(): array
     {
         return [
-            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
             'ssh_host' => ['required', 'string', 'max:253'],
             'ssh_port' => ['required', 'integer', 'min:1', 'max:65535'],
             'target_id' => ['nullable', 'string', 'max:64'],

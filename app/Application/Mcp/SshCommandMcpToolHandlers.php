@@ -35,7 +35,7 @@ final readonly class SshCommandMcpToolHandlers
         }
         // Resolve exact authorized Target BEFORE reading any credential or dialing.
         // ScopeTargets applies role ceiling, default SSH deny, direct/group denials
-        // and explicit Selected scope, without exposing forbidden identifiers.
+        // and configured Target scope, without exposing forbidden identifiers.
         $target = $this->access->scopeTargets(Target::query(), $user, GatewayPermission::SshCommandRun)
             ->where('target_id', $target_id)
             ->where('connector_type', 'ssh_direct')

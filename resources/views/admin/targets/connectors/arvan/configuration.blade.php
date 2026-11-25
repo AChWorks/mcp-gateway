@@ -47,7 +47,7 @@
         @error('api_key')<p class="field-error" role="alert" id="arvan-edit-api-key-error">{{ $message }}</p>@enderror
     </div>
     <div class="field">
-        <label for="arvan-edit-owner-password">{{ __('Current Owner password') }}</label>
+        <label for="arvan-edit-owner-password">{{ __('Your current Gateway password') }}</label>
         <input id="arvan-edit-owner-password" type="password" name="current_password" maxlength="255"
             autocomplete="current-password" data-admin-requires-intent required
             @if(session('target_configuration_failed')) @error('current_password') aria-invalid="true" @enderror @endif

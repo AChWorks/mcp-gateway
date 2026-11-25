@@ -10,6 +10,8 @@
     $selectedSshMode = old('ssh_mode', $sshMode);
     $selected = is_string($requestedConnector) && array_key_exists($requestedConnector, $connectorOptions)
         ? $requestedConnector : '';
+    $selectedSshMode = $selected === 'ssh_direct' && in_array($selectedSshMode, ['direct', 'manual', 'managed'], true) ? $selectedSshMode : 'direct';
+    $relaySupported = $selected !== '' && $selectedSshMode === 'direct';
 @endphp
 <div class="page-heading">
     <div>
@@ -17,7 +19,9 @@
         <h1>{{ __('Add Target') }}</h1>
         <p class="muted">{{ __('Choose a connector, then provide only the details it needs. Registration never executes remote commands.') }}</p>
     </div>
+    @can('targets.view')
     <a href="{{ route('admin.targets.index') }}">{{ __('Back to Targets') }}</a>
+    @endcan
 </div>
 
 <section class="panel panel-wide target-enrollment" aria-labelledby="target-enrollment-title">
@@ -50,9 +54,6 @@
                 @endforeach
             </select>
             <p id="connector_type_help" class="field-help">{{ __('The next fields change with your selection. Only implemented connectors you can enroll are listed.') }}</p>
-            @if (auth()->user()?->getRawOriginal('role') !== 'owner')
-                <p class="field-help">{{ __('ArvanCloud API key enrollment requires a Gateway Owner. Ask an Owner to register the Target and assign your access.') }}</p>
-            @endif
             @error('connector_type')<p class="field-error" role="alert" id="connector_type-error">{{ $message }}</p>@enderror
             <noscript>
                 <p class="field-help">{{ __('JavaScript is disabled. Choose a connector below to open its server-rendered form:') }}</p>
@@ -66,12 +67,10 @@
             <div class="target-ssh-shortcut-actions" role="group" aria-label="{{ __('Start an SSH Target') }}">
                 <a class="button button-secondary" data-turbo="false" data-target-ssh-shortcut="direct"
                     href="{{ route('admin.targets.create', ['connector_type' => 'ssh_direct', 'ssh_mode' => 'direct']) }}">{{ __('Direct SSH') }}</a>
-                @if (auth()->user()?->getRawOriginal('role') === 'owner')
                     <a class="button button-secondary" data-turbo="false" data-target-ssh-shortcut="managed"
                         href="{{ route('admin.targets.create', ['connector_type' => 'ssh_direct', 'ssh_mode' => 'managed']) }}">{{ __('Managed Reverse SSH') }}</a>
                     <a class="button button-secondary" data-turbo="false" data-target-ssh-shortcut="manual"
                         href="{{ route('admin.targets.create', ['connector_type' => 'ssh_direct', 'ssh_mode' => 'manual']) }}">{{ __('Manual Reverse SSH (advanced)') }}</a>
-                @endif
             </div>
         </div>
 

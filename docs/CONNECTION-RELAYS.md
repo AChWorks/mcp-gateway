@@ -4,7 +4,7 @@
 
 ## How Relay routing works
 
-Gateway PHP → localhost SOCKS5 → native OpenSSH on the Gateway → existing intermediary SSHD → selected SSH/SFTP or WordPress HTTPS Target. Multiple Targets may share one intermediary. A Target that selects a Relay never silently falls back to Direct on failure; Direct SSH and Reverse SSH remain separate connection modes.
+Gateway PHP → localhost SOCKS5 → native OpenSSH on the Gateway → existing intermediary SSHD → the selected Target (SSH/SFTP, WordPress HTTPS/OAuth/MCP, or ArvanCloud HTTPS/OpenAPI/API). Multiple Targets of different connector types may share one intermediary. Relay selection, storage, enable/disable and route revision are shared Target infrastructure, not connector-owned permissions. Target creators may select any enabled Relay; scoped configuration editors may change a Target route using their own current Gateway password. Global Relay setup remains Owner-controlled. Route changes reset verification and fence retained work; SSH and API keys can be retained under the original verified identity, while outstanding WordPress OAuth state must first be settled. A Target that selects a Relay never silently falls back to Direct on failure; Direct SSH and Reverse SSH remain separate connection modes.
 
 ## First-time setup
 
@@ -16,7 +16,7 @@ Gateway PHP → localhost SOCKS5 → native OpenSSH on the Gateway → existing 
 2. In **Connectivity → Connection Relays**, enter Relay ID, name, SSH endpoint/port, existing Unix username, verified public **server** host key, and unused Gateway-local SOCKS5 port. Save as Owner. The Gateway generates an Ed25519 client **login** keypair; its private half remains encrypted with the Gateway APP_KEY and never appears on the page or in the two commands. For a Relay registered before this feature, use the Owner-approved **Prepare the two complete setup commands** button; it does not modify an existing running tunnel.
 3. Copy **Command 1 — run on Relay server** and run it in a trusted shell on the intermediary. It installs the generated public **client** login key into that existing account's authorized_keys, without overwriting other entries or changing the system SSHD.
 4. Copy **Command 2 — run on Gateway server** and run it in a trusted shell on the Gateway, never on the intermediary. It selects an already-installed compatible PHP CLI and runs the Gateway's own Artisan installer with sudo. This reads the encrypted login key locally, writes a protected SSH identity and independently pinned server key under /etc/mcp-gateway-relays/ID, installs an OpenSSH systemd service, starts it and enables startup after reboot. Neither command requires a manual key copy between machines or an open terminal afterward.
-5. Select **Test local Relay connection**, then **Enable Relay for Targets**, and verify the real SSH/SFTP or WordPress Target separately. An Enabled registration is only a route choice; local SOCKS5 success is not Target authentication.
+5. Select **Test local Relay connection**, then **Enable Relay for Targets**, and verify the actual Target separately with its own connector-specific identity/authentication check. An Enabled registration is only a route choice; local SOCKS5 success is not Target authentication.
 
 ### Prerequisites and expected failures
 
@@ -53,7 +53,7 @@ On the **intermediary Relay host**, inspect the existing Unix account's `authori
 
 ## Security and acceptance boundary
 
-A pinned **Relay SSHD host key** authenticates the intermediary. The real SSH Target key or WordPress TLS/OAuth remains independently validated after the SOCKS5 hop. Binding to 127.0.0.1 does not isolate other local Unix users on a shared host; use existing OS isolation if the environment requires it. Preserve encrypted keys and APP_KEY together for recovery. Never send private login credentials through the web form, terminal chat, or logs.
+A pinned **Relay SSHD host key** authenticates the intermediary. The real SSH Target key or HTTPS TLS and connector authorization remain independently validated after the SOCKS5 hop. Binding to 127.0.0.1 does not isolate other local Unix users on a shared host; use existing OS isolation if the environment requires it. Preserve encrypted keys and APP_KEY together for recovery. Never send private login credentials through the web form, terminal chat, or logs.
 
 **Installed-host acceptance still required:** physical separate-host two-command installation, terminal closure and real reboot recovery; authenticated registered SSH/SFTP/retained Jobs; WordPress OAuth consent/token/MCP; real no-Direct-fallback interruption/recovery and offline Owner UI deletion. Disposable GitHub CI already exercised native systemd and OpenSSH, but its fixtures do not prove the real installed NL/IR environment. A source test or Release alone never proves Production deployment.
 

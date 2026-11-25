@@ -79,7 +79,7 @@ final class TargetConfigurationAdminTest extends TestCase
             'connected_at' => now(),
         ])->save();
         $response = $this->get('/admin/targets/ssh-demo/edit')->assertOk()
-            ->assertSee('Current Owner password')
+            ->assertSee('Your current Gateway password')
             ->assertSee('SSH host or IP address')
             ->assertDontSee('test-password-secret')
             ->assertDontSee($oldCiphertext);

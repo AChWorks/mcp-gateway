@@ -4,6 +4,8 @@ namespace Tests\Feature\ArvanCloud;
 
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Targets\ArvanApiOperations;
+use App\Application\Targets\ConnectionRelayAdministration;
+use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -12,6 +14,7 @@ use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetAdapter;
 use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetConfig;
 use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetVault;
+use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Http\DnsResolver;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -54,7 +57,7 @@ final class ArvanApiConnectorTest extends TestCase
         $event = DB::table('activity_events')->where('operation', 'arvan-api-catalog')->sole();
         $details = json_decode((string) $event->diagnostic_context, true, flags: JSON_THROW_ON_ERROR);
         self::assertSame('openapi_spec_url_missing', $details['source_error_code']);
-        self::assertSame('Target has no Owner-configured OpenAPI description URL.', $details['source_error_message']);
+        self::assertSame('Target has no configured OpenAPI description URL.', $details['source_error_message']);
         self::assertSame('admission', $details['failure_stage']);
         self::assertTrue($details['request_not_sent']);
         Http::assertNothingSent();
@@ -62,7 +65,8 @@ final class ArvanApiConnectorTest extends TestCase
 
     public function test_registered_target_key_is_bound_encrypted_and_admin_never_replays_the_secret(): void
     {
-        $owner = $this->user('owner');
+        $administrator = $this->user('administrator');
+        $administrator->forceFill(['self_created_target_access' => true])->save();
         $payload = [
             'target_id' => 'arvan-cdn',
             'display_name' => 'Arvan CDN',
@@ -73,16 +77,19 @@ final class ArvanApiConnectorTest extends TestCase
             'api_key' => self::KEY,
             'current_password' => 'CorrectHorse!234',
         ];
-        $this->actingAs($this->user('administrator'))
+        $this->actingAs($this->user('operator'))
             ->post('/admin/targets', $payload)->assertForbidden();
         self::assertSame(0, Target::query()->count());
-        $this->actingAs($owner)
-            ->post('/admin/targets', $payload)->assertAdminRedirect('/admin/targets/arvan-cdn');
+        $this->actingAs($administrator);
+        $this->post('/admin/targets', [...$payload, 'connection_relay_id' => 'missing-relay'])->assertSessionHasErrors('connection_relay_id');
+        self::assertSame(0, Target::query()->count());
+        $this->post('/admin/targets', $payload)->assertAdminRedirect('/admin/targets/arvan-cdn');
 
         $target = Target::query()->sole();
         $config = ArvanApiTargetConfig::query()->sole();
         $credential = TargetCredential::query()->sole();
         self::assertSame('arvancloud', $target->connector_type);
+        self::assertSame($administrator->id, $target->created_by_user_id);
         self::assertSame('https://api.example.test/cdn/4.0', $config->base_url);
         self::assertSame(self::KEY, app(ArvanApiTargetVault::class)->open($target, $config, $credential));
         self::assertStringNotContainsString(self::KEY, $credential->encrypted_payload);
@@ -155,24 +162,27 @@ final class ArvanApiConnectorTest extends TestCase
             'allowed' => true,
         ]);
 
-        // An in-scope Administrator can still test and disconnect; neither
-        // permission grants the Owner-only connector configuration editor.
+        // Configuration is an independent, scoped, deniable permission.
+        $this->actingAs($administrator)
+            ->get('/admin/targets/arvan-cdn/edit?section=api-connection')->assertOk()
+            ->assertSee('id="target-connection-settings"', false);
+        DB::table('user_permission_denials')->insert(['user_id' => $administrator->id, 'permission' => 'targets.configure']);
         $this->actingAs($administrator)
             ->get('/admin/targets/arvan-cdn')->assertOk()
             ->assertSee('Verify API key (read-only GET)')
             ->assertSee('Check HTTPS endpoint (no API key)')
             ->assertSee('Delete Gateway API key')
-            ->assertSee('A Gateway Owner must add a new key before this Target can be used again.')
+            ->assertSee('An authorized Target configuration editor must add a new key before this Target can be used again.')
             ->assertDontSee('To use this Target again, enter a new key in its connection settings.');
         $this->get('/admin/targets/arvan-cdn/edit?section=api-connection')->assertOk()
             ->assertDontSee('id="target-connection-settings"', false);
 
-        // Removing a probe is an Owner configuration task. The Admin must
+        // Removing a probe is a scoped configuration task. The restricted Admin must
         // see a next step, but not a link to a form they cannot access.
         $config = ArvanApiTargetConfig::query()->sole();
         $config->forceFill(['probe_path' => null])->save();
         $this->get('/admin/targets/arvan-cdn')->assertOk()
-            ->assertSee('Ask a Gateway Owner to configure a read-only GET probe for this Target.')
+            ->assertSee('Ask an authorized Target configuration editor to configure a read-only GET probe for this Target.')
             ->assertSee('Delete Gateway API key')
             ->assertDontSee('Set a GET probe in advanced connection settings')
             ->assertDontSee('section=api-connection')
@@ -183,7 +193,7 @@ final class ArvanApiConnectorTest extends TestCase
             ->get('/admin/targets/arvan-cdn')->assertOk()
             ->assertSee('Set a GET probe in advanced connection settings')
             ->assertSee('To use this Target again, enter a new key in its connection settings.')
-            ->assertDontSee('Ask a Gateway Owner to configure a read-only GET probe');
+            ->assertDontSee('Ask an authorized Target configuration editor to configure a read-only GET probe');
         $this->get('/admin/targets/arvan-cdn/edit?section=api-connection')->assertOk()
             ->assertSee('id="target-connection-settings"', false)
             ->assertSee('Advanced connector connection settings');
@@ -195,13 +205,13 @@ final class ArvanApiConnectorTest extends TestCase
             ->assertAdminRedirect('/admin/targets/arvan-cdn');
         self::assertSame(0, TargetCredential::query()->count());
         $this->get('/admin/targets/arvan-cdn')->assertOk()
-            ->assertSee('Ask a Gateway Owner to add a Machine User API key')
+            ->assertSee('Ask an authorized Target configuration editor to add a Machine User API key')
             ->assertDontSee('Open advanced connection settings to add a key')
             ->assertDontSee('section=api-connection');
         $this->actingAs($owner)
             ->get('/admin/targets/arvan-cdn')->assertOk()
             ->assertSee('Open advanced connection settings to add a key')
-            ->assertDontSee('Ask a Gateway Owner to add a Machine User API key');
+            ->assertDontSee('Ask an authorized Target configuration editor to add a Machine User API key');
         Http::assertNothingSent();
     }
 
@@ -541,6 +551,110 @@ final class ArvanApiConnectorTest extends TestCase
         self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
         self::assertSame(1, TargetCredential::query()->count());
         Http::assertNothingSent();
+    }
+
+    public function test_api_target_reuses_shared_relay_for_all_http_formats_without_direct_fallback(): void
+    {
+        $relay = ConnectionRelay::query()->create([
+            'relay_id' => 'fixture-relay',
+            'display_name' => 'Fixture Relay',
+            'control_host' => '1.1.1.1',
+            'control_port' => 22,
+            'control_user' => 'fixture',
+            'control_host_key' => 'ssh-ed25519 '.base64_encode(pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat('a', 32)),
+            'local_socks_port' => 46081,
+        ]);
+        DB::table('connection_relays')->where('id', $relay->id)->update(['enabled' => true]);
+        $relay->refresh();
+        $owner = $this->user('owner');
+        $this->actingAs($owner);
+        $this->get('/admin/targets/create?connector_type=arvancloud')
+            ->assertOk()->assertSee('value="fixture-relay"', false);
+        $target = app(ArvanApiTargetAdapter::class)->register([
+            'target_id' => 'arvan-relayed',
+            'display_name' => 'Relayed API',
+            'api_base_url' => 'https://api.example.test/cdn/4.0',
+            'api_spec_url' => 'https://spec.example.test/openapi.yaml',
+            'api_probe_path' => '/domains',
+            'api_key' => self::KEY,
+            'connection_relay_id' => 'fixture-relay',
+        ], $owner);
+        self::assertSame($relay->id, $target->relay_record_id);
+        self::assertSame(1, $target->relay_binding_revision);
+        $this->get('/admin/targets/arvan-relayed/edit')
+            ->assertOk()->assertSee('Network routing')->assertSee('value="fixture-relay" selected', false);
+
+        $proxies = [];
+        $disableDuringProbe = false;
+        Http::fake(function (Request $request, array $options) use (&$proxies, &$disableDuringProbe, $relay) {
+            $proxies[] = $options['proxy'] ?? null;
+            self::assertTrue($options['verify']);
+            self::assertFalse($options['allow_redirects']);
+            if (str_contains($request->url(), 'spec.example.test')) {
+                self::assertFalse($request->hasHeader('Authorization'));
+
+                return Http::response(['openapi' => '3.0.0', 'paths' => ['/domains' => ['get' => ['summary' => 'Domains']]]]);
+            }
+            if ($request->method() === 'HEAD') {
+                self::assertFalse($request->hasHeader('Authorization'));
+            } else {
+                self::assertTrue($request->hasHeader('Authorization', 'Apikey '.self::KEY));
+            }
+            if ($disableDuringProbe) {
+                app(ConnectionRelayAdministration::class)->disable($relay, 1);
+            }
+
+            return Http::response(['ok' => true]);
+        });
+        $adapter = app(ArvanApiTargetAdapter::class);
+        $api = app(ArvanApiOperations::class);
+        $adapter->checkReachability($target);
+        $adapter->test($target);
+        self::assertTrue($api->catalog($owner, $target->target_id)['ok']);
+        self::assertTrue($api->execute($owner, $target->target_id, 'GET', '/domains')['ok']);
+        self::assertTrue($api->execute($owner, $target->target_id, 'PATCH', '/domains', bodyJson: '{"enabled":true}')['ok']);
+        self::assertTrue($api->execute($owner, $target->target_id, 'PATCH', '/domains', bodyJson: '{}', contentType: 'application/json-patch+json')['ok']);
+        self::assertTrue($api->execute($owner, $target->target_id, 'PUT', '/domains', bodyText: 'hello', contentType: 'text/plain')['ok']);
+        self::assertTrue($api->execute($owner, $target->target_id, 'POST', '/domains', formFields: ['value' => 'x'])['ok']);
+        self::assertTrue($api->execute($owner, $target->target_id, 'POST', '/domains', formFiles: [[
+            'name' => 'file', 'filename' => 'file.txt', 'content_base64' => 'eA==',
+        ]])['ok']);
+        self::assertSame(array_fill(0, 9, 'socks5://127.0.0.1:46081'), $proxies);
+
+        $bindings = app(ConnectionRelayTargetBinding::class);
+        $target->refresh();
+        $ciphertext = TargetCredential::query()->sole()->encrypted_payload;
+        self::assertTrue($bindings->change($target, $bindings->revision($target), null));
+        $target->refresh();
+        self::assertSame(TargetConnectionState::Disconnected, $target->connection_state);
+        self::assertSame($ciphertext, TargetCredential::query()->sole()->encrypted_payload);
+        self::assertTrue($api->execute($owner, $target->target_id, 'GET', '/domains')['ok']);
+        self::assertSame('', end($proxies));
+
+        self::assertTrue($bindings->change($target, $bindings->revision($target), 'fixture-relay'));
+        $target->refresh();
+        $disableDuringProbe = true;
+        try {
+            $adapter->test($target);
+            self::fail('An obsolete probe marked the changed route as Connected.');
+        } catch (TargetConnectorFailure $exception) {
+            self::assertSame('probe_stale', $exception->reason);
+        }
+        self::assertSame(TargetConnectionState::Error, $target->fresh()->connection_state);
+        self::assertSame('relay_disabled', $target->fresh()->last_error_code);
+        $count = count($proxies);
+        self::assertFalse($api->catalog($owner, $target->target_id)['ok']);
+        self::assertFalse($api->execute($owner, $target->target_id, 'GET', '/domains')['ok']);
+        foreach (['checkReachability', 'test'] as $method) {
+            try {
+                $adapter->{$method}($target->fresh());
+                self::fail('A disabled Relay reached the HTTP transport.');
+            } catch (TargetConnectorFailure $exception) {
+                self::assertSame('network_failure', $exception->reason);
+            }
+        }
+        self::assertCount($count, $proxies);
+        self::assertSame($ciphertext, TargetCredential::query()->sole()->encrypted_payload);
     }
 
     public function test_catalog_discovers_new_schema_and_api_uses_registered_origin_query_and_json_body(): void

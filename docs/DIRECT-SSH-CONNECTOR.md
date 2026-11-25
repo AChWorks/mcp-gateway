@@ -17,13 +17,13 @@ A configured IP can be displayed before connection but is not thereby host-key v
 
 Private/VPN network eligibility is an explicit reviewed egress-policy question, **not** a permission to disable public-address, host-key or SSRF boundaries. SSH host-key identity is independent of WordPress HTTPS/TLS identity and must not be passed through the latter's HTTP-only adapter.
 
-### Owner-enrolled Reverse SSH for inbound-blocked Targets
+### Reverse SSH for inbound-blocked Targets
 
 **Two supported enrollment paths:** The existing **manual operator-managed**
 route uses the explicit `SSH_REVERSE_APPROVED_ROUTES` allowlist and host
 operator provisioning documented below. The separately approved, optional
 [Managed Reverse SSH](REVERSE-SSH-MANAGED.md) path instead uses an isolated
-one-time Gateway host bootstrap, Owner-authenticated durable enrollment,
+one-time Gateway host bootstrap, permission-authorized durable enrollment,
 per-Target loopback listener and one-use Target installer. It **does not**
 require per-Target `.env` allowlist edits or manual key/port allocation.
 Both paths preserve the same end-to-end Target SSH host-key pin, login,
@@ -47,10 +47,9 @@ URLs, DNS addresses, private ranges or a caller-supplied proxy destination.
    `SSH_REVERSE_APPROVED_ROUTES`, and provisions a dedicated restricted NL
    SSH tunnel account and key. The string identity is an **operator mapping and
    audit label**, not a cryptographic attestation of a listening process.
-2. The Gateway Owner selects Reverse during enrollment or configuration,
+2. A user with targets.create or scoped targets.configure selects Reverse during enrollment or configuration,
    enters the exact allowlisted port and identity, confirms the pinned **real
-   Target** host key and re-enters their own Admin password. Mere
-   `targets.create` (Administrator) cannot select Reverse.
+   Target** host key and re-enters their own Gateway password. The preapproved host route remains mandatory regardless of role.
 
 On every verification, command and SFTP operation the Gateway rechecks the
 operator mapping before the connection and at the post-login operation/verification
@@ -69,7 +68,7 @@ login was verified, and displays the original registered Target endpoint
 separately from the NL loopback route. No listener health is implied by a
 previous successful verification.
 
-Sensitive route changes require the existing Owner, password-confirmation,
+Sensitive route changes require scoped configuration permission, current-actor password confirmation,
 transaction and optimistic-revision gates. A change clears old verified
 state and rebinds encrypted credentials to the new route. Synchronous SSH,
 SFTP, whole-file exchange and retained Jobs continue to use the same
@@ -92,7 +91,7 @@ A CI/OpenSSH fixture is not a production acceptance test.
 
 ### Updating registered endpoint or credentials
 
-The Admin separates low-risk display-name editing from sensitive connector reconfiguration. Changes to hostname, port, OS user, pinned server key or authentication material require actual Owner authorization, password confirmation and optimistic revision checks. Secrets are never returned in form fields or flashed after invalid input. A retained unchanged secret is re-encrypted/rebound only when the connector's supported rules make that safe; changing credential method requires a new secret.
+The Admin separates low-risk display-name editing from sensitive connector reconfiguration. Changes to hostname, port, OS user, pinned server key or authentication material require scoped targets.configure authorization, current-actor password confirmation and optimistic revision checks. Secrets are never returned in form fields or flashed after invalid input. A retained unchanged secret is re-encrypted/rebound only when the connector's supported rules make that safe; changing credential method, verified host key or OS username requires a new secret.
 
 A substantive edit invalidates old verified peer/login evidence. An old in-flight verification cannot approve the new binding. **Verify SSH host and login** again before accepting execution; neither user/Target grants nor previous OS account rights automatically transfer to an arbitrary replacement host. Disconnecting locally removes Gateway's stored credential; it does **not** revoke the OS account or terminate existing SSH sessions.
 

@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 /**
- * Only owner/password-gated controller may change Target transport routes.
+ * Only a scoped Target configuration/password-gated controller may change Target transport routes.
  * No outbound operations under a lock; all old SSH jobs become unreplayable.
  */
 final readonly class ConnectionRelayTargetBinding
@@ -23,6 +23,7 @@ final readonly class ConnectionRelayTargetBinding
         private ConnectionRelayRoutes $routes,
         private SshTargetVault $vault,
         private ActivityRecorder $activity,
+        private TargetConnectorRegistry $connectors,
     ) {}
 
     public function onRegistration(Target $target, ?string $relayId): void
@@ -74,10 +75,15 @@ final readonly class ConnectionRelayTargetBinding
                 return false;
             }
 
-            if (! in_array($locked->getAttribute('connection_state'), [
-                TargetConnectionState::Disconnected, TargetConnectionState::Error,
+            if (! in_array($locked->connector_type, $this->connectors->types(), true)) {
+                throw new TargetConnectorFailure(__('The Target connector is not available.'), 'connection_relay_id');
+            }
+            // Only an unresolved connection transition is a generic blocker.
+            // Connected is previous verification, not an open transport.
+            if (in_array($locked->getAttribute('connection_state'), [
+                TargetConnectionState::Pending, TargetConnectionState::Reassigning,
             ], true)) {
-                throw new TargetConnectorFailure(__('Disconnect and settle the existing Target operation before changing its route.'), 'connection_relay_id');
+                throw new TargetConnectorFailure(__('Settle the existing connection transition before changing its route.'), 'connection_relay_id');
             }
 
             $epoch = (int) ($locked->getAttribute('relay_binding_revision') ?? 0);
@@ -134,12 +140,10 @@ final readonly class ConnectionRelayTargetBinding
                         throw new TargetConnectorFailure(__('Resolve the outstanding WordPress OAuth intent before changing the connection route.'), 'connection_relay_id');
                     }
                 }
-            } else {
-                throw new TargetConnectorFailure(__('This connector does not support a Connection Relay.'), 'connection_relay_id');
             }
 
             // Eloquent's normal model guard intentionally cannot mutate
-            // these fields outside this serialized, audited Owner workflow.
+            // these fields outside this serialized, audited configuration workflow.
             DB::table('targets')->where('id', $locked->getKey())->update([
                 'relay_record_id' => $nextId,
                 'relay_binding_revision' => $epoch + 1,
@@ -147,6 +151,9 @@ final readonly class ConnectionRelayTargetBinding
                 'last_error_code' => null,
                 'connected_at' => null,
                 'last_tested_at' => null,
+                'last_success_at' => null,
+                'last_failure_at' => null,
+                'last_failure_code' => null,
                 'updated_at' => now(),
             ]);
             $this->activity->recordRequired(CorrelationId::current(), 'target-relay-reconfigure', 'success', $locked);

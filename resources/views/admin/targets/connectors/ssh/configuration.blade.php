@@ -5,7 +5,7 @@
     <input type="hidden" name="configuration_revision" value="{{ $configurationRevision }}">
     @error('configuration_revision')<p class="form-error" role="alert" id="ssh-configuration-revision-error">{{ $message }}</p>@enderror
     @error('configuration')<p class="form-error" role="alert" id="ssh-configuration-error">{{ $message }}</p>@enderror
-    <p class="field-help" id="ssh-configuration-help">{{ __('Changing the SSH port, host, username, host key or login secret clears the old connection verification. Verify the new host and login afterward. Leave secret fields empty to retain the current encrypted login credential when the method is unchanged.') }}</p>
+    <p class="field-help" id="ssh-configuration-help">{{ __('Changing the SSH port, host, username, host key or login secret clears the old connection verification. Verify the new host and login afterward. Leave secret fields empty to retain the current encrypted login credential only when the login method, verified host key and username are unchanged.') }}</p>
     <div class="target-field-grid">
         <div class="field">
             <label for="ssh_edit_host">{{ __('SSH host or IP address') }}</label>
@@ -99,7 +99,7 @@
         </div>
     </div>
     <div class="field">
-        <label for="ssh_config_owner_password">{{ __('Current Owner password') }}</label>
+        <label for="ssh_config_owner_password">{{ __('Your current Gateway password') }}</label>
         <input id="ssh_config_owner_password" type="password" name="current_password" data-admin-requires-intent required maxlength="255"
             autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="ssh_config_owner_password-error" @enderror>
         @error('current_password')<p class="form-error" role="alert" id="ssh_config_owner_password-error">{{ $message }}</p>@enderror

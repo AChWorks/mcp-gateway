@@ -55,20 +55,18 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
     {
         return [
             'base_url' => ['required', 'string', 'url:https', 'max:2048'],
-            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
         ];
     }
 
     public function safeOldInputFields(): array
     {
-        return ['base_url', 'connection_relay_id'];
+        return ['base_url'];
     }
 
     public function preflightRules(): array
     {
         return [
             'base_url' => ['required', 'string', 'url:https', 'max:2048'],
-            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
         ];
     }
 

@@ -83,7 +83,7 @@ final readonly class SshTargetReconfiguration
             // not merely editable form fields. Switching it to Direct or
             // swapping Target login credentials while the control key is live
             // would orphan the authorized SSHD listener/key or silently
-            // invalidate a managed install. Require explicit Owner revocation
+            // invalidate a managed install. Require explicit route revocation
             // before using the existing audited credential rotation path.
             if (SshManagedReverseEnrollment::query()
                 ->where('target_record_id', $locked->getKey())
@@ -141,6 +141,13 @@ final readonly class SshTargetReconfiguration
             }
             if ($method !== $config->auth_method && $replacement === null) {
                 throw new TargetConnectorFailure(__('Changing the login method requires the new password or private key.'), 'ssh_auth_method');
+            }
+            // A delegated editor must not redirect a stored password to a new
+            // server identity or login account. Port/route/hostname changes
+            // that retain the exact verified key and username may retain it.
+            if ($replacement === null && ($pin->canonicalLine() !== $config->pinned_host_key
+                || $endpoint->username !== $config->username)) {
+                throw new TargetConnectorFailure(__('Changing the verified server key or SSH username requires a new login credential.'), 'ssh_auth_method');
             }
             if (! $credential instanceof TargetCredential && $replacement === null) {
                 throw new TargetConnectorFailure(__('This Target has no SSH credential. Enter a new password or private key.'), 'ssh_auth_method');

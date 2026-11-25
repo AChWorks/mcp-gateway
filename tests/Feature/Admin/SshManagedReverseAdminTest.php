@@ -203,14 +203,15 @@ final class SshManagedReverseAdminTest extends TestCase
             ->assertSee('gateway.example.test');
     }
 
-    public function test_non_owner_cannot_view_configure_or_enroll_managed_reverse(): void
+    public function test_target_creator_can_enroll_but_cannot_configure_reverse_infrastructure(): void
     {
         $this->get('/admin/settings/reverse-ssh')->assertRedirect('/admin/login');
         $this->actingAs($this->user('administrator'));
         $this->get('/admin/settings/reverse-ssh')->assertForbidden();
-        $this->get('/admin/targets/create/managed-reverse')->assertForbidden();
+        $this->get('/admin/targets/create/managed-reverse')->assertRedirect('/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed');
         $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertForbidden();
-        $this->post('/admin/targets/managed-reverse', $this->enrollmentFields())->assertForbidden();
+        $this->post('/admin/targets/managed-reverse', $this->enrollmentFields())->assertSessionHasErrors('site');
+        self::assertSame(0, SshManagedReverseEnrollment::query()->count());
     }
 
     public function test_settings_are_off_by_default_and_require_owner_password_bootstrap_and_revision(): void
@@ -301,7 +302,7 @@ final class SshManagedReverseAdminTest extends TestCase
         self::assertSame(0, DB::table('targets')->count());
     }
 
-    public function test_owner_generates_one_command_only_after_approved_bootstrap_and_real_pin(): void
+    public function test_target_creator_generates_one_command_only_after_approved_bootstrap_and_real_pin(): void
     {
         $this->actingAs($this->user('owner'));
         $this->post('/admin/targets/managed-reverse', $this->enrollmentFields())
@@ -310,6 +311,10 @@ final class SshManagedReverseAdminTest extends TestCase
 
         $this->put('/admin/settings/reverse-ssh', $this->settings(true))->assertRedirect();
         $this->fixtureLocalReady();
+        $administrator = $this->user('administrator');
+        $administrator->forceFill(['self_created_target_access' => true])->save();
+        $this->actingAs($administrator);
+        $this->post('/admin/targets/managed-reverse', [...$this->enrollmentFields(), 'connection_relay_id' => 'invalid'])->assertSessionHasErrors('connection_relay_id');
         $reply = $this->post('/admin/targets/managed-reverse', $this->enrollmentFields())
             ->assertOk()
             ->assertSee('Pending Setup created')
@@ -320,6 +325,7 @@ final class SshManagedReverseAdminTest extends TestCase
         self::assertStringContainsString('no-store', $reply->headers->get('Cache-Control'));
         self::assertSame('pending', SshManagedReverseEnrollment::query()->sole()->state);
         self::assertSame('pending', SshManagedReverseEnrollment::query()->sole()->target->connection_state->value);
+        self::assertSame($administrator->id, SshManagedReverseEnrollment::query()->sole()->target->created_by_user_id);
         self::assertSame('reverse', SshTargetConfig::query()->sole()->route_mode);
         self::assertStringNotContainsString('BEGIN OPENSSH PRIVATE KEY', $reply->getContent());
         $this->get('/admin/targets/create/managed-reverse')

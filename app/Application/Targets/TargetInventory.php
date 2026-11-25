@@ -87,6 +87,7 @@ final class TargetInventory
                     'targets.id',
                     'targets.target_id',
                     'targets.display_name',
+                    'targets.created_by_user_id',
                     'targets.connector_type',
                     'targets.connection_state',
                     'targets.operations_paused',

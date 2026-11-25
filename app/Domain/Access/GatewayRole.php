@@ -20,6 +20,8 @@ enum GatewayRole: string
                 GatewayPermission::TargetsView,
                 GatewayPermission::TargetsCreate,
                 GatewayPermission::TargetsUpdate,
+                GatewayPermission::TargetsConfigure,
+                GatewayPermission::TargetsOperationsManage,
                 GatewayPermission::TargetsRemove,
                 GatewayPermission::TargetsConnect,
                 GatewayPermission::TargetsReconnect,

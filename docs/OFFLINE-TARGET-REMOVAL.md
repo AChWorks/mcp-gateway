@@ -1,11 +1,11 @@
-# Offline Target removal — local-only Owner recovery
+# Offline Target removal — local-only recovery
 
-**Operator use:** this is an intentionally **irreversible**, Owner-gated, local-only exception when normal connector disconnect/removal cannot be proved. Verify that the actual installed release supports the action and obtain explicit authorization and a recoverable database backup. It is **not** a DNS/OAuth troubleshooting shortcut and never confirms remote credential revocation.
+**Operator use:** this is an intentionally **irreversible**, permission-gated, local-only exception when normal connector disconnect/removal cannot be proved. Verify that the actual installed release supports the action and obtain explicit authorization and a recoverable database backup. It is **not** a DNS/OAuth troubleshooting shortcut and never confirms remote credential revocation.
 
 ## Two distinct operations
 
 1. **Disconnect / normal Remove:** use whenever the remote connector is reachable and the Gateway can finish its existing credential revocation/cleanup. Normal `DELETE /admin/targets/{target_id}` is still blocked while credentials, active state, OAuth callbacks, refresh or revocation intents remain. This protects WordPress rotating offline grants against blind replay or false revocation.
-2. **Remove locally without remote revocation:** a separate Owner-only `DELETE /admin/targets/{target_id}/forget` endpoint that requires `targets.remove` and `security.manage`, verifies current Owner role and password, an exact typed Target ID and *two separate explicit acknowledgments*. This operation intentionally does **not** call WordPress, an SSH host or any other remote provider; it succeeds even when DNS, TLS, the upstream host or local stored credentials are unavailable.
+2. **Remove locally without remote revocation:** a separate `DELETE /admin/targets/{target_id}/forget` endpoint that requires scoped `targets.remove` and verifies the current actor password, an exact typed Target ID and *two separate explicit acknowledgments*. This operation intentionally does **not** call WordPress, an SSH host or any other remote provider; it succeeds even when DNS, TLS, the upstream host or local stored credentials are unavailable.
 
 Only use the second path if the operator knowingly accepts that the remote account/client OAuth authorization **may remain valid** until separately revoked, and any already executing remote operation cannot be undone.
 
@@ -23,6 +23,6 @@ For SSH, removing the local Target does **not** revoke the remote Unix account, 
 
 ## Operator/UI safety
 
-The local-only form is shown only when **normal safe removal is blocked**, only to an Owner with the matching permission. It presents the exact Target ID, independent irreversible and remote-non-revocation acknowledgments, current Owner password and a distinct destructive button. The usual metadata/edit/Disconnect security checks are unchanged. All forms remain web-authenticated and CSRF protected. No password, encrypted token, private key or OAuth response is shown in the UI or Activity.
+The local-only form is shown only when **normal safe removal is blocked**, only to an authorized user with the matching scoped permission. It presents the exact Target ID, independent irreversible and remote-non-revocation acknowledgments, current Gateway password and a distinct destructive button. The usual metadata/edit/Disconnect security checks are unchanged. All forms remain web-authenticated and CSRF protected. No password, encrypted token, private key or OAuth response is shown in the UI or Activity.
 
 **Validation:** in addition to ordinary Target-management regressions, cover a disconnected-but-pending and network-failed WordPress Target with encrypted credential/refresh/revocation/OAuth state, fail-closed password/role/ID/ack refusals, FK cleanup/audit preservation, paused/SSH connector cases, no remote HTTP traffic and rollback when a database deletion fails. Source PHPUnit assertions are not a production host integration test.

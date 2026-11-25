@@ -8,7 +8,6 @@ use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\SshTargetRegistration;
-use App\Application\Targets\TargetConnectorFailure;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
@@ -540,17 +539,15 @@ SH
         self::assertSame('ssh-secret', app(SshTargetVault::class)->open($target, $config, $credential->fresh())['secret']);
 
         $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
-        try {
-            $bindings->change($target, $bindings->revision($target), null);
-            self::fail('Connected Target changed routes without disconnecting.');
-        } catch (TargetConnectorFailure) {
-            self::assertNotNull($target->fresh()->getAttribute('relay_record_id'));
-        }
-
-        $target->forceFill(['connection_state' => TargetConnectionState::Disconnected])->save();
+        self::assertTrue($bindings->change($target, $bindings->revision($target), null));
+        $target->refresh();
+        self::assertSame(TargetConnectionState::Disconnected, $target->connection_state);
+        self::assertNull($target->relay_record_id);
+        self::assertTrue($bindings->change($target, $bindings->revision($target), 'iran-1'));
+        $target->refresh();
         app(ConnectionRelayAdministration::class)->disable($relay, 1);
         $target->refresh();
-        self::assertSame(4, $target->relay_binding_revision);
+        self::assertSame(6, $target->relay_binding_revision);
         self::assertSame('error', $target->connection_state->value);
         self::assertSame('relay_disabled', $target->last_error_code);
         self::assertNotSame($oldHash, SshTargetBinding::hash($target, $config));

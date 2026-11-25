@@ -31,12 +31,12 @@ final class SafeHttpClient
      * On-demand API schema fetch has its own configurable JSON/YAML budget,
      * independent of the small WordPress operation response default.
      */
-    public function getApiDocument(string $url): SafeHttpResponse
+    public function getApiDocument(string $url, ?LocalSocks5Route $relay = null): SafeHttpResponse
     {
         $budget = (int) config('bridge.http.api_document_max_bytes', 2097152);
 
         return $this->send('GET', $url, [], [], 'none',
-            min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, $budget)));
+            min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, $budget)), relay: $relay);
     }
 
     /** Only the allowlisted ChatGPT file origin may include signed queries. */
@@ -88,7 +88,7 @@ final class SafeHttpClient
      * @param  array<string, string>  $headers
      * @param  array<string, mixed>  $query
      */
-    public function requestJson(string $method, string $url, array $headers = [], ?string $jsonBody = null, array $query = []): SafeHttpResponse
+    public function requestJson(string $method, string $url, array $headers = [], ?string $jsonBody = null, array $query = [], ?LocalSocks5Route $relay = null): SafeHttpResponse
     {
         if (preg_match('/^[A-Z][A-Z0-9-]*$/D', $method) !== 1 || in_array($method, ['CONNECT', 'TRACE'], true)) {
             throw new OutboundRequestException('invalid_input', 'Unsupported outbound HTTP method.', [], true);
@@ -102,7 +102,7 @@ final class SafeHttpClient
 
         return $this->send($method, $url, $headers, $jsonBody ?? [], $jsonBody === null ? 'none' : 'raw_json',
             responseLimitBytes: min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, (int) config('bridge.http.api_response_max_bytes', 1048576))),
-            query: $query);
+            relay: $relay, query: $query);
     }
 
     /**
@@ -118,7 +118,7 @@ final class SafeHttpClient
     public function requestApi(
         string $method, string $url, array $headers = [], array $query = [],
         ?string $rawBody = null, ?string $contentType = null,
-        ?array $formFields = null, ?array $multipartParts = null,
+        ?array $formFields = null, ?array $multipartParts = null, ?LocalSocks5Route $relay = null,
     ): SafeHttpResponse {
         if (preg_match('/^[A-Z][A-Z0-9-]*$/D', $method) !== 1 || in_array($method, ['CONNECT', 'TRACE'], true)) {
             throw new OutboundRequestException('invalid_input', 'Unsupported outbound HTTP method.', [], true);
@@ -135,7 +135,7 @@ final class SafeHttpClient
 
         return $this->send($method, $url, $headers, $payload, $format,
             responseLimitBytes: min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, (int) config('bridge.http.api_response_max_bytes', 1048576))),
-            query: $query, rawContentType: $contentType);
+            relay: $relay, query: $query, rawContentType: $contentType);
     }
 
     /** @param array<string, string> $headers */

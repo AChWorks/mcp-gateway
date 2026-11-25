@@ -87,7 +87,7 @@
                         <option value="{{ $role->value }}" @selected($selectedUserRole === $role)>{{ \Illuminate\Support\Str::headline($role->value) }}</option>
                     @endforeach
                 </select>
-                <p class="field-help" id="role-help">{{ __('Owner bypasses all restrictions. Administrator and Operator SSH grants require Selected Target scope and Owner confirmation; Viewer does not have remote shell/SFTP permissions.') }}</p>
+                <p class="field-help" id="role-help">{{ __('Owner bypasses all restrictions. Administrator and Operator SSH grants require explicit Owner confirmation and follow either Target scope; Viewer does not have remote shell/SFTP permissions.') }}</p>
                 @error('role')<p class="field-error" id="role-error" role="alert">{{ $message }}</p>@enderror
             </div>
             <div class="field">
@@ -138,7 +138,7 @@
             <div class="form-stack">
         <fieldset class="permission-fieldset">
             <legend>{{ __('Permission restrictions (deny only)') }}</legend>
-            <p class="field-help">{{ __('Checked permissions are denied beneath the role ceiling. Target-scoped denials apply across every Target in the user\'s scope. SSH can be authorized only on Selected Targets with explicit Owner confirmation. Owner restrictions are intentionally ignored and cleared.') }}</p>
+            <p class="field-help">{{ __('Checked permissions are denied beneath the role ceiling. Target-scoped denials apply across every Target in the user\'s scope. SSH can be authorized for either Target scope with explicit Owner confirmation. Owner restrictions are intentionally ignored and cleared.') }}</p>
             @error('denied_permissions')<p class="field-error" id="denied_permissions-error" role="alert">{{ $message }}</p>@enderror
             <input type="hidden" name="ssh_permissions_reviewed" value="1">
             @include('admin.partials.permission-groups', [
@@ -156,7 +156,7 @@
             <div data-user-role-ssh-review @if (! in_array($selectedUserRole, [\App\Domain\Access\GatewayRole::Administrator, \App\Domain\Access\GatewayRole::Operator], true)) hidden @endif>
                 <label class="checkbox-option" for="confirm_ssh_permission_changes">
                     <input id="confirm_ssh_permission_changes" type="checkbox" name="confirm_ssh_permission_changes" value="1" @checked(old('confirm_ssh_permission_changes', false)) @error('confirm_ssh_permission_changes') aria-invalid="true" aria-describedby="confirm_ssh_permission_changes-error" @enderror>
-                    <span>{{ __('Owner confirmation: explicitly apply each SSH command, SFTP read and SFTP write permission above. Unchecked denial boxes grant that capability only on approved Selected Targets. SSH command access can read/write files and use permitted sudo/root regardless of the SFTP switches.') }}</span>
+                    <span>{{ __('Owner confirmation: explicitly apply each SSH command, SFTP read and SFTP write permission above. Unchecked denial boxes grant that capability within the configured Target scope, including current and future Targets with All scope. SSH command access can read/write files and use permitted sudo/root regardless of the SFTP switches.') }}</span>
                 </label>
                 @error('confirm_ssh_permission_changes')<p class="field-error" id="confirm_ssh_permission_changes-error" role="alert">{{ $message }}</p>@enderror
             </div>

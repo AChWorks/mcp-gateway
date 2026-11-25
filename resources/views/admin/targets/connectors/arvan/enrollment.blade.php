@@ -51,7 +51,7 @@
     </div>
 
     <div class="field">
-        <label for="arvan-owner-password">{{ __('Current Owner password') }}</label>
+        <label for="arvan-owner-password">{{ __('Your current Gateway password') }}</label>
         <input type="password" id="arvan-owner-password" name="current_password" maxlength="255"
             autocomplete="current-password" data-admin-requires-intent required
             @error('current_password') aria-invalid="true" @enderror

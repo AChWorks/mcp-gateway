@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Http\Api;
 
+use App\Infrastructure\Connectors\Relay\LocalSocks5Route;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\SafeHttpResponse;
@@ -24,7 +25,7 @@ final readonly class ApiHttpTransport
         string $registeredBase, string $method, string $relativePath, array $query = [],
         ?string $jsonBody = null, array $trustedHeaders = [],
         ?string $bodyText = null, ?string $contentType = null,
-        array $formFields = [], array $formFiles = [], ?string $accept = null,
+        array $formFields = [], array $formFiles = [], ?string $accept = null, ?LocalSocks5Route $relay = null,
     ): SafeHttpResponse {
         if ($relativePath === '' || ! str_starts_with($relativePath, '/')
             || str_starts_with($relativePath, '//')
@@ -131,10 +132,10 @@ final readonly class ApiHttpTransport
             }
             $multipart = $formFiles !== [] || strtolower($contentType ?? '') === 'multipart/form-data';
             if ($multipart) {
-                return $this->http->requestApi($method, $url, $trustedHeaders, $query, multipartParts: $parts);
+                return $this->http->requestApi($method, $url, $trustedHeaders, $query, multipartParts: $parts, relay: $relay);
             }
 
-            return $this->http->requestApi($method, $url, $trustedHeaders, $query, formFields: $fields);
+            return $this->http->requestApi($method, $url, $trustedHeaders, $query, formFields: $fields, relay: $relay);
         }
 
         if ($bodyText !== null) {
@@ -142,16 +143,16 @@ final readonly class ApiHttpTransport
                 throw new OutboundRequestException('invalid_input', 'Raw API request body requires a content type.', [], true);
             }
 
-            return $this->http->requestApi($method, $url, $trustedHeaders, $query, $bodyText, $contentType);
+            return $this->http->requestApi($method, $url, $trustedHeaders, $query, $bodyText, $contentType, relay: $relay);
         }
         if ($jsonBody !== null && $contentType !== null && strtolower($contentType) !== 'application/json') {
-            return $this->http->requestApi($method, $url, $trustedHeaders, $query, $jsonBody, $contentType);
+            return $this->http->requestApi($method, $url, $trustedHeaders, $query, $jsonBody, $contentType, relay: $relay);
         }
         if ($jsonBody === null && $contentType !== null) {
             throw new OutboundRequestException('invalid_input', 'Content type requires a request body.', [], true);
         }
 
-        return $this->http->requestJson($method, $url, $trustedHeaders, $jsonBody, $query);
+        return $this->http->requestJson($method, $url, $trustedHeaders, $jsonBody, $query, relay: $relay);
     }
 
     private function validMediaType(mixed $type): bool

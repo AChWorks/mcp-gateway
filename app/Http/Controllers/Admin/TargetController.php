@@ -14,7 +14,6 @@ use App\Application\Targets\TargetConnectorRegistry;
 use App\Application\Targets\TargetEnrollmentPreflight;
 use App\Application\Targets\TargetInventory;
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Access\GatewayRole;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
@@ -90,11 +89,6 @@ final class TargetController extends Controller
         Gate::authorize(GatewayPermission::TargetsCreate->value);
 
         $options = $connectorAdmin->options();
-        // Arvan key enrollment is Owner-only at POST. Do not invite other
-        // Target creators to enter a privileged key into a form they cannot submit.
-        if ($request->user()?->getRawOriginal('role') !== GatewayRole::Owner->value) {
-            unset($options['arvancloud']);
-        }
         $definitions = [];
         foreach (array_keys($options) as $type) {
             $definitions[] = $connectorAdmin->forType($type)?->definition();
@@ -104,16 +98,11 @@ final class TargetController extends Controller
         $requestedMode = $request->query('ssh_mode', 'direct');
         $sshMode = in_array($requestedMode, ['direct', 'managed', 'manual'], true)
             ? $requestedMode : 'direct';
-        if ($sshMode !== 'direct' && $selected === 'ssh_direct') {
-            Gate::authorize(GatewayPermission::SecurityManage->value);
-            abort_unless($request->user()?->getRawOriginal('role') === GatewayRole::Owner->value, 403);
-        }
 
-        // The saved enabled flag is not host readiness. Probe once for this
-        // Owner's create form; re-evaluate at POST admission in the service.
+        // An approved host setup is infrastructure readiness, not the user's role.
+        // The enrollment service independently rechecks it at POST admission.
         $gateway = SshManagedReverseGateway::query()->find(1);
-        $managedState = $request->user()?->getRawOriginal('role') === GatewayRole::Owner->value
-            ? $readiness->assess($gateway)['state'] : 'Disabled';
+        $managedState = $readiness->assess($gateway)['state'];
 
         return view('admin.targets.create', [
             'connectorOptions' => $options,
@@ -122,9 +111,18 @@ final class TargetController extends Controller
             'sshMode' => $sshMode,
             'managedReady' => $managedState === 'Ready',
             'managedReadinessState' => $managedState,
-            'connectionRelays' => $request->user()?->getRawOriginal('role') === GatewayRole::Owner->value
-                ? $relays->selectable() : collect(),
+            'connectionRelays' => $relays->selectable(),
         ]);
+    }
+
+    private function guardRelaySelection(Request $request): void
+    {
+        if ($request->filled('connection_relay_id') && $request->input('connector_type') === 'ssh_direct'
+            && $request->input('ssh_route_mode') === 'reverse') {
+            throw ValidationException::withMessages([
+                'connection_relay_id' => __('This connection method does not support a Relay.'),
+            ]);
+        }
     }
 
     /**
@@ -157,15 +155,14 @@ final class TargetController extends Controller
                     'connector_type' => __('This connector does not support endpoint preflight.'),
                 ]);
             }
+            $this->guardRelaySelection($request);
             $validated = $request->validate(
-                $adapter->preflightRules(),
+                [...ConnectionRelayRoutes::selectionRules(), ...$adapter->preflightRules()],
                 $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::messages() : [],
                 $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::attributes() : [],
             );
             $selectedRelay = $validated['connection_relay_id'] ?? null;
             if (is_string($selectedRelay) && $selectedRelay !== '') {
-                Gate::authorize(GatewayPermission::SecurityManage->value);
-                abort_unless($request->user()?->getRawOriginal('role') === GatewayRole::Owner->value, 403);
                 try {
                     $relays->selected($selectedRelay);
                 } catch (ConnectionRelayUnavailable) {
@@ -258,35 +255,24 @@ final class TargetController extends Controller
                     'ssh_mode' => __('For Managed Reverse SSH, open the selected Managed connection mode and use Create Pending Setup. No Target was registered.'),
                 ]);
             }
+            $this->guardRelaySelection($request);
             $validated = $request->validate([
                 'target_id' => ['required', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
                 'display_name' => ['required', 'string', 'max:160'],
                 'ai_guidance' => ['nullable', 'string', 'max:'.Target::AI_GUIDANCE_MAX_LENGTH,
                     'not_regex:/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/'],
+                ...ConnectionRelayRoutes::selectionRules(),
                 ...$adapter->registrationRules(),
             ],
                 $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::messages() : [],
                 $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::attributes() : [],
             );
-            if (($validated['connection_relay_id'] ?? null) !== null
-                && ($validated['connection_relay_id'] ?? '') !== '') {
-                Gate::authorize(GatewayPermission::SecurityManage->value);
-                abort_unless($user->getRawOriginal('role') === GatewayRole::Owner->value, 403);
-                $confirmation->confirm($request);
-            }
-            if ($adapter->type() === 'arvancloud') {
-                // API key enrollment must not be available to an ordinary
-                // Target creator. Require Owner authority and fresh password.
-                Gate::authorize(GatewayPermission::SecurityManage->value);
-                abort_unless($user->getRawOriginal('role') === GatewayRole::Owner->value, 403);
-                $confirmation->confirm($request);
-            }
-            if ($adapter->type() === 'ssh_direct'
-                && ($validated['ssh_route_mode'] ?? 'direct') === 'reverse') {
-                // Enrollment over an inbound-blocked route is an explicit
-                // Owner/password-gated act, not an Administrator's ordinary
-                // TargetsCreate permission.
-                Gate::authorize(GatewayPermission::SecurityManage->value);
+            // Reauthenticate the actor for credential/route enrollment; the
+            // adapter still enforces approved infrastructure and trust binding.
+            if (! empty($validated['connection_relay_id'])
+                || $adapter->type() === 'arvancloud'
+                || ($adapter->type() === 'ssh_direct'
+                    && ($validated['ssh_route_mode'] ?? 'direct') === 'reverse')) {
                 $confirmation->confirm($request);
             }
         } catch (ValidationException $exception) {
@@ -332,7 +318,9 @@ final class TargetController extends Controller
         // Creator attribution is reachability only when the Owner explicitly
         // enabled self-created scope; connector/role/deny ceilings remain intact.
         if (! $access->allows($user, GatewayPermission::TargetsView, $target)) {
-            return redirect()->route('admin.targets.index')
+            return redirect()->route(Gate::allows(GatewayPermission::TargetsView->value)
+                ? 'admin.targets.index'
+                : 'admin.targets.create')
                 ->with('status', $adapter->registrationStatus().' '.__(
                     'Target :id was registered but is outside your permitted scope. Ask an Owner to assign access before using it.',
                     ['id' => $target->target_id],
@@ -375,10 +363,11 @@ final class TargetController extends Controller
         Target $target, TargetConnectorRegistry $connectors, TargetConnectorAdmin $connectorAdmin,
         ConnectionRelayRoutes $relays, ConnectionRelayTargetBinding $relayBindings,
     ): View {
-        Gate::authorize(GatewayPermission::TargetsUpdate->value, $target);
+        $canEdit = Gate::allows(GatewayPermission::TargetsUpdate->value, $target);
+        $canConfigure = Gate::allows(GatewayPermission::TargetsConfigure->value, $target);
+        abort_unless($canEdit || $canConfigure, 403);
 
-        $adapter = Gate::allows(GatewayPermission::SecurityManage->value)
-            ? $connectors->availableForTarget($target) : null;
+        $adapter = $canConfigure ? $connectors->availableForTarget($target) : null;
 
         $details = $adapter?->adminDetails($target) ?? [];
         $presenter = $connectorAdmin->forType($target->connector_type);
@@ -388,11 +377,11 @@ final class TargetController extends Controller
             'target' => $target,
             'configurationRevision' => $hasConfig ? $adapter?->configurationRevision($target) : null,
             'connectorUi' => $presenter?->definition(),
-            'connectionRelays' => $relays->selectable(),
-            'selectedRelay' => $target->getAttribute('relay_record_id') === null ? null
+            'connectionRelays' => $canConfigure ? $relays->selectable() : collect(),
+            'selectedRelay' => ! $canConfigure || $target->getAttribute('relay_record_id') === null ? null
                 : ConnectionRelay::query()
                     ->find($target->getAttribute('relay_record_id')),
-            'routeRevision' => $relayBindings->revision($target),
+            'routeRevision' => $adapter !== null ? $relayBindings->revision($target) : null,
             ...$details,
         ]);
     }
@@ -460,7 +449,7 @@ final class TargetController extends Controller
     }
 
     /**
-     * Last-resort Owner action: erase this Target ONLY from Gateway.
+     * Last-resort scoped removal: erase this Target ONLY from Gateway.
      *
      * Never attempt a remote revoke or claim its success. Cascading deletes
      * remove local credentials, intents, configurations and scoped ACLs;
@@ -474,9 +463,6 @@ final class TargetController extends Controller
         AdministratorPasswordConfirmation $confirmation,
     ): RedirectResponse {
         Gate::authorize(GatewayPermission::TargetsRemove->value, $target);
-        Gate::authorize(GatewayPermission::SecurityManage->value);
-        $user = $request->user();
-        abort_unless($user instanceof User && $user->getRawOriginal('role') === GatewayRole::Owner->value, 403);
 
         $validated = $request->validate([
             'confirm_target_id' => ['required', 'string', 'max:64'],
@@ -534,6 +520,7 @@ final class TargetController extends Controller
             'target_id',
             'display_name',
             'ai_guidance',
+            'connection_relay_id',
             ...($adapter?->safeOldInputFields() ?? []),
         ]);
     }

@@ -25,11 +25,7 @@ final class TargetConfigurationController extends Controller
         TargetConnectorRegistry $connectors,
         AdministratorPasswordConfirmation $confirmation,
     ): RedirectResponse {
-        // Updating the remote endpoint, trust binding or login secret is more
-        // privileged than changing a display label. Never offer this route to
-        // ordinary users with only targets.update permission.
-        Gate::authorize(GatewayPermission::TargetsUpdate->value, $target);
-        Gate::authorize(GatewayPermission::SecurityManage->value);
+        Gate::authorize(GatewayPermission::TargetsConfigure->value, $target);
 
         // Historical, Owner-paused connector types remain viewable but do
         // not acquire an executable configuration endpoint by accident.

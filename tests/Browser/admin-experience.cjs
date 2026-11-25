@@ -1537,6 +1537,12 @@ async function connectionRelays(browser) {
         assert.equal(await page.locator('[data-relay-owner-group]').isVisible(), true);
         assert.equal(await form.locator('[name="current_password"]:enabled').count(), 1);
 
+        await page.locator('#connector_type').selectOption('arvancloud');
+        assert.equal(await relayChoice.isEnabled(), true);
+        await relayChoice.selectOption('ui-iran');
+        assert.equal(await relayChoice.inputValue(), 'ui-iran');
+        assert.equal(await form.locator('[name="current_password"]:enabled').count(), 1);
+
         // Validation retry goes through real Laravel with cookies and CSRF;
         // neither a hidden password nor a remote connection is submitted.
         const token = await form.locator('input[name="_token"]').inputValue();
@@ -1572,6 +1578,21 @@ async function connectionRelays(browser) {
             await nonOwner.page.goto(base + '/admin/targets/create?connector_type=ssh_direct');
             assert.equal(await nonOwner.page.locator('#connection_relay_id').count(), 0);
         } finally { await nonOwner.context.close(); }
+
+        const delegated = await create(browser);
+        try {
+            await enter(delegated.page, 'administrator');
+            for (const connector of ['wp_ai_bridge', 'ssh_direct', 'arvancloud']) {
+                const response = await delegated.page.goto(base + '/admin/targets/create?connector_type=' + connector);
+                assert.equal(response.status(), 200);
+                const selector = delegated.page.locator('#connection_relay_id');
+                assert.equal(await selector.isEnabled(), true);
+                assert.equal(await selector.locator('option[value="ui-iran"]').count(), 1);
+                await selector.selectOption('ui-iran');
+                assert.equal(await selector.inputValue(), 'ui-iran');
+                assert.equal(await delegated.page.locator('#target-create-form [name="current_password"]:enabled').count(), 1);
+            }
+        } finally { await delegated.context.close(); }
 
         const native = await create(browser, {javaScriptEnabled:false, width:390});
         try {

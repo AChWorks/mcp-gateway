@@ -18,7 +18,13 @@
                 @endcan
             </div>
         @else
-            <p class="muted">{{ __('No SSH credential remains. Register a new Target for a fresh independently verified host key and login secret. Removing the local credential does not revoke the remote Unix account.') }}</p>
+            <p class="muted">{{ __('No SSH credential remains. Removing the local credential does not revoke the remote Unix account.') }}
+                @can('targets.configure', $target)
+                    <a href="{{ route('admin.targets.edit', ['target' => $target->target_id]).'#target-connection-settings' }}">{{ __('Open advanced connection settings to add a credential') }}</a>
+                @else
+                    {{ __('Ask an authorized Target configuration editor to add a credential.') }}
+                @endcan
+            </p>
         @endif
 @endif
 
@@ -26,7 +32,8 @@
     $managedReverse = \App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment::query()
         ->where('target_record_id', $target->getKey())->first();
 @endphp
-@if (auth()->user()?->role === \App\Domain\Access\GatewayRole::Owner && $managedReverse !== null)
+@if ($managedReverse !== null)
+@canany(['targets.configure', 'targets.disconnect'], $target)
     <div class="target-subsection">
         @if ($errors->has('current_password') || $errors->has('confirm_target_id'))
             <div class="alert alert-error" role="alert">
@@ -35,6 +42,7 @@
                 @error('confirm_target_id')<p>{{ $message }}</p>@enderror
             </div>
         @endif
+        @can('targets.configure', $target)
         @if ($managedReverse->state !== 'revoked' && $target->connection_state === \App\Domain\Targets\TargetConnectionState::Pending)
             <details class="target-help-details" @if ($errors->any() && old('managed_reverse_action') === 'reissue') open @endif >
                 <summary><h3 class="admin-disclosure-heading">{{ __('Retry pending Managed Reverse setup (advanced)') }}</h3></summary>
@@ -47,18 +55,20 @@
                     <input id="reverse_reissue_id" name="confirm_target_id" required maxlength="64" autocomplete="off" data-admin-manual-entry data-admin-server-value="">
                 </div>
                 <div class="field">
-                    <label for="reverse_reissue_password">{{ __('Current Owner password') }}</label>
+                    <label for="reverse_reissue_password">{{ __('Your current Gateway password') }}</label>
                     <input id="reverse_reissue_password" type="password" name="current_password" data-admin-requires-intent required autocomplete="current-password">
                 </div>
                 <button class="button button-secondary" type="submit">{{ __('Reissue one-use install command') }}</button>
             </form>
             </details>
         @endif
+        @endcan
         @if ($managedReverse->state === 'revoked' && $managedReverse->publication_pending)
             <div class="alert alert-error" role="status">{{ __('Gateway credential and route were revoked; publication of the updated control key reader is still pending. Retry reconciliation below. Do not forget this Target until the reader is reconciled.') }}</div>
         @elseif ($managedReverse->state === 'revoked')
             <p class="field-help">{{ __('Managed Reverse SSH authorization was revoked and the host key policy reconciled. No further enrollment is permitted for this Target record.') }}</p>
         @endif
+        @can('targets.disconnect', $target)
         @if ($managedReverse->state !== 'revoked' || $managedReverse->publication_pending)
         <details class="target-help-details" @if ($errors->any() && old('managed_reverse_action') === 'revoke') open @endif >
             <summary><h3 class="admin-disclosure-heading">{{ $managedReverse->state === 'revoked' ? __('Reconcile revoked host key (advanced)') : __('Revoke managed Reverse SSH (destructive)') }}</h3></summary>
@@ -71,7 +81,7 @@
                 <input id="reverse_revoke_id" name="confirm_target_id" required maxlength="64" autocomplete="off" data-admin-manual-entry data-admin-server-value="">
             </div>
             <div class="field">
-                <label for="reverse_revoke_password">{{ __('Current Owner password') }}</label>
+                <label for="reverse_revoke_password">{{ __('Your current Gateway password') }}</label>
                 <input id="reverse_revoke_password" type="password" name="current_password" data-admin-requires-intent required autocomplete="current-password">
             </div>
             <div class="target-create-actions">
@@ -80,5 +90,7 @@
         </form>
         </details>
         @endif
+        @endcan
     </div>
+@endcanany
 @endif

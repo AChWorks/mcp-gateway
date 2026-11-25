@@ -28,23 +28,18 @@
             <label for="ssh_mode">{{ __('Connection method') }}</label>
             <select id="ssh_mode" name="ssh_mode" aria-describedby="ssh-mode-help" disabled>
                 <option value="direct" @selected($selectedSshMode === 'direct')>{{ __('Direct SSH (default)') }}</option>
-                @if (auth()->user()?->getRawOriginal('role') === 'owner')
                     <option value="managed" @selected($selectedSshMode === 'managed')>{{ __('Managed Reverse SSH — one-command setup') }}</option>
                     <option value="manual" @selected($selectedSshMode === 'manual')>{{ __('Manual Reverse SSH (advanced)') }}</option>
-                @endif
             </select>
             <p class="field-help" id="ssh-mode-help">{{ __('Choose how Gateway will reach the real SSH server. The Target ID, identity and host-key verification remain the same.') }}</p>
             <noscript>
                 <p class="field-help">{{ __('Choose a connection mode using the links below before completing the form:') }}</p>
                 <a href="{{ route('admin.targets.create', ['connector_type' => 'ssh_direct', 'ssh_mode' => 'direct']) }}">{{ __('Direct SSH') }}</a>
-                @if (auth()->user()?->getRawOriginal('role') === 'owner')
                     <a href="{{ route('admin.targets.create', ['connector_type' => 'ssh_direct', 'ssh_mode' => 'managed']) }}">{{ __('Managed Reverse SSH') }}</a>
                     <a href="{{ route('admin.targets.create', ['connector_type' => 'ssh_direct', 'ssh_mode' => 'manual']) }}">{{ __('Manual Reverse SSH') }}</a>
-                @endif
             </noscript>
         </div>
         <input name="ssh_route_mode" type="hidden" value="{{ $selectedSshMode === 'manual' ? 'reverse' : 'direct' }}" data-ssh-route-value @if($selectedSshMode === 'managed') disabled @endif>
-        @if (auth()->user()?->getRawOriginal('role') === 'owner')
             <div class="target-field-grid" data-ssh-reverse-route @if($selectedSshMode !== 'manual') hidden @endif>
                 <div class="field">
                     <label for="ssh_reverse_port">{{ __('Gateway-approved loopback listener port (1024–65535)') }}</label>
@@ -57,7 +52,7 @@
                     @error('ssh_tunnel_identity')<p class="field-error" role="alert">{{ $message }}</p>@enderror
                 </div>
                 <div class="field target-span-all">
-                    <label for="ssh_reverse_owner_password">{{ __('Current Owner password (manual Reverse SSH only)') }}</label>
+                    <label for="ssh_reverse_owner_password">{{ __('Your current Gateway password (manual Reverse SSH only)') }}</label>
                     <input id="ssh_reverse_owner_password" name="current_password" type="password" data-admin-requires-intent maxlength="255" autocomplete="off" @if($selectedSshMode !== 'manual') disabled @endif>
                     @error('current_password')<p class="field-error" role="alert">{{ $message }}</p>@enderror
                     <p class="field-help">{{ __('Manual Reverse requires an independently provisioned, Owner-approved loopback forward. Do not enter the Gateway control SSHD port here.') }}</p>
@@ -68,18 +63,21 @@
                 @if (! $managedReady)
                     <div class="alert alert-info" role="status">
                         {{ __('Managed Reverse SSH local host is not Ready (:state). Configure the Gateway, reconcile its restricted policy and verify the pinned local control SSHD before issuing an installer command.', ['state' => $managedReadinessState]) }}
-                        <a href="{{ route('admin.reverse-ssh.index') }}">{{ __('Open Connectivity Reverse SSH settings') }}</a>
+                        @can('security.manage')
+                            <a href="{{ route('admin.reverse-ssh.index') }}">{{ __('Open Connectivity Reverse SSH settings') }}</a>
+                        @else
+                            {{ __('Ask a Gateway Owner to complete the global Reverse SSH setup.') }}
+                        @endcan
                     </div>
                 @else
                     <p class="field-help">{{ __('After creating Pending Setup, copy the one-time verified installer command in the next step. The Target remains unconnected until explicit verification.') }}</p>
                 @endif
                 <div class="field">
-                    <label for="managed_owner_password">{{ __('Current Owner password (managed enrollment)') }}</label>
+                    <label for="managed_owner_password">{{ __('Your current Gateway password (managed enrollment)') }}</label>
                     <input id="managed_owner_password" name="current_password" type="password" data-admin-requires-intent required maxlength="255" autocomplete="off" @if($selectedSshMode !== 'managed') disabled @endif>
                     @error('current_password')<p class="field-error" role="alert">{{ $message }}</p>@enderror
                 </div>
             </div>
-        @endif
     </div>
     <div class="target-subsection">
         <h3>{{ __('Server identity') }}</h3>

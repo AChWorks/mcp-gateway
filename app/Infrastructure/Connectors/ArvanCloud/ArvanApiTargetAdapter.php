@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Connectors\ArvanCloud;
 
+use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\TargetConfigurationRevision;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
@@ -14,6 +15,8 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Http\Api\ApiHttpTransport;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\OutboundTargetPolicy;
@@ -37,6 +40,8 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         private ApiHttpTransport $transport,
         private ActivityRecorder $activity,
         private TargetEndpointPreflight $preflight,
+        private ConnectionRelayTargetBinding $bindings,
+        private ConnectionRelayRoutes $relays,
     ) {}
 
     public function type(): string
@@ -94,6 +99,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                     'connector_type' => $this->type(),
                     'connection_state' => TargetConnectionState::Disconnected,
                 ]);
+                $this->bindings->onRegistration($target, $input['connection_relay_id'] ?? null);
                 $config = ArvanApiTargetConfig::query()->create([
                     'target_record_id' => $target->getKey(),
                     'base_url' => $base,
@@ -110,6 +116,8 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
 
                 return $target;
             });
+        } catch (ConnectionRelayUnavailable) {
+            throw new TargetConnectorFailure(__('The selected Connection Relay is disabled or no longer exists.'), 'connection_relay_id', 'relay_unavailable');
         } catch (UniqueConstraintViolationException $exception) {
             throw new TargetConnectorFailure(__('Target ID is already in use.'), 'target_id', 'invalid_input', []);
         } catch (TargetConnectorFailure $exception) {
@@ -244,7 +252,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
 
         try {
             $this->requireUnpaused($target);
-            $response = $this->transport->request($base, 'HEAD', '/');
+            $response = $this->transport->request($base, 'HEAD', '/', relay: $this->relays->httpRouteForSnapshot($target));
 
             // A concurrent Pause, removal or API-root replacement invalidates
             // even this read-only observation before it can be displayed.
@@ -290,9 +298,10 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
     private function assertReachabilityStillCurrent(Target $target, string $base): void
     {
         if (TargetOperationGate::isPaused($target)
+            || (int) Target::query()->whereKey($target->getKey())->value('relay_binding_revision') !== (int) $target->relay_binding_revision
             || ! hash_equals($base, $this->config($target)->base_url)) {
             throw new TargetConnectorFailure(
-                __('The API endpoint changed or the Target was paused during the reachability check. Reload and check the current Target.'),
+                __('The API endpoint or route changed, or the Target was paused during the reachability check. Reload and check the current Target.'),
                 null, 'endpoint_check_stale',
             );
         }
@@ -306,7 +315,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         $config = $this->config($target);
         if ($config->probe_path === null) {
             throw new TargetConnectorFailure(
-                __('No authenticated GET probe is configured. You can check HTTPS reachability without an API key, or ask the Gateway Owner to save a known read-only GET path to verify the key.'),
+                __('No authenticated GET probe is configured. You can check HTTPS reachability without an API key, or ask an authorized Target configuration editor to save a known read-only GET path to verify the key.'),
                 'api_probe_path', 'probe_not_configured',
             );
         }
@@ -320,6 +329,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
             $response = $this->transport->request(
                 $config->base_url, 'GET', $config->probe_path, [],
                 null, ['Authorization' => 'Apikey '.$key],
+                relay: $this->relays->httpRouteForSnapshot($target),
             );
             if ($response->status < 200 || $response->status >= 300) {
                 $message = match ($response->status) {
@@ -344,14 +354,15 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                 }
                 $currentConfig = $this->config($locked);
                 $currentCredential = $this->credential($locked);
-                if (! hash_equals($config->base_url, $currentConfig->base_url)
+                if ((int) $locked->relay_binding_revision !== (int) $target->relay_binding_revision
+                    || ! hash_equals($config->base_url, $currentConfig->base_url)
                     || $config->probe_path !== $currentConfig->probe_path
                     || $config->spec_url !== $currentConfig->spec_url
                     || ! $currentCredential instanceof TargetCredential
                     || ! hash_equals((string) $credential->getKey(), (string) $currentCredential->getKey())
                     || ! hash_equals((string) $credential->encrypted_payload, (string) $currentCredential->encrypted_payload)) {
                     throw new TargetConnectorFailure(
-                        __('The API configuration or key changed during the probe. Reload and verify the current credentials.'),
+                        __('The API configuration, route or key changed during the probe. Reload and verify the current credentials.'),
                         null, 'probe_stale',
                     );
                 }

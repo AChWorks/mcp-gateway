@@ -70,13 +70,15 @@ final class SshReverseRouteApprovalTest extends TestCase
         $policy->approve('reverse-target', 'reverse', self::PORT, 'fixture-reverse-one');
     }
 
-    public function test_owner_and_password_are_required_for_reverse_registration_without_dialing_any_host(): void
+    public function test_create_permission_and_actor_password_are_required_for_reverse_registration_without_dialing_any_host(): void
     {
         $fields = $this->enrollment();
-        $this->actingAs($this->user('administrator'))->post('/admin/targets', $fields)->assertForbidden();
+        $this->actingAs($this->user('operator'))->post('/admin/targets', $fields)->assertForbidden();
         self::assertSame(0, Target::query()->count());
 
-        $this->actingAs($this->user('owner'));
+        $administrator = $this->user('administrator');
+        $administrator->forceFill(['self_created_target_access' => true])->save();
+        $this->actingAs($administrator);
         $fields['current_password'] = 'wrong-password-do-not-log';
         $this->post('/admin/targets', $fields)->assertAdminRedirect('/admin/targets/create?connector_type=ssh_direct&ssh_mode=manual')
             ->assertSessionHasErrors('current_password');

@@ -77,7 +77,7 @@ required only once, not per added Target. When settings are saved, the Admin pag
 
 Targets > Add Target > SSH > Managed Reverse SSH collects stable ID, real
 Target host/SSH port/login and the independently verified Target SSHD public
-host key. After Owner password verification it creates a Pending Target,
+host key. After verification of the authorized Target creator’s current Gateway password it creates a Pending Target,
 reserves a unique Gateway loopback port and generates a 10-minute, one-use
 enrollment token. The only command is displayed once and contains a sensitive
 short-lived token, never a private key. Do not paste it in shared logs/chat.
@@ -122,7 +122,7 @@ point-in-time proof, not a heartbeat.
   verified Target login or a Connected state.
 - The existing Target detail screen offers **Reissue one-use install
   command** for unverified `Pending Setup` enrollments, guarded by
-  Owner password and an exact Target-ID confirmation. This preserves the
+  current actor password and an exact Target-ID confirmation. This preserves the
   Target's original identity, independently pinned real SSH host key,
   login identity and approved private key. The encrypted Target login
   credential is opened under the original trusted binding and re-sealed
