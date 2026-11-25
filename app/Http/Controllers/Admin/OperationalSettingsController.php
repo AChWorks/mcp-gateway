@@ -4,58 +4,26 @@ namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Operations\OperationalSettings;
-use App\Domain\Access\GatewayRole;
+use App\Domain\Access\GatewayPermission;
 use App\Http\Controllers\Controller;
-use App\Models\User;
 use App\Support\OutboundDnsCompatibility;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 final class OperationalSettingsController extends Controller
 {
-    public function index(Request $request, OperationalSettings $settings): View
+    public function index(OperationalSettings $settings): View
     {
-        $this->requireOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
 
         return view('admin.operations.index', [
             'state' => $settings->state(),
             'definitions' => OperationalSettings::allowed(),
             'dnsCompatibility' => OutboundDnsCompatibility::snapshot(),
-            'defaults' => [
-                'wp_response_kib' => (int) config('bridge.http.max_response_bytes', 65536) / 1024,
-                'wp_readonly_response_kib' => (int) config('bridge.http.readonly_tool_max_response_bytes', 262144) / 1024,
-                'wp_connect_timeout_seconds' => max(1, (int) config('bridge.http.connect_timeout_seconds', 2)),
-                'wp_request_timeout_seconds' => max(
-                    1,
-                    (int) config('bridge.http.connect_timeout_seconds', 2),
-                    (int) config('bridge.http.request_timeout_seconds', 5),
-                ),
-                'ssh_transfer_max_kib' => min(65536, max(1, (int) config('ssh.file_transfer.max_bytes', 8388608) / 1024)),
-                'ssh_transfer_max_seconds' => min(3600, max(1, (int) config('ssh.file_transfer.max_seconds', 30))),
-                'ssh_command_timeout_seconds' => 15,
-                'ssh_command_max_kib' => 8,
-                'ssh_job_max_active_per_user' => 2,
-                'ssh_job_max_runtime_seconds' => 300,
-                'ssh_job_retention_hours' => 24,
-                'ssh_job_preparing_grace_seconds' => 120,
-                'ssh_job_reconcile_grace_seconds' => 600,
-                'ssh_job_max_script_kib' => 16,
-                'ssh_command_stdout_kib' => 16,
-                'ssh_command_stderr_kib' => 8,
-                'ssh_job_output_window_kib' => 16,
-                'ssh_file_read_window_kib' => 16,
-                'ssh_file_write_window_kib' => 16,
-                'ssh_file_list_name_kib' => 16,
-                'wp_ability_input_kib' => 1024,
-                'dcr_registration_capacity' => 1024,
-                'batch_max_parallelism' => max(1, (int) config('batch.max_parallelism', 4)),
-                'batch_global_active' => max(1, (int) config('batch.global_active', 4)),
-                'batch_user_active' => max(1, (int) config('batch.user_active', 2)),
-                'batch_worker_max_children' => max(1, (int) config('batch.worker_max_children', 16)),
-                'batch_worker_max_seconds' => max(1, (int) config('batch.worker_max_seconds', 50)),
-            ],
+            'defaults' => $settings->defaults(),
         ]);
     }
 
@@ -64,7 +32,7 @@ final class OperationalSettingsController extends Controller
         OperationalSettings $settings,
         AdministratorPasswordConfirmation $confirmation,
     ): RedirectResponse {
-        $this->requireOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $definitions = OperationalSettings::allowed();
         $rules = [
             'version' => ['required', 'integer', 'min:0'],
@@ -72,8 +40,7 @@ final class OperationalSettingsController extends Controller
         ];
         foreach ($definitions as $key => $definition) {
             $rules['values.'.$key] = [
-                in_array($key, ['wp_response_kib', 'wp_readonly_response_kib'], true)
-                    ? 'present' : 'sometimes',
+                'sometimes',
                 'nullable', 'integer',
                 'min:'.$definition['minimum'], 'max:'.$definition['maximum'],
             ];
@@ -86,19 +53,10 @@ final class OperationalSettingsController extends Controller
                 'values' => 'The operational settings request has an unknown or missing field.',
             ]);
         }
-        $all = array_keys($definitions);
-        sort($all);
-        sort($names);
-
-        // Forms opened on the previous version still submit only the two
-        // response budgets. Preserve both timeout overrides instead of
-        // silently resetting them when an older tab is submitted.
-        $saved = $names !== $all ? $settings->state()['overrides'] : [];
-        $values = [];
-        foreach ($definitions as $key => $definition) {
-            $value = array_key_exists($key, $submitted) ? $submitted[$key] : ($saved[$key] ?? null);
-            $values[$key] = $value === null || $value === '' ? null : (int) $value;
-        }
+        $values = array_map(
+            static fn (mixed $value): ?int => $value === null || $value === '' ? null : (int) $value,
+            $submitted,
+        );
 
         // The password is consumed only by the shared confirmation service,
         // never passed to a settings persistence class or written to audit.
@@ -107,14 +65,5 @@ final class OperationalSettingsController extends Controller
 
         return redirect()->route('admin.operations.index')
             ->with('status', __('Operational settings saved. New requests use the updated limits.'));
-    }
-
-    private function requireOwner(Request $request): User
-    {
-        $user = $request->user();
-        abort_unless($user instanceof User && (string) $user->getRawOriginal('role') === GatewayRole::Owner->value
-            && $user->access_enabled, 403);
-
-        return $user;
     }
 }

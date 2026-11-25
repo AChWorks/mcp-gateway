@@ -30,11 +30,7 @@ final readonly class UserAccessManager
 
         // Default-deny new SSH accounts unless the actor explicitly reviewed
         // and confirmed grants. Scope independently determines reachability.
-        $canGrantSsh = $allowSshPermissionChanges;
-        $defaults = array_filter(
-            $this->defaultConnectorDenials($role),
-            static fn (string $permission): bool => ! $canGrantSsh || ! str_starts_with($permission, 'ssh.'),
-        );
+        $defaults = $allowSshPermissionChanges ? [] : $this->defaultSshDenials($role);
 
         $user = DB::transaction(function () use ($attributes, $role, $scope, $deniedPermissions, $defaults): User {
             $user = User::query()->create([
@@ -136,7 +132,7 @@ final readonly class UserAccessManager
             // permits removing them. New role eligibility starts denied; changing
             // between two SSH-eligible roles does not silently revoke live grants.
             $priorSsh = $this->existingSshDenials($lockedUser);
-            $defaultSsh = $this->defaultConnectorDenials($role);
+            $defaultSsh = $this->defaultSshDenials($role);
             $newlyEligibleSsh = array_values(array_filter(
                 $defaultSsh,
                 static fn (string $permission): bool => $currentRole === GatewayRole::Owner
@@ -457,7 +453,7 @@ final readonly class UserAccessManager
     }
 
     /** @return list<string> */
-    private function defaultConnectorDenials(GatewayRole $role): array
+    private function defaultSshDenials(GatewayRole $role): array
     {
         if ($role === GatewayRole::Owner) {
             return [];
@@ -465,8 +461,8 @@ final readonly class UserAccessManager
 
         return array_values(array_map(
             static fn (GatewayPermission $permission): string => $permission->value,
-            array_filter($role->permissions(),
-                static fn (GatewayPermission $permission): bool => str_starts_with($permission->value, 'ssh.')),
+            array_filter(GatewayPermission::sshCapabilities(),
+                static fn (GatewayPermission $permission): bool => $role->allows($permission)),
         ));
     }
 
@@ -519,21 +515,18 @@ final readonly class UserAccessManager
     private function normalizedDenials(
         GatewayRole $role,
         array $values,
-        bool $targetOnly = false,
     ): array {
         if ($role === GatewayRole::Owner) {
             return [];
         }
 
         $rolePermissions = $role->permissions();
-        $targetPermissions = $targetOnly ? $this->targetPermissions() : null;
         $result = [];
 
         foreach (array_unique($values) as $value) {
             $permission = GatewayPermission::tryFrom($value);
             if ($permission === null
-                || in_array($permission, $rolePermissions, true) === false
-                || ($targetPermissions !== null && in_array($permission, $targetPermissions, true) === false)) {
+                || in_array($permission, $rolePermissions, true) === false) {
                 continue;
             }
 

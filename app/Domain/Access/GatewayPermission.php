@@ -103,7 +103,7 @@ enum GatewayPermission: string
             self::ActivityView => 'Open the activity feed. Non-owner results are constrained to Targets visible through targets.view and the effective Target scope; owners retain unrestricted recovery visibility.',
             self::UsersView => 'View local Gateway user accounts. This is Gateway-wide and does not itself allow changing access.',
             self::UsersManage => 'Create and edit Gateway users, per-Target access rules, Target groups, and group membership. This is Gateway-wide access administration.',
-            self::SecurityManage => 'Manage approved AI client applications and revoke individual grants through the Owner-only security administration pages.',
+            self::SecurityManage => 'Manage Gateway-wide security, approved AI clients and grants, operational settings, and Relay/Reverse SSH infrastructure.',
         };
     }
 

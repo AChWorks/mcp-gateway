@@ -62,7 +62,7 @@ final readonly class ConnectionRelayTargetBinding
                 return false;
             }
 
-            if (! in_array($locked->connector_type, $this->connectors->types(), true)) {
+            if (! TargetConnectorRegistry::supports($locked->connector_type)) {
                 throw new TargetConnectorFailure(__('The Target connector is not available.'), 'connection_relay_id');
             }
             // Only an unresolved connection transition is a generic blocker.

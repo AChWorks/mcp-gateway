@@ -6,7 +6,6 @@ use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Targets\ConnectionRelayAdministration;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Access\GatewayRole;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
@@ -25,9 +24,9 @@ use InvalidArgumentException;
 
 final class ConnectionRelayController extends Controller
 {
-    public function index(Request $request, ConnectionRelayOnboarding $onboarding): View
+    public function index(ConnectionRelayOnboarding $onboarding): View
     {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
 
         $relays = ConnectionRelay::query()->orderBy('display_name')->get();
 
@@ -46,7 +45,7 @@ final class ConnectionRelayController extends Controller
         Request $request, AdministratorPasswordConfirmation $password, ActivityRecorder $activity,
         ConnectionRelayOnboarding $onboarding,
     ): RedirectResponse {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate($this->rules());
         $password->confirm($request);
         [$endpoint, $pin] = $this->validatedEndpointAndPin($fields);
@@ -79,7 +78,7 @@ final class ConnectionRelayController extends Controller
         Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
         ConnectionRelayAdministration $administration, ActivityRecorder $activity,
     ): RedirectResponse {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate([
             'relay_revision' => ['required', 'integer', 'min:1'],
             'enable' => ['required', 'in:0,1'],
@@ -129,7 +128,7 @@ final class ConnectionRelayController extends Controller
 
     public function test(Request $request, ConnectionRelay $relay): RedirectResponse
     {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         // The same simple listener check works before and after enabling.
         // Target-specific SSH/TLS credentials are tested on the Target page.
         $port = (int) $relay->local_socks_port;
@@ -157,7 +156,7 @@ final class ConnectionRelayController extends Controller
         Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
         ActivityRecorder $activity,
     ): RedirectResponse {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate([
             ...$this->rules(), 'relay_revision' => ['required', 'integer', 'min:1'],
         ]);
@@ -215,7 +214,7 @@ final class ConnectionRelayController extends Controller
         Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
         ActivityRecorder $activity,
     ): RedirectResponse {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate([
             'display_name' => ['required', 'string', 'max:160'],
             'relay_revision' => ['required', 'integer', 'min:1'],
@@ -246,7 +245,7 @@ final class ConnectionRelayController extends Controller
         Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
         ActivityRecorder $activity,
     ): RedirectResponse {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate([
             'relay_revision' => ['required', 'integer', 'min:1'],
             'confirm_relay_id' => ['required', 'string', 'max:64'],
@@ -311,7 +310,7 @@ final class ConnectionRelayController extends Controller
         Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
         ConnectionRelayOnboarding $onboarding, ActivityRecorder $activity,
     ): RedirectResponse {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate(['relay_revision' => ['required', 'integer', 'min:1']]);
         $password->confirm($request);
 
@@ -329,12 +328,6 @@ final class ConnectionRelayController extends Controller
 
         return redirect()->route('admin.connection-relays.index')
             ->with('status', __('Two complete Relay setup commands are ready. Run the Relay command first.'));
-    }
-
-    private function authorizeOwner(Request $request): void
-    {
-        Gate::authorize(GatewayPermission::SecurityManage->value);
-        abort_unless($request->user()?->getRawOriginal('role') === GatewayRole::Owner->value, 403);
     }
 
     /** @return array<string,array<int,string>> */

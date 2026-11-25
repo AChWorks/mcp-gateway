@@ -5,25 +5,25 @@ namespace App\Http\Controllers\Admin;
 use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Targets\SshManagedReverseAuthorizedKeys;
 use App\Application\Targets\SshManagedReverseHostReadiness;
-use App\Domain\Access\GatewayRole;
+use App\Domain\Access\GatewayPermission;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
-use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 use InvalidArgumentException;
 
 final class SshManagedReverseController extends Controller
 {
-    public function index(Request $request, SshManagedReverseAuthorizedKeys $keys, SshManagedReverseHostReadiness $readiness): View
+    public function index(SshManagedReverseAuthorizedKeys $keys, SshManagedReverseHostReadiness $readiness): View
     {
-        $this->requireOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $gateway = SshManagedReverseGateway::query()->find(1);
         $fileReady = $keys->canPublish();
         $health = $readiness->assess($gateway);
@@ -56,7 +56,7 @@ final class SshManagedReverseController extends Controller
         Request $request, AdministratorPasswordConfirmation $password,
         SshManagedReverseAuthorizedKeys $keys,
     ): RedirectResponse {
-        $this->requireOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate([
             'revision' => ['required', 'integer', 'min:0'],
             'enabled' => ['required', 'in:0,1'],
@@ -156,7 +156,7 @@ final class SshManagedReverseController extends Controller
         Request $request, AdministratorPasswordConfirmation $password,
         SshManagedReverseAuthorizedKeys $keys,
     ): RedirectResponse {
-        $this->requireOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $password->confirm($request);
         if (! $keys->canPublish()) {
             throw ValidationException::withMessages([
@@ -173,14 +173,5 @@ final class SshManagedReverseController extends Controller
 
         return redirect()->route('admin.reverse-ssh.index')
             ->with('status', __('Restricted public-key policy reconciled. Host SSHD status and reverse listeners still require verification.'));
-    }
-
-    private function requireOwner(Request $request): User
-    {
-        $user = $request->user();
-        abort_unless($user instanceof User && (string) $user->getRawOriginal('role') === GatewayRole::Owner->value
-            && $user->access_enabled, 403);
-
-        return $user;
     }
 }

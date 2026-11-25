@@ -3,8 +3,8 @@
 namespace App\Application\Admin;
 
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Connectors\SshDirect\SshTargetIdentity;
-use App\Support\TargetRecoveryPresentation;
 
 final class SshTargetAdminPresenter implements TargetConnectorAdminPresenter
 {
@@ -42,7 +42,18 @@ final class SshTargetAdminPresenter implements TargetConnectorAdminPresenter
 
     public function recovery(Target $target, array $details): array
     {
-        return TargetRecoveryPresentation::describe($target);
+        return [
+            'title' => (string) $target->getRawOriginal('connection_state') === TargetConnectionState::Connected->value
+                ? __('SSH connection last verified') : __('SSH connection needs attention'),
+            'description' => __('SSH identity and login verification are separate from WordPress OAuth; a previous SSH probe is not a live connection.'),
+            'reachability' => __('Inspect SSH host-key and login verification details below.'),
+            'authorization' => __('SSH uses stored login credentials, not OAuth revocation.'),
+            'operation' => __('No WordPress OAuth operation applies.'),
+            'history' => $target->last_error_code === null ? null
+                : __('Recorded error (diagnostic, not proof of current reachability): :code', ['code' => $target->last_error_code]),
+            'tone' => (string) $target->getRawOriginal('connection_state') === TargetConnectionState::Connected->value ? 'neutral' : 'caution',
+            'canFinish' => false, 'canCancel' => false, 'needsExternalProof' => false,
+        ];
     }
 
     public function hasConfiguration(array $details): bool

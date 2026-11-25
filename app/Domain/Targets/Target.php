@@ -2,6 +2,7 @@
 
 namespace App\Domain\Targets;
 
+use App\Application\Targets\TargetConnectorRegistry;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Support\Database\MicrosecondImmutableDateTimeCast;
 use DomainException;
@@ -13,18 +14,6 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 final class Target extends Model
 {
     use HasUlids;
-
-    /**
-     * Supported built-in Target identities. Unimplemented connector types
-     * are rejected on creation and cannot be promoted into active routing.
-     *
-     * @var list<string>
-     */
-    public const KNOWN_CONNECTOR_TYPES = [
-        'wp_ai_bridge',
-        'ssh_direct',
-        'arvancloud',
-    ];
 
     public const AI_GUIDANCE_MAX_LENGTH = 800;
 
@@ -80,7 +69,7 @@ final class Target extends Model
                 throw new DomainException('Target AI guidance must be bounded plain text.');
             }
 
-            if (! in_array((string) $target->getAttribute('connector_type'), self::KNOWN_CONNECTOR_TYPES, true)) {
+            if (! TargetConnectorRegistry::supports((string) $target->getAttribute('connector_type'))) {
                 throw new DomainException('Unsupported built-in Target connector type.');
             }
         });

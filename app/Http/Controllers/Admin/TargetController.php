@@ -27,7 +27,6 @@ use App\Models\User;
 use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
 use App\Support\TargetFormInput;
-use App\Support\TargetRecoveryPresentation;
 use DomainException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -343,8 +342,7 @@ final class TargetController extends Controller
             'connectorUi' => $presenter?->definition(),
             'canRemoveSafely' => $canRemoveSafely,
             ...$details,
-            'recovery' => $presenter?->recovery($target, $details)
-                ?? TargetRecoveryPresentation::describe($target),
+            'recovery' => $connectorAdmin->recovery($target, $details),
         ]);
     }
 

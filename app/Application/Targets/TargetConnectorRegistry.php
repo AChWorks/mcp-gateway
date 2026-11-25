@@ -33,9 +33,14 @@ final class TargetConnectorRegistry
         return array_keys(self::IMPLEMENTED);
     }
 
+    public static function supports(string $type): bool
+    {
+        return isset(self::IMPLEMENTED[$type]);
+    }
+
     public function availableForTarget(Target $target): ?TargetConnectorAdapter
     {
-        return isset(self::IMPLEMENTED[$target->connector_type])
+        return self::supports($target->connector_type)
             ? $this->forType($target->connector_type)
             : null;
     }
@@ -76,7 +81,7 @@ final class TargetConnectorRegistry
      */
     public function publicMetadata(Target $target): array
     {
-        if (! isset(self::IMPLEMENTED[$target->connector_type])) {
+        if (! self::supports($target->connector_type)) {
             return [];
         }
 
