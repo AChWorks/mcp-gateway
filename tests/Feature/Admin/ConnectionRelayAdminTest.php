@@ -583,6 +583,26 @@ SH
         }
     }
 
+    public function test_invalid_ssh_credential_does_not_block_relay_disable_and_is_audited(): void
+    {
+        $relay = $this->readyRelay();
+        $target = app(SshTargetRegistration::class)->register(
+            'relay-invalid-credential', 'Relay with damaged fixture credential', '1.1.1.1', 22,
+            'deploy', $this->publicKey(), 'password', 'fixture-secret', null,
+            connectionRelayId: 'iran-1',
+        );
+        DB::table('target_credentials')->where('target_record_id', $target->getKey())
+            ->update(['encrypted_payload' => 'invalid-fixture-envelope']);
+        self::assertTrue(app(ConnectionRelayAdministration::class)->disable($relay, 1));
+        self::assertFalse($relay->fresh()->enabled);
+        self::assertSame(2, $target->fresh()->relay_binding_revision);
+        self::assertSame('relay_disabled', $target->fresh()->last_error_code);
+        $this->assertDatabaseHas('activity_events', [
+            'target_record_id' => $target->getKey(), 'operation' => 'ssh-relay-credential-rebind',
+            'outcome' => 'failure', 'error_code' => 'credential_invalid',
+        ]);
+    }
+
     public function test_double_disable_does_not_reseal_credentials_or_advance_job_epoch(): void
     {
         $relay = $this->readyRelay();

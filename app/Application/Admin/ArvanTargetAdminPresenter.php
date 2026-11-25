@@ -16,6 +16,8 @@ final class ArvanTargetAdminPresenter implements TargetConnectorAdminPresenter
             configurationView: 'admin.targets.connectors.arvan.configuration',
             detailRowsView: 'admin.targets.connectors.arvan.detail-rows',
             detailActionsView: 'admin.targets.connectors.arvan.detail-actions',
+            validationMessages: ArvanApiTargetFormCopy::messages(),
+            validationAttributes: ArvanApiTargetFormCopy::attributes(),
         );
     }
 

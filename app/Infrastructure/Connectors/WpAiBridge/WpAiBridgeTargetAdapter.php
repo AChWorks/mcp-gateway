@@ -10,6 +10,7 @@ use App\Application\Targets\TargetConnectorResult;
 use App\Application\Targets\TargetEndpointPreflight;
 use App\Application\Targets\TargetEnrollmentPreflight;
 use App\Application\Targets\TargetPreflightResult;
+use App\Application\Targets\TargetRelayBindingContributor;
 use App\Application\Targets\TargetReviewContributor;
 use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
@@ -28,7 +29,7 @@ use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
 /** WordPress-specific work stays behind the common Target lifecycle boundary. */
-final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContributor, TargetConnectorAdapter, TargetEnrollmentPreflight, TargetReviewContributor
+final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContributor, TargetConnectorAdapter, TargetEnrollmentPreflight, TargetRelayBindingContributor, TargetReviewContributor
 {
     public function __construct(private Container $container) {}
 
@@ -115,6 +116,11 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
                 'target_id',
             );
         }
+    }
+
+    public function registrationRequiresPassword(array $input): bool
+    {
+        return false;
     }
 
     public function registrationStatus(): string
@@ -227,6 +233,24 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
     public function publicMetadata(Target $target): array
     {
         return [];
+    }
+
+    public function prepareRelayBindingChange(Target $current, Target $next, bool $disabling): void
+    {
+        if (! $disabling) {
+            if (TargetCredential::query()->where('target_record_id', $current->getKey())->exists()) {
+                throw new TargetConnectorFailure(__('Finish WordPress authorization revocation before changing the connection route.'), 'connection_relay_id');
+            }
+            if ($this->hasPendingDeletion($current)) {
+                throw new TargetConnectorFailure(__('Resolve the outstanding WordPress OAuth intent before changing the connection route.'), 'connection_relay_id');
+            }
+        }
+
+        // Public metadata verified via the old route is not current proof.
+        // Keep the registered endpoints and all existing OAuth intents.
+        DB::table('wp_ai_bridge_target_configs')->where('target_record_id', $current->getKey())->update([
+            'metadata_checked_at' => null, 'metadata_reachable' => null,
+        ]);
     }
 
     public function hasPendingDeletion(Target $target): bool

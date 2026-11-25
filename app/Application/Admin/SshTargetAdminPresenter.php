@@ -20,6 +20,9 @@ final class SshTargetAdminPresenter implements TargetConnectorAdminPresenter
             detailRowsView: 'admin.targets.connectors.ssh.detail-rows',
             detailActionsView: 'admin.targets.connectors.ssh.detail-actions',
             extraView: 'admin.targets.connectors.ssh.file-exchange',
+            validationMessages: [
+                'connection_relay_id.prohibited_if' => __('This connection method does not support a Relay.'),
+            ],
         );
     }
 

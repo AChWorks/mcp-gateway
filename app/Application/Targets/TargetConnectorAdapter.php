@@ -26,6 +26,15 @@ interface TargetConnectorAdapter
 
     public function registrationStatus(): string;
 
+    /**
+     * Connector-specific actor reauthentication. Selecting a Relay always
+     * requires confirmation independently of this rule. An empty input
+     * describes the default enrollment mode.
+     *
+     * @param  array<string,mixed>  $input
+     */
+    public function registrationRequiresPassword(array $input): bool;
+
     /** @return array<string, array<int, mixed>> */
     public function configurationRules(Target $target): array;
 

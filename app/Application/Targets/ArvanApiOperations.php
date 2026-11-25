@@ -71,7 +71,7 @@ final readonly class ArvanApiOperations
 
         try {
             // Public documentation retrieval never receives the API key.
-            $response = $this->http->getApiDocument($config->spec_url, relay: $this->relays->httpRouteForSnapshot($target));
+            $response = $this->http->getApiDocument($config->spec_url, relay: $this->relays->httpRouteForTarget($target));
             if ($response->status < 200 || $response->status >= 300) {
                 return $this->failed($operation, $target, 'catalog_unavailable', [
                     'http_status' => $response->status, 'failure_origin' => 'downstream_http',
@@ -171,7 +171,7 @@ final readonly class ArvanApiOperations
                 $config->base_url, $method, $path, $query, $bodyJson,
                 ['Authorization' => 'Apikey '.$key, 'Accept' => 'application/json'],
                 $bodyText, $contentType, $formFields, $formFiles, $accept,
-                relay: $this->relays->httpRouteForSnapshot($target),
+                relay: $this->relays->httpRouteForTarget($target),
             );
         } catch (OutboundRequestException $exception) {
             $unknown = $permission !== GatewayPermission::ArvanApiRead && ! $exception->preDispatch;

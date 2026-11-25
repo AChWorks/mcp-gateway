@@ -17,5 +17,9 @@ final readonly class TargetConnectorAdminDefinition
         public ?string $recoveryActionsView = null,
         public ?string $operationsView = null,
         public ?string $extraView = null,
+        /** @var array<string,string> */
+        public array $validationMessages = [],
+        /** @var array<string,string> */
+        public array $validationAttributes = [],
     ) {}
 }

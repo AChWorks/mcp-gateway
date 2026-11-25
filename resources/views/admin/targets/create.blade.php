@@ -12,6 +12,7 @@
         ? $requestedConnector : '';
     $selectedSshMode = $selected === 'ssh_direct' && in_array($selectedSshMode, ['direct', 'manual', 'managed'], true) ? $selectedSshMode : 'direct';
     $relaySupported = $selected !== '' && $selectedSshMode === 'direct';
+    $connectorRequiresPassword = in_array($selected, $passwordRequiredTypes, true);
 @endphp
 <div class="page-heading">
     <div>
@@ -50,7 +51,7 @@
             <select id="connector_type" name="connector_type" required @error('connector_type') aria-invalid="true" @enderror aria-describedby="connector_type_help{{ $errors->has('connector_type') ? ' connector_type-error' : '' }}">
                 <option value="">{{ __('Choose a connector') }}</option>
                 @foreach ($connectorOptions as $type => $label)
-                    <option value="{{ $type }}" @selected($selected === $type)>{{ $label }}</option>
+                    <option value="{{ $type }}" @selected($selected === $type) @if(in_array($type, $passwordRequiredTypes, true)) data-enrollment-password-required @endif>{{ $label }}</option>
                 @endforeach
             </select>
             <p id="connector_type_help" class="field-help">{{ __('The next fields change with your selection. Only implemented connectors you can enroll are listed.') }}</p>

@@ -7,11 +7,8 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
-use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
-use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Support\CorrelationId;
 use Illuminate\Support\Facades\DB;
-use RuntimeException;
 
 /**
  * Only a scoped Target configuration/password-gated controller may change Target transport routes.
@@ -21,7 +18,6 @@ final readonly class ConnectionRelayTargetBinding
 {
     public function __construct(
         private ConnectionRelayRoutes $routes,
-        private SshTargetVault $vault,
         private ActivityRecorder $activity,
         private TargetConnectorRegistry $connectors,
     ) {}
@@ -46,16 +42,7 @@ final readonly class ConnectionRelayTargetBinding
     {
         $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->first();
 
-        return hash('sha256', json_encode([
-            (string) $target->getKey(),
-            (string) $target->target_id,
-            (string) $target->connector_type,
-            (string) $target->getRawOriginal('connection_state'),
-            (string) $target->getAttribute('relay_record_id'),
-            (int) ($target->getAttribute('relay_binding_revision') ?? 0),
-            $credential?->getKey(),
-            $credential?->encrypted_payload,
-        ], JSON_THROW_ON_ERROR));
+        return TargetConfigurationRevision::make($target, [], $credential);
     }
 
     public function change(Target $target, string $revision, ?string $relayId): bool
@@ -91,74 +78,56 @@ final readonly class ConnectionRelayTargetBinding
                 throw new TargetConnectorFailure(__('The Target Relay revision is exhausted. Do not reuse historical job identities.'), 'route_revision');
             }
 
-            if ($locked->connector_type === 'ssh_direct') {
-                $config = SshTargetConfig::query()->where('target_record_id', $locked->getKey())
-                    ->lockForUpdate()->firstOrFail();
-                // Reverse SSH has its own distinct Owner key publication and
-                // listener trust boundary. Never combine it with a Relay.
-                if (($config->route_mode ?? 'direct') !== 'direct') {
-                    throw new TargetConnectorFailure(__('Revoke and switch the existing Reverse route to Direct before selecting a Relay.'), 'connection_relay_id');
-                }
-                $credential = TargetCredential::query()->where('target_record_id', $locked->getKey())
-                    ->where('connector_type', 'ssh_direct')->where('purpose', SshTargetVault::PURPOSE)
-                    ->lockForUpdate()->first();
-                if ($credential instanceof TargetCredential) {
-                    try {
-                        $material = $this->vault->open($locked, $config, $credential);
-                        $nextTarget = clone $locked;
-                        $nextTarget->setRawAttributes([
-                            ...$locked->getAttributes(),
-                            'relay_record_id' => $nextId,
-                            'relay_binding_revision' => $epoch + 1,
-                        ], true);
-                        $encrypted = $this->vault->seal(
-                            $nextTarget, $config, $material['secret'], $material['passphrase'],
-                        );
-                    } catch (RuntimeException) {
-                        throw new TargetConnectorFailure(__('Stored SSH credentials cannot be safely rebound. Restore the original encryption key.'), 'connection_relay_id');
-                    }
-                    $credential->forceFill(['encrypted_payload' => $encrypted])->save();
-                }
-
-                DB::table('ssh_direct_target_configs')->where('target_record_id', $locked->getKey())->update([
-                    'verification_attempt_id' => null,
-                    'observed_peer_ip' => null,
-                    'observed_at' => null,
-                ]);
-            } elseif ($locked->connector_type === 'wp_ai_bridge') {
-                // Do not move OAuth code/token/refresh/revocation intents to
-                // another route, or silently transfer a live bearer secret.
-                if (TargetCredential::query()->where('target_record_id', $locked->getKey())->exists()) {
-                    throw new TargetConnectorFailure(__('Finish WordPress authorization revocation before changing the connection route.'), 'connection_relay_id');
-                }
-                foreach ([
-                    'wp_ai_bridge_oauth_flows',
-                    'wp_ai_bridge_refresh_intents',
-                    'wp_ai_bridge_revocation_intents',
-                ] as $table) {
-                    if (DB::table($table)->where('target_record_id', $locked->getKey())->exists()) {
-                        throw new TargetConnectorFailure(__('Resolve the outstanding WordPress OAuth intent before changing the connection route.'), 'connection_relay_id');
-                    }
-                }
-            }
-
-            // Eloquent's normal model guard intentionally cannot mutate
-            // these fields outside this serialized, audited configuration workflow.
-            DB::table('targets')->where('id', $locked->getKey())->update([
-                'relay_record_id' => $nextId,
-                'relay_binding_revision' => $epoch + 1,
-                'connection_state' => TargetConnectionState::Disconnected->value,
-                'last_error_code' => null,
-                'connected_at' => null,
-                'last_tested_at' => null,
-                'last_success_at' => null,
-                'last_failure_at' => null,
-                'last_failure_code' => null,
-                'updated_at' => now(),
-            ]);
-            $this->activity->recordRequired(CorrelationId::current(), 'target-relay-reconfigure', 'success', $locked);
+            $this->applyBinding($locked, $nextId, $epoch + 1, false);
 
             return true;
         }, 3);
+    }
+
+    /**
+     * The Relay administrator holds the Relay and Target locks. Disabling
+     * cannot be prevented by an exhausted epoch or an unresolved connector
+     * transition; the disabled route itself prevents new network dispatch.
+     */
+    public function disableBoundTarget(Target $locked): void
+    {
+        $epoch = (int) $locked->relay_binding_revision;
+        $this->applyBinding(
+            $locked, $locked->getAttribute('relay_record_id'), min(4294967295, $epoch + 1), true,
+        );
+    }
+
+    private function applyBinding(Target $locked, ?string $relayId, int $epoch, bool $disabling): void
+    {
+        $next = clone $locked;
+        $next->setRawAttributes([
+            ...$locked->getAttributes(),
+            'relay_record_id' => $relayId,
+            'relay_binding_revision' => $epoch,
+        ], true);
+
+        // A connector contributes only its real protocol-specific lifecycle
+        // work. The common route mutation and fencing have exactly one owner.
+        $adapter = $this->connectors->availableForTarget($locked);
+        if ($adapter instanceof TargetRelayBindingContributor) {
+            $adapter->prepareRelayBindingChange($locked, $next, $disabling);
+        }
+
+        DB::table('targets')->where('id', $locked->getKey())->update([
+            'relay_record_id' => $relayId,
+            'relay_binding_revision' => $epoch,
+            'connection_state' => $disabling ? TargetConnectionState::Error->value : TargetConnectionState::Disconnected->value,
+            'last_error_code' => $disabling ? 'relay_disabled' : null,
+            'connected_at' => null,
+            'last_tested_at' => null,
+            ...($disabling ? [] : [
+                'last_success_at' => null,
+                'last_failure_at' => null,
+                'last_failure_code' => null,
+            ]),
+            'updated_at' => now(),
+        ]);
+        $this->activity->recordRequired(CorrelationId::current(),
+            $disabling ? 'target-relay-disabled' : 'target-relay-reconfigure', 'success', $locked);
     }
 }

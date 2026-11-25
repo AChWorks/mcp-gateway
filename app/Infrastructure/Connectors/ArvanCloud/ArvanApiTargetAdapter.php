@@ -129,6 +129,11 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         }
     }
 
+    public function registrationRequiresPassword(array $input): bool
+    {
+        return true;
+    }
+
     public function registrationStatus(): string
     {
         return __('ArvanCloud API Target saved with an encrypted key. Use the unauthenticated HTTPS endpoint check now, or configure an optional known read-only GET probe to verify the key.');
@@ -252,7 +257,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
 
         try {
             $this->requireUnpaused($target);
-            $response = $this->transport->request($base, 'HEAD', '/', relay: $this->relays->httpRouteForSnapshot($target));
+            $response = $this->transport->request($base, 'HEAD', '/', relay: $this->relays->httpRouteForTarget($target));
 
             // A concurrent Pause, removal or API-root replacement invalidates
             // even this read-only observation before it can be displayed.
@@ -329,7 +334,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
             $response = $this->transport->request(
                 $config->base_url, 'GET', $config->probe_path, [],
                 null, ['Authorization' => 'Apikey '.$key],
-                relay: $this->relays->httpRouteForSnapshot($target),
+                relay: $this->relays->httpRouteForTarget($target),
             );
             if ($response->status < 200 || $response->status >= 300) {
                 $message = match ($response->status) {

@@ -145,8 +145,9 @@
             relaySelector.disabled = !relaySupported;
             if (!relaySupported) relaySelector.value = '';
         }
-        // Arvan enrollment already requires the actor's current password.
-        const relayChosen = relaySupported && connector.value !== 'arvancloud' && Boolean(relaySelector?.value);
+        // Default connector enrollment requirements come from its adapter.
+        const connectorRequiresPassword = Boolean(connector.selectedOptions[0]?.hasAttribute('data-enrollment-password-required'));
+        const relayChosen = relaySupported && !connectorRequiresPassword && Boolean(relaySelector?.value);
         if (relayPasswordGroup) relayPasswordGroup.hidden = !relayChosen;
         if (relayPassword) {
             relayPassword.disabled = !relayChosen;

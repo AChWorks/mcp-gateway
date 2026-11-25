@@ -30,11 +30,11 @@
                         'initialRelayId' => old('connection_relay_id'),
                         'disabled' => ! $relaySupported,
                     ])
-                    <div class="field" data-relay-owner-group @if(! $relaySupported || $selected === 'arvancloud') hidden @endif>
+                    <div class="field" data-relay-owner-group @if(! $relaySupported || $connectorRequiresPassword) hidden @endif>
                         <label for="target-relay-owner-password">{{ __('Your current Gateway password (required when using a Relay)') }}</label>
                         <input id="target-relay-owner-password" type="password" name="current_password" data-admin-requires-intent
                             data-relay-owner-password maxlength="255" autocomplete="current-password"
-                            @if(! $relaySupported || $selected === 'arvancloud') disabled @endif>
+                            @if(! $relaySupported || $connectorRequiresPassword) disabled @endif>
                     </div>
                 </div>
         </fieldset>

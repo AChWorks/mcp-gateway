@@ -387,6 +387,11 @@ final class AdminUiPresentationTest extends TestCase
             ->assertSee('Manual Reverse SSH');
         $arvan = $this->get('/admin/targets/create?connector_type=arvancloud')->assertOk()->getContent();
         self::assertMatchesRegularExpression('/<div[^>]*data-target-relay\s*>/', $arvan);
+        $dom = new \DOMDocument;
+        $dom->loadHTML($arvan, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+        $xpath = new \DOMXPath($dom);
+        self::assertSame(1, (int) $xpath->evaluate('count(//select[@id="connector_type"]/option[@data-enrollment-password-required][@value="arvancloud"])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//form[@id="target-create-form"]//input[@name="current_password"][not(@disabled)][not(ancestor::fieldset[@disabled])])'));
         DB::table('user_permission_denials')->insert(['user_id' => $administrator->id, 'permission' => 'targets.create']);
         $this->get('/admin/targets/create')->assertForbidden();
         $this->post('/admin/targets', ['connector_type' => 'arvancloud'])->assertForbidden();

@@ -31,18 +31,7 @@ final readonly class ConnectionRelayRoutes
 
     public function selected(?string $relayId): ?ConnectionRelay
     {
-        if ($relayId === null || $relayId === '') {
-            return null;
-        }
-        if (preg_match('/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D', $relayId) !== 1) {
-            throw new ConnectionRelayUnavailable;
-        }
-        $relay = ConnectionRelay::query()->where('relay_id', $relayId)->first();
-        if (! $relay instanceof ConnectionRelay || ! $relay->enabled) {
-            throw new ConnectionRelayUnavailable;
-        }
-
-        return $relay;
+        return $this->resolveSelection($relayId, false);
     }
 
     /**
@@ -52,13 +41,19 @@ final readonly class ConnectionRelayRoutes
      */
     public function selectedForBinding(?string $relayId): ?ConnectionRelay
     {
+        return $this->resolveSelection($relayId, true);
+    }
+
+    private function resolveSelection(?string $relayId, bool $lock): ?ConnectionRelay
+    {
         if ($relayId === null || $relayId === '') {
             return null;
         }
         if (preg_match('/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D', $relayId) !== 1) {
             throw new ConnectionRelayUnavailable;
         }
-        $relay = ConnectionRelay::query()->where('relay_id', $relayId)->lockForUpdate()->first();
+        $query = ConnectionRelay::query()->where('relay_id', $relayId);
+        $relay = ($lock ? $query->lockForUpdate() : $query)->first();
         if (! $relay instanceof ConnectionRelay || ! $relay->enabled) {
             throw new ConnectionRelayUnavailable;
         }
@@ -73,35 +68,10 @@ final readonly class ConnectionRelayRoutes
         return $relay === null ? null : LocalSocks5Route::fromApprovedBinding($relay->relay_id, $relay->local_socks_port);
     }
 
+    /** All Target-bound HTTP uses the admitted snapshot's persisted route epoch. */
     public function httpRouteForTarget(Target $target): ?LocalSocks5Route
     {
-        try {
-            return $this->routeForTarget($target);
-        } catch (ConnectionRelayUnavailable) {
-            throw new OutboundRequestException(
-                'network_failure', 'The selected Connection Relay is unavailable.',
-                ['failure_stage' => 'connection_setup'], true,
-            );
-        }
-    }
-
-    /**
-     * Resolve the current route only if it still belongs to the admitted
-     * Target snapshot. HTTP connectors use the same dispatch fence.
-     */
-    public function httpRouteForSnapshot(Target $target): ?LocalSocks5Route
-    {
         return $this->httpRouteAtEpoch((string) $target->getKey(), (int) $target->relay_binding_revision);
-    }
-
-    public function httpRouteForRecord(string $targetRecordId): ?LocalSocks5Route
-    {
-        $target = Target::query()->find($targetRecordId);
-        if (! $target instanceof Target) {
-            throw new OutboundRequestException('network_failure', 'The selected Target no longer exists.', [], true);
-        }
-
-        return $this->httpRouteForTarget($target);
     }
 
     public function httpRouteAtEpoch(
@@ -117,7 +87,14 @@ final readonly class ConnectionRelayRoutes
             );
         }
 
-        $actual = $this->httpRouteForTarget($target);
+        try {
+            $actual = $this->routeForTarget($target);
+        } catch (ConnectionRelayUnavailable) {
+            throw new OutboundRequestException(
+                'network_failure', 'The selected Connection Relay is unavailable.',
+                ['failure_stage' => 'connection_setup'], true,
+            );
+        }
         if ($enforceExpected && (
             ($actual === null) !== ($expected === null)
             || ($actual !== null && $expected !== null && ($actual->relayId !== $expected->relayId
@@ -141,7 +118,7 @@ final readonly class ConnectionRelayRoutes
         }
     }
 
-    public function routeForTarget(Target $target): ?LocalSocks5Route
+    private function routeForTarget(Target $target): ?LocalSocks5Route
     {
         $id = $target->getAttribute('relay_record_id');
         if ($id === null || $id === '') {

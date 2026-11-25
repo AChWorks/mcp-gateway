@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AccessControl;
 use App\Application\Access\AdministratorPasswordConfirmation;
-use App\Application\Admin\ArvanApiTargetFormCopy;
 use App\Application\Admin\TargetConnectorAdmin;
 use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\SshManagedReverseHostReadiness;
@@ -84,7 +83,7 @@ final class TargetController extends Controller
 
     public function create(
         Request $request, TargetConnectorAdmin $connectorAdmin, SshManagedReverseHostReadiness $readiness,
-        ConnectionRelayRoutes $relays,
+        ConnectionRelayRoutes $relays, TargetConnectorRegistry $connectors,
     ): View {
         Gate::authorize(GatewayPermission::TargetsCreate->value);
 
@@ -107,6 +106,8 @@ final class TargetController extends Controller
         return view('admin.targets.create', [
             'connectorOptions' => $options,
             'connectorDefinitions' => $definitions,
+            'passwordRequiredTypes' => array_values(array_filter(array_keys($options),
+                fn (string $type): bool => $connectors->forType($type)->registrationRequiresPassword([]))),
             'selectedConnector' => $selected,
             'sshMode' => $sshMode,
             'managedReady' => $managedState === 'Ready',
@@ -115,22 +116,12 @@ final class TargetController extends Controller
         ]);
     }
 
-    private function guardRelaySelection(Request $request): void
-    {
-        if ($request->filled('connection_relay_id') && $request->input('connector_type') === 'ssh_direct'
-            && $request->input('ssh_route_mode') === 'reverse') {
-            throw ValidationException::withMessages([
-                'connection_relay_id' => __('This connection method does not support a Relay.'),
-            ]);
-        }
-    }
-
     /**
      * One authenticated enrollment preflight path for all supported connector
      * families. Each adapter opts in and owns its protocol validation; neither
      * submitted field names nor a connector label can choose an arbitrary probe.
      */
-    public function preflight(Request $request, TargetConnectorRegistry $connectors, ConnectionRelayRoutes $relays): RedirectResponse
+    public function preflight(Request $request, TargetConnectorRegistry $connectors, ConnectionRelayRoutes $relays, TargetConnectorAdmin $connectorAdmin): RedirectResponse
     {
         Gate::authorize(GatewayPermission::TargetsCreate->value);
 
@@ -155,11 +146,11 @@ final class TargetController extends Controller
                     'connector_type' => __('This connector does not support endpoint preflight.'),
                 ]);
             }
-            $this->guardRelaySelection($request);
+            $definition = $connectorAdmin->forType($adapter->type())?->definition();
             $validated = $request->validate(
                 [...ConnectionRelayRoutes::selectionRules(), ...$adapter->preflightRules()],
-                $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::messages() : [],
-                $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::attributes() : [],
+                $definition->validationMessages ?? [],
+                $definition->validationAttributes ?? [],
             );
             $selectedRelay = $validated['connection_relay_id'] ?? null;
             if (is_string($selectedRelay) && $selectedRelay !== '') {
@@ -228,6 +219,7 @@ final class TargetController extends Controller
         TargetConnectorRegistry $connectors,
         AccessControl $access,
         AdministratorPasswordConfirmation $confirmation,
+        TargetConnectorAdmin $connectorAdmin,
     ): RedirectResponse {
         Gate::authorize(GatewayPermission::TargetsCreate->value);
         $user = $request->user();
@@ -255,7 +247,7 @@ final class TargetController extends Controller
                     'ssh_mode' => __('For Managed Reverse SSH, open the selected Managed connection mode and use Create Pending Setup. No Target was registered.'),
                 ]);
             }
-            $this->guardRelaySelection($request);
+            $definition = $connectorAdmin->forType($adapter->type())?->definition();
             $validated = $request->validate([
                 'target_id' => ['required', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
                 'display_name' => ['required', 'string', 'max:160'],
@@ -264,15 +256,12 @@ final class TargetController extends Controller
                 ...ConnectionRelayRoutes::selectionRules(),
                 ...$adapter->registrationRules(),
             ],
-                $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::messages() : [],
-                $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::attributes() : [],
+                $definition->validationMessages ?? [],
+                $definition->validationAttributes ?? [],
             );
             // Reauthenticate the actor for credential/route enrollment; the
             // adapter still enforces approved infrastructure and trust binding.
-            if (! empty($validated['connection_relay_id'])
-                || $adapter->type() === 'arvancloud'
-                || ($adapter->type() === 'ssh_direct'
-                    && ($validated['ssh_route_mode'] ?? 'direct') === 'reverse')) {
+            if (! empty($validated['connection_relay_id']) || $adapter->registrationRequiresPassword($validated)) {
                 $confirmation->confirm($request);
             }
         } catch (ValidationException $exception) {
