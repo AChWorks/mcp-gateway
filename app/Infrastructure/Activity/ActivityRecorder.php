@@ -90,20 +90,19 @@ final class ActivityRecorder
         }
     }
 
+    /** @param array<string,mixed> $diagnostics */
     public function recordRequired(
         string $correlationId,
         string $operation,
         string $outcome,
         ?Target $target = null,
         ?string $errorCode = null,
+        array $diagnostics = [],
     ): void {
-        $this->persist(...$this->normalized(
-            $correlationId,
-            $operation,
-            $outcome,
-            $target,
-            $errorCode,
-        ));
+        $this->persist(...[
+            ...$this->normalized($correlationId, $operation, $outcome, $target, $errorCode),
+            OperationDiagnostics::safeContext($diagnostics),
+        ]);
     }
 
     /**

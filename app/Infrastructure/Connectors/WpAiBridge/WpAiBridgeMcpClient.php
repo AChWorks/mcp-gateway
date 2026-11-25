@@ -63,7 +63,7 @@ final readonly class WpAiBridgeMcpClient
      * MCP catalog without invoking credential refresh or generation rotation.
      * Metadata reachability alone is never accepted as authorization proof.
      *
-     * @param  array{resource_url:string,access_token:string,relay?:?LocalSocks5Route}  $routing
+     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,relay_binding_revision:int}  $routing
      */
     public function verifyExistingAuthorization(array $routing, string $correlationId): void
     {
@@ -132,6 +132,7 @@ final readonly class WpAiBridgeMcpClient
         return $this->withLegacySession($routing, $correlationId, function (string $url, array $headers) use ($target, $routing, $ability, $input, $correlationId, $authorizeClass, $verifyContract, $timing): mixed {
             $classifiedAt = $timing?->stamp() ?? 0;
             try {
+                $this->assertCurrentRouting($routing);
                 $contract = null;
                 $executionClass = $this->abilityExecutionClass($routing, $ability, $correlationId, $headers, $timing, $contract);
             } finally {
@@ -156,7 +157,7 @@ final readonly class WpAiBridgeMcpClient
             $this->assertCurrentRouting($routing);
             $dispatchedAt = $timing?->stamp() ?? 0;
             try {
-                return $this->callTool($url, $headers, $ability, $input, $executionClass->hasMutationRisk(), 3, $timing, $routing['relay'] ?? null);
+                return $this->callTool($url, $headers, $ability, $input, $executionClass->hasMutationRisk(), 3, $timing, $routing['relay']);
             } finally {
                 $timing?->finish('mcp_execute_ms', $dispatchedAt);
             }
@@ -164,7 +165,7 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /**
-     * @param  array{resource_url:string,access_token:string,relay?:?LocalSocks5Route}  $routing
+     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,relay_binding_revision:int}  $routing
      * @param  array<string,string>|null  $sessionHeaders
      * @param  array<mixed,mixed>|null  $contract
      *
@@ -188,7 +189,7 @@ final readonly class WpAiBridgeMcpClient
                 null,
                 $timing,
             )
-            : $this->callTool($routing['resource_url'], $sessionHeaders, self::CATALOG_ABILITY, ['action' => 'get', 'name' => $ability], false, 2, $timing, $routing['relay'] ?? null);
+            : $this->callTool($routing['resource_url'], $sessionHeaders, self::CATALOG_ABILITY, ['action' => 'get', 'name' => $ability], false, 2, $timing, $routing['relay']);
 
         // A failed catalog lookup is NOT an unclassified Ability. Preserve
         // the downstream error (network, auth, protocol, etc.) and do not
@@ -249,7 +250,7 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /**
-     * @param  array{resource_url:string,access_token:string,relay?:?LocalSocks5Route}  $routing
+     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,relay_binding_revision:int}  $routing
      * @param  array<string, mixed>  $input
      */
     private function callAbilityOnRouting(
@@ -272,7 +273,7 @@ final readonly class WpAiBridgeMcpClient
                 $this->assertCurrentRouting($routing);
                 $calledAt = $timing?->stamp() ?? 0;
                 try {
-                    return $this->callTool($url, $headers, $ability, $input, $mutationRisk, 2, $timing, $routing['relay'] ?? null);
+                    return $this->callTool($url, $headers, $ability, $input, $mutationRisk, 2, $timing, $routing['relay']);
                 } finally {
                     $timing?->finish($ability === self::CATALOG_ABILITY ? 'mcp_catalog_ms' : 'mcp_execute_ms', $calledAt);
                 }
@@ -282,7 +283,7 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /**
-     * @param  array{resource_url:string,access_token:string,relay?:?LocalSocks5Route}  $routing
+     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,relay_binding_revision:int}  $routing
      * @param  callable(string,array<string,string>):mixed  $operation
      */
     private function withLegacySession(array $routing, string $correlationId, callable $operation, ?OperationTiming $timing = null): mixed
@@ -297,7 +298,7 @@ final readonly class WpAiBridgeMcpClient
         $this->assertCurrentRouting($routing);
         $initializedAt = $timing?->stamp() ?? 0;
         try {
-            $sessionId = $this->initialize($routing['resource_url'], $headers, $timing, $routing['relay'] ?? null);
+            $sessionId = $this->initialize($routing['resource_url'], $headers, $timing, $routing['relay']);
         } finally {
             $timing?->finish('mcp_initialize_ms', $initializedAt);
         }
@@ -308,25 +309,26 @@ final readonly class WpAiBridgeMcpClient
         } finally {
             $closedAt = $timing?->stamp() ?? 0;
             try {
-                $this->closeSession($routing['resource_url'], $headers, $timing, $routing['relay'] ?? null);
+                try {
+                    $this->assertCurrentRouting($routing);
+                    $this->closeSession($routing['resource_url'], $headers, $timing, $routing['relay']);
+                } catch (WpAiBridgeMcpException) {
+                    // A retired route must not receive another request with
+                    // its old bearer, even for best-effort session cleanup.
+                }
             } finally {
                 $timing?->finish('mcp_close_ms', $closedAt);
             }
         }
     }
 
-    /** @param array{resource_url:string,access_token:string,relay?:?LocalSocks5Route,target_record_id?:string,relay_binding_revision?:int} $routing */
+    /** @param array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,relay_binding_revision:int} $routing */
     private function assertCurrentRouting(array $routing): void
     {
-        if (! isset($routing['target_record_id'], $routing['relay_binding_revision'])) {
-            // The legacy route-free verifier is retained for internal direct
-            // protocol fixtures. Target-owned call paths provide both fields.
-            return;
-        }
         try {
             $this->relayRoutes->httpRouteAtEpoch(
                 $routing['target_record_id'], $routing['relay_binding_revision'],
-                $routing['relay'] ?? null, true,
+                $routing['relay'], true,
             );
         } catch (OutboundRequestException $exception) {
             throw new WpAiBridgeMcpException(
@@ -336,7 +338,7 @@ final readonly class WpAiBridgeMcpClient
         }
     }
 
-    /** @return array{resource_url:string,access_token:string,relay?:?LocalSocks5Route} */
+    /** @return array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,relay_binding_revision:int} */
     private function routingContext(Target $target, ?OperationTiming $timing = null): array
     {
         if ($target->connector_type !== 'wp_ai_bridge') {

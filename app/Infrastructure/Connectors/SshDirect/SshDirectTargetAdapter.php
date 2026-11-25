@@ -16,6 +16,7 @@ use App\Application\Targets\TargetEnrollmentPreflight;
 use App\Application\Targets\TargetPreflightResult;
 use App\Application\Targets\TargetRelayBindingContributor;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
@@ -378,6 +379,9 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
 
     public function prepareRelayBindingChange(Target $current, Target $next, bool $disabling): void
     {
+        if (! $disabling && $current->getAttribute('connection_state') === TargetConnectionState::Pending) {
+            throw new TargetConnectorFailure(__('Settle the existing SSH connection transition before changing its route.'), 'connection_relay_id');
+        }
         $config = SshTargetConfig::query()->where('target_record_id', $current->getKey())
             ->lockForUpdate()->first();
         if (! $disabling && (! $config instanceof SshTargetConfig || ($config->route_mode ?? 'direct') !== 'direct')) {

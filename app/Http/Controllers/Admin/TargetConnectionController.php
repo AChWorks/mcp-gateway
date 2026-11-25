@@ -274,6 +274,7 @@ final class TargetConnectionController extends Controller
             || ! Cache::add('admin:external-authorization:claimed:'.hash('sha256', $handoff), true, self::HANDOFF_TTL_SECONDS)
             || ($entry['target_id'] ?? null) !== $target->target_id
             || ($entry['target_record_id'] ?? null) !== (string) $target->getKey()
+            || ($entry['route_epoch'] ?? null) !== (int) $target->relay_binding_revision
             || ($entry['user_id'] ?? null) !== (string) $request->user()?->getAuthIdentifier()
             || ! is_int($entry['expires_at'] ?? null)
             || $entry['expires_at'] <= now()->getTimestamp()
@@ -328,6 +329,7 @@ final class TargetConnectionController extends Controller
             $pending[$handoff] = [
                 'target_id' => $target->target_id,
                 'target_record_id' => (string) $target->getKey(),
+                'route_epoch' => (int) $target->relay_binding_revision,
                 'user_id' => (string) $request->user()?->getAuthIdentifier(),
                 'operation' => $operation,
                 'expires_at' => now()->getTimestamp() + self::HANDOFF_TTL_SECONDS,

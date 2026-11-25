@@ -21,5 +21,6 @@ final readonly class TargetConnectorAdminDefinition
         public array $validationMessages = [],
         /** @var array<string,string> */
         public array $validationAttributes = [],
+        public ?string $routeChangeHelp = null,
     ) {}
 }

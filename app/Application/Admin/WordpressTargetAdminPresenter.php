@@ -21,6 +21,7 @@ final class WordpressTargetAdminPresenter implements TargetConnectorAdminPresent
             detailActionsView: 'admin.targets.connectors.wordpress.detail-actions',
             recoveryActionsView: 'admin.targets.connectors.wordpress.recovery-actions',
             operationsView: 'admin.targets.connectors.wordpress.operations',
+            routeChangeHelp: __('Changing the route clears this Target’s local WordPress OAuth authorization and pending OAuth work. It does not revoke remote consent. Connect again through the new route. If remote revocation is also needed, manage the old authorization in WordPress separately.'),
         );
     }
 

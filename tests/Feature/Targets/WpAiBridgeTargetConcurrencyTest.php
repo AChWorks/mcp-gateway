@@ -2,8 +2,10 @@
 
 namespace Tests\Feature\Targets;
 
+use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use App\Infrastructure\OAuth\GatewayBridgeClientIdentity;
@@ -105,6 +107,58 @@ final class WpAiBridgeTargetConcurrencyTest extends TestCase
             self::assertSame(0, DB::table('target_credentials')->count());
             self::assertSame(0, DB::table('wp_ai_bridge_revocation_intents')->count());
             self::assertSame('disconnected', Target::query()->firstOrFail()->connection_state->value);
+        } finally {
+            touch($directory.'/release');
+            foreach ($processes as $worker) {
+                if (is_resource($worker['process'])) {
+                    proc_terminate($worker['process']);
+                    proc_close($worker['process']);
+                }
+                foreach ($worker['pipes'] as $pipe) {
+                    if (is_resource($pipe)) {
+                        fclose($pipe);
+                    }
+                }
+            }
+            foreach (glob($directory.'/*') ?: [] as $file) {
+                unlink($file);
+            }
+            rmdir($directory);
+        }
+    }
+
+    public function test_independent_route_change_fences_inflight_refresh_commit(): void
+    {
+        $directory = storage_path('framework/testing/wp-route-race-'.bin2hex(random_bytes(8)));
+        if (! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+            throw new RuntimeException('Cannot create process barrier directory.');
+        }
+        $processes = [];
+        try {
+            $relay = ConnectionRelay::query()->create([
+                'relay_id' => 'wp-race-relay', 'display_name' => 'Race fixture',
+                'control_host' => '192.0.2.2', 'control_port' => 22,
+                'control_user' => 'fixture',
+                'control_host_key' => 'ssh-ed25519 '.base64_encode(pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat('c', 32)),
+                'local_socks_port' => 46081,
+            ]);
+            DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => true]);
+            $processes[] = $this->startWorker($directory, 'refresh', 'first', true);
+            $this->waitFor($directory.'/remote-first');
+            self::assertSame(1, DB::table('wp_ai_bridge_refresh_intents')->count());
+
+            $target = Target::query()->where('target_id', 'race')->firstOrFail();
+            $bindings = app(ConnectionRelayTargetBinding::class);
+            self::assertTrue($bindings->change($target, $bindings->revision($target), $relay->relay_id));
+            self::assertSame(0, DB::table('target_credentials')->count());
+            self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+            touch($directory.'/release');
+            self::assertSame(['status' => 'blocked', 'reason' => 'refresh_conflict'],
+                $this->completeWorker($processes[0]));
+            self::assertSame(0, DB::table('target_credentials')->count());
+            self::assertSame(0, DB::table('wp_ai_bridge_credential_metadata')->count());
+            self::assertSame('disconnected', $target->fresh()->connection_state->value);
+            self::assertSame(1, $target->fresh()->relay_binding_revision);
         } finally {
             touch($directory.'/release');
             foreach ($processes as $worker) {

@@ -51,7 +51,10 @@
 @if($routeRevision !== null)
 <section class="panel panel-wide target-enrollment" aria-labelledby="target-route-heading">
     <h2 id="target-route-heading">{{ __('Network routing') }}</h2>
-    <p class="field-help">{{ __('All network requests to this Target use the selected route. Changing it resets connection verification and fences retained work. Finish any pending connection transition or authorization revocation first.') }}</p>
+    <p class="field-help">{{ __('All network requests to this Target use the selected route. Changing it resets connection verification and fences retained work.') }}</p>
+    @if($connectorUi?->routeChangeHelp !== null)
+        <p class="field-help">{{ $connectorUi->routeChangeHelp }}</p>
+    @endif
     <form class="form-stack" method="post" action="{{ route('admin.targets.relay-route.update', ['target' => $target->target_id]) }}">
         @csrf
         @method('PUT')

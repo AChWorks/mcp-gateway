@@ -181,9 +181,11 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
     public function disconnect(Target $target): TargetConnectorResult
     {
         try {
-            $this->container->make(WpAiBridgeTargetConnectionService::class)->disconnect($target);
+            $revoked = $this->container->make(WpAiBridgeTargetConnectionService::class)->disconnect($target);
 
-            return new TargetConnectorResult(statusMessage: __('WordPress Target disconnected after confirmed credential revocation.'));
+            return new TargetConnectorResult(statusMessage: $revoked
+                ? __('WordPress Target disconnected after confirmed credential revocation.')
+                : __('WordPress Target disconnected locally. No stored credential was sent for remote revocation.'));
         } catch (WpAiBridgeTargetConnectionException $exception) {
             throw new TargetConnectorFailure($this->connectionFailureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
@@ -238,16 +240,13 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
     public function prepareRelayBindingChange(Target $current, Target $next, bool $disabling): void
     {
         if (! $disabling) {
-            if (TargetCredential::query()->where('target_record_id', $current->getKey())->exists()) {
-                throw new TargetConnectorFailure(__('Finish WordPress authorization revocation before changing the connection route.'), 'connection_relay_id');
-            }
-            if ($this->hasPendingDeletion($current)) {
-                throw new TargetConnectorFailure(__('Resolve the outstanding WordPress OAuth intent before changing the connection route.'), 'connection_relay_id');
-            }
+            $this->container->make(WpAiBridgeTargetConnectionService::class)
+                ->invalidateLocalAuthorizationForRouteChange($current);
         }
 
         // Public metadata verified via the old route is not current proof.
-        // Keep the registered endpoints and all existing OAuth intents.
+        // Disable alone is an outage/maintenance action, not a route selection.
+        // Keep its existing credentials and recovery evidence until rebind.
         DB::table('wp_ai_bridge_target_configs')->where('target_record_id', $current->getKey())->update([
             'metadata_checked_at' => null, 'metadata_reachable' => null,
         ]);

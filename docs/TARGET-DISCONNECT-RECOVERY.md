@@ -8,7 +8,7 @@ The Target Details recovery panel separates public WordPress metadata reachabili
 
 1. Open **Targets → Target Details → Connection and recovery**. Review **Ongoing operation** before choosing an action.
 2. **Finish disconnect** is available only when the ledger proves the next revoke request was never dispatched. Already acknowledged tokens are never resent. **Finish confirmed disconnect** completes only local cleanup; no new WordPress POST.
-3. If the remote outcome is **unknown** or **legacy unknown**, do not retry revoke, refresh, reconnect, or trust the stored credential. Contact the Gateway Owner for WordPress-side reconciliation.
+3. If the remote outcome is **unknown** or **legacy unknown**, do not retry revoke, refresh, reconnect, or trust the stored credential. Use the authorized WordPress-side reconciliation below when remote revocation is required. An explicit change to the Target network route instead retires the old local grant and intents without requiring remote revocation; it does not prove any previous remote effect.
 4. **Cancel pending disconnect** requires the corresponding scoped lifecycle permission and available only with durable proof of *zero* dispatched revocations, *zero* acknowledgments, unchanged credential generation, no pending refresh/callback, and an unexpired access bearer. The authorized actor must confirm the exact Target ID and their Gateway password. The Gateway then performs an authenticated **read-only WordPress Ability catalog** request using the existing token. Public metadata alone cannot authorize cancellation. Verification failure preserves the pending fence.
 5. After confirmed disconnect, **Authorize WordPress** starts fresh OAuth. Restarting an unconsumed OAuth browser flow invalidates its older callback state.
 
@@ -19,6 +19,8 @@ The Target Details recovery panel separates public WordPress metadata reachabili
 3. Independently confirm the saved remote change and preserve authorized evidence. Ensure any in-flight revoke/refresh has settled.
 4. Use the authorized WordPress-side recovery form. Type the exact Target ID, check both explicit attestations (client approval removed; other clients affected), and enter your current Gateway password.
 5. A required transactionally persisted audit records an **operator-attested** result. Gateway clears its **local** credential and intent. This is NOT independently verified remote revocation. Then reapprove the client in WordPress and start new Gateway authorization.
+
+Changing Direct/Relay selection is a separate password-confirmed, scoped Target configuration operation: it atomically clears local WordPress OAuth authorization and pending work, advances the route epoch, and records the previous intent evidence. Authorize again through the new route. Any already dispatched remote request may still complete remotely; it cannot restore the retired local grant. Remote authorization may still exist and must be managed in WordPress if revocation is required. A no-op selection does not clear authorization. Disabling a Relay by itself retains credentials and recovery evidence.
 
 The separate [local-only Target removal](OFFLINE-TARGET-REMOVAL.md) is a last-resort scoped removal action and never proves WordPress-side revocation.
 
@@ -31,7 +33,7 @@ The separate [local-only Target removal](OFFLINE-TARGET-REMOVAL.md) is a last-re
 | retryable (0 acknowledged) | The first revoke was definitively not sent | Resume matching intent; optionally authorized authenticated-catalog cancellation |
 | retryable (1+ acknowledged) | Earlier token(s) confirmed; next was definitively not sent | Retry next token only; cancel forbidden |
 | unknown | A revoke may have reached WordPress | No replay/cancel; authorized external attestation |
-| verify_in_flight | Owner cancel is validating existing bearer | Block other lifecycle mutations |
+| verify_in_flight | Owner cancel is validating existing bearer | Block ordinary OAuth lifecycle mutations; an explicit route change locally retires the intent |
 | confirmed | All remote tokens acknowledged; cleanup incomplete | Final local cleanup without network revoke |
 
 Operations bind exact Target ID, intent ID, credential ID and generation inside row locks. HTTP requests happen **outside DB transactions**, and each remote acknowledgment is durably committed before another token is sent. A lost HTTP response or failed DB acknowledgment remains fenced, not automatically retried. New intent creation and successful cleanup have required transactional audit. The refresh-token ambiguity fence is separate and takes priority.
@@ -48,4 +50,4 @@ Do not globally disable open_basedir, relax TLS/SSRF protections, add arbitrary 
 
 ## Acceptance boundary
 
-Use isolated disposable WordPress and MariaDB, covering pre-dispatch failure, unknown/partial outcomes, repeat and concurrent submits, stale action, owner-only access, metadata/OAuth distinction, failed audit, expired token, refresh generation and real authenticated catalog execution. Passing CI does not establish live host acceptance, indefinite OAuth durability or permission for production changes. Merge, release and deployment require separate Owner authorization and independent high-assurance review.
+Use isolated disposable WordPress and MariaDB, covering pre-dispatch failure, unknown/partial outcomes, repeat and concurrent submits, stale action, scoped permission and password enforcement, metadata/OAuth distinction, failed audit, expired token, refresh generation and real authenticated catalog execution. Passing CI does not establish live host acceptance, indefinite OAuth durability or permission for production changes. Merge, release and deployment require separate Owner authorization and independent high-assurance review.

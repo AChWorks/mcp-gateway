@@ -6,6 +6,7 @@ use App\Application\Targets\SshTargetConnectionException;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Http\OutboundRequestException;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Resolves a persisted, enabled, Target-scoped Relay route.
@@ -78,20 +79,11 @@ final readonly class ConnectionRelayRoutes
         string $targetRecordId, int $expectedEpoch, ?LocalSocks5Route $expected = null,
         bool $enforceExpected = false,
     ): ?LocalSocks5Route {
-        $target = Target::query()->find($targetRecordId);
-        if (! $target instanceof Target || $expectedEpoch < 0
-            || (int) ($target->getAttribute('relay_binding_revision') ?? 0) !== $expectedEpoch) {
-            throw new OutboundRequestException(
-                'network_failure', 'Target route binding changed before HTTP dispatch.',
-                ['failure_stage' => 'connection_setup'], true,
-            );
-        }
-
         try {
-            $actual = $this->routeForTarget($target);
-        } catch (ConnectionRelayUnavailable) {
+            $actual = $this->routeAtEpoch($targetRecordId, $expectedEpoch);
+        } catch (ConnectionRelayUnavailable $exception) {
             throw new OutboundRequestException(
-                'network_failure', 'The selected Connection Relay is unavailable.',
+                'network_failure', $exception->getMessage(),
                 ['failure_stage' => 'connection_setup'], true,
             );
         }
@@ -112,23 +104,32 @@ final readonly class ConnectionRelayRoutes
     public function sshRouteForTarget(Target $target): ?LocalSocks5Route
     {
         try {
-            return $this->routeForTarget($target);
+            return $this->routeAtEpoch((string) $target->getKey(), (int) $target->relay_binding_revision);
         } catch (ConnectionRelayUnavailable) {
             throw new SshTargetConnectionException('relay_unavailable');
         }
     }
 
-    private function routeForTarget(Target $target): ?LocalSocks5Route
+    private function routeAtEpoch(string $targetRecordId, int $expectedEpoch): ?LocalSocks5Route
     {
-        $id = $target->getAttribute('relay_record_id');
-        if ($id === null || $id === '') {
+        // One database snapshot of both records. Never combine an old Target
+        // binding with a Relay endpoint modified after Disable.
+        $binding = DB::table('targets as target')
+            ->leftJoin('connection_relays as relay', 'relay.id', '=', 'target.relay_record_id')
+            ->where('target.id', $targetRecordId)
+            ->first(['target.relay_record_id', 'target.relay_binding_revision',
+                'relay.relay_id', 'relay.local_socks_port', 'relay.enabled']);
+
+        if ($binding === null || $expectedEpoch < 0 || (int) $binding->relay_binding_revision !== $expectedEpoch) {
+            throw new ConnectionRelayUnavailable('Target route binding changed before dispatch.');
+        }
+        if ($binding->relay_record_id === null) {
             return null;
         }
-        $relay = ConnectionRelay::query()->find($id);
-        if (! $relay instanceof ConnectionRelay || ! $relay->enabled) {
-            throw new ConnectionRelayUnavailable;
+        if ($binding->relay_id === null || ! $binding->enabled) {
+            throw new ConnectionRelayUnavailable('The selected Connection Relay is unavailable.');
         }
 
-        return LocalSocks5Route::fromApprovedBinding($relay->relay_id, $relay->local_socks_port);
+        return LocalSocks5Route::fromApprovedBinding((string) $binding->relay_id, (int) $binding->local_socks_port);
     }
 }

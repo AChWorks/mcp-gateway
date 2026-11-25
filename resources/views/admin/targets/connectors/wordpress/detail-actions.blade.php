@@ -1,5 +1,5 @@
 @if ($refreshPending)
-    <p class="muted" role="status">{{ __('WordPress token refresh could not be confirmed. Credential use, reconnection and disconnection are blocked until the full remote authorization has been invalidated.') }}</p>
+    <p class="muted" role="status">{{ __('WordPress token refresh could not be confirmed. Credential use, ordinary reconnection and disconnection are blocked until the full remote authorization has been invalidated. Changing the Target network route instead clears local authorization without proving remote revocation.') }}</p>
         @can('targets.disconnect', $target)
             <section class="panel panel-danger" aria-labelledby="refresh-recovery-title">
                 <h3 id="refresh-recovery-title">{{ __('Manual WordPress refresh recovery') }}</h3>

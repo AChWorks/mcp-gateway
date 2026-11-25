@@ -65,11 +65,9 @@ final readonly class ConnectionRelayTargetBinding
             if (! TargetConnectorRegistry::supports($locked->connector_type)) {
                 throw new TargetConnectorFailure(__('The Target connector is not available.'), 'connection_relay_id');
             }
-            // Only an unresolved connection transition is a generic blocker.
-            // Connected is previous verification, not an open transport.
-            if (in_array($locked->getAttribute('connection_state'), [
-                TargetConnectionState::Pending, TargetConnectionState::Reassigning,
-            ], true)) {
+            // Reassignment is a shared lifecycle transition. Ordinary pending
+            // connector work is handled by the adapter under this same lock.
+            if ($locked->getAttribute('connection_state') === TargetConnectionState::Reassigning) {
                 throw new TargetConnectorFailure(__('Settle the existing connection transition before changing its route.'), 'connection_relay_id');
             }
 

@@ -561,6 +561,34 @@ SH
         }
     }
 
+    public function test_stale_ssh_and_http_snapshots_cannot_use_an_old_enabled_relay(): void
+    {
+        $this->readyRelay();
+        $target = app(SshTargetRegistration::class)->register(
+            'relay-stale-target', 'Stale route', '1.1.1.1', 22,
+            'deploy', $this->publicKey(), 'password', 'fixture-secret', null,
+            connectionRelayId: 'iran-1',
+        );
+        $routes = app(ConnectionRelayRoutes::class);
+        $bindings = app(ConnectionRelayTargetBinding::class);
+        self::assertTrue($bindings->change($target, $bindings->revision($target), null));
+        self::assertNull($routes->sshRouteForTarget($target->fresh()));
+        self::assertNull($routes->httpRouteForTarget($target->fresh()));
+
+        try {
+            $routes->sshRouteForTarget($target);
+            self::fail('SSH used a retired binding.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('relay_unavailable', $exception->reason);
+        }
+        try {
+            $routes->httpRouteForTarget($target);
+            self::fail('HTTP used a retired binding.');
+        } catch (OutboundRequestException $exception) {
+            self::assertTrue($exception->preDispatch);
+        }
+    }
+
     public function test_stale_route_epoch_fails_before_a_reused_wordpress_request(): void
     {
         $relay = $this->readyRelay();

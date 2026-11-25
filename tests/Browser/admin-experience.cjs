@@ -1594,6 +1594,32 @@ async function connectionRelays(browser) {
             }
         } finally { await delegated.context.close(); }
 
+        for (const js of [true, false]) {
+            const wp = await create(browser, {javaScriptEnabled:js, width:390});
+            try {
+                await enter(wp.page, 'administrator');
+                const mode = js ? 'js' : 'native';
+                await wp.page.goto(base + '/__browser__/wordpress-route/' + mode);
+                const routeForm = wp.page.locator('form[action$="/relay-route"]');
+                assert.equal(await routeForm.count(), 1);
+                assert.equal(await wp.page.getByText(/does not revoke remote consent/).count(), 1);
+                await routeForm.locator('#target-edit-connection-relay').selectOption('ui-iran');
+                await routeForm.locator('[name="current_password"]').fill('isolated-browser-password');
+                if (js) await routeForm.locator('[data-admin-owner-approval-input]').check();
+                await Promise.all([
+                    wp.page.waitForNavigation({waitUntil:'domcontentloaded'}),
+                    routeForm.getByRole('button', {name:'Save connection route and require re-verification'}).click(),
+                ]);
+                assert.equal(await wp.page.locator('#target-edit-connection-relay').inputValue(), 'ui-iran');
+                assert.equal(await wp.page.getByText(/Target connection route changed/).count(), 1);
+                await wp.page.goto(base + '/admin/targets/ui-wp-route-' + mode);
+                assert.equal(await wp.page.getByRole('button', {name:'Authorize WordPress', exact:true}).count(), 1);
+                assert.equal(await wp.page.getByRole('button', {name:'Disconnect WordPress', exact:true}).count(), 0);
+                assert.deepEqual(wp.errors, []);
+                assert.deepEqual(wp.external, []);
+            } finally { await wp.context.close(); }
+        }
+
         const native = await create(browser, {javaScriptEnabled:false, width:390});
         try {
             await enter(native.page, 'owner');
