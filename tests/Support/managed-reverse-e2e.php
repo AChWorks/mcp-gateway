@@ -82,6 +82,10 @@ try {
             ->where('target_record_id', $target->getKey())->sole();
         $oldId = (string) $original->getKey();
         $oldPort = $original->listener_port;
+        $verified = $target->connection_state->value === 'connected';
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
+        $oldCipher = (string) $credential->encrypted_payload;
+        $oldBinding = SshTargetBinding::hash($target, $target->sshConfig);
         $next = app(SshManagedReverseEnrollmentService::class)->reissue($original);
         $enrollment = $next['enrollment'];
         if ($enrollment->id === $oldId || $enrollment->target_record_id !== $target->getKey()
@@ -93,9 +97,24 @@ try {
         if (! str_contains($command, (string) $enrollment->id)) {
             throw new RuntimeException('Generated reissue command omits rotated enrollment identity.');
         }
+        $target->refresh();
+        if (! hash_equals($oldCipher, (string) $credential->fresh()->encrypted_payload)
+            || SshTargetBinding::hash($target, $target->sshConfig) === $oldBinding) {
+            throw new RuntimeException('Reissue changed the login credential or failed to fence the old transport.');
+        }
+        if ($verified) {
+            if ($original->login_public_key !== '' || $enrollment->login_public_key !== ''
+                || str_contains($command, '--target-user')
+                || $target->connection_state->value !== 'connected') {
+                throw new RuntimeException('Verified login was unexpectedly converted back to bootstrap provisioning.');
+            }
+            file_put_contents($root.'/verified-login-cipher-sha', hash('sha256', $oldCipher), LOCK_EX);
+        }
         file_put_contents($root.'/one-command.sh', $command."\n", LOCK_EX);
         file_put_contents($root.'/enrollment-id', (string) $enrollment->id, LOCK_EX);
-        echo "PASS: uncertain claimed enrollment reissued with stable Target, new installer namespace and fenced old port.\n";
+        echo $verified
+            ? "PASS: verified enrollment reissued transport-only, preserving authorization and exact login ciphertext.\n"
+            : "PASS: uncertain claimed enrollment reissued with stable Target, new installer namespace and fenced old port.\n";
         exit(0);
     }
 
@@ -169,6 +188,12 @@ try {
     }
 
     if ($mode === 'verify') {
+        if (is_file($root.'/verified-login-cipher-sha') && ! hash_equals(
+            (string) file_get_contents($root.'/verified-login-cipher-sha'),
+            hash('sha256', (string) $credential->encrypted_payload),
+        )) {
+            throw new RuntimeException('Transport-only installer changed the existing Gateway credential.');
+        }
         $observed = app(SshTargetConnectionService::class)->test($target);
         if (! is_string($observed) || $target->fresh()->connection_state->value !== 'connected') {
             throw new RuntimeException('Real pinned Target SSH login was not recorded as connected.');
@@ -260,7 +285,7 @@ try {
     // Only fixed-mode diagnostic context is disclosed, never the token/key.
     fwrite(STDERR, sprintf(
         "FAIL: managed Reverse SSH E2E mode=%s, exception=%s, message=%s\n",
-        in_array($mode, ['enroll', 'readiness', 'readiness-stopped', 'verify', 'job', 'offline', 'revoke'], true) ? $mode : 'invalid',
+        in_array($mode, ['enroll', 'reissue', 'readiness', 'readiness-stopped', 'verify', 'job', 'offline', 'revoke'], true) ? $mode : 'invalid',
         $exception::class,
         $exception->getMessage(),
     ));
