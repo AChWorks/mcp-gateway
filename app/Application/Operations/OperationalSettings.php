@@ -104,11 +104,9 @@ final class OperationalSettings
     private function defaultValue(string $key): int|float
     {
         return match ($key) {
-            'wp_response_kib' => (int) config('bridge.http.max_response_bytes', 65536) / 1024,
-            'wp_readonly_response_kib' => (int) config('bridge.http.readonly_tool_max_response_bytes', 262144) / 1024,
+            'wp_response_kib', 'wp_readonly_response_kib', 'ssh_transfer_max_kib' => $this->defaultBytes($key) / 1024,
             'wp_connect_timeout_seconds' => max(1, (int) config('bridge.http.connect_timeout_seconds', 2)),
             'wp_request_timeout_seconds' => max(1, (int) config('bridge.http.request_timeout_seconds', 5)),
-            'ssh_transfer_max_kib' => min(67108864, max(1, (int) config('ssh.file_transfer.max_bytes', 8388608))) / 1024,
             'ssh_transfer_max_seconds' => min(3600, max(1, (int) config('ssh.file_transfer.max_seconds', 30))),
             'ssh_command_timeout_seconds' => 15,
             'ssh_command_max_kib' => 8,
@@ -127,6 +125,18 @@ final class OperationalSettings
             'batch_worker_max_children' => max(1, (int) config('batch.worker_max_children', 16)),
             'batch_worker_max_seconds' => max(1, (int) config('batch.worker_max_seconds', 50)),
             default => throw new RuntimeException('Operational setting has no default: '.$key),
+        };
+    }
+
+    // Keep source-config byte budgets as integers. KiB conversion belongs
+    // only to the form representation, never the runtime fallback.
+    private function defaultBytes(string $key): int
+    {
+        return match ($key) {
+            'wp_response_kib' => (int) config('bridge.http.max_response_bytes', 65536),
+            'wp_readonly_response_kib' => (int) config('bridge.http.readonly_tool_max_response_bytes', 262144),
+            'ssh_transfer_max_kib' => min(67108864, max(1, (int) config('ssh.file_transfer.max_bytes', 8388608))),
+            default => throw new RuntimeException('Operational setting has no byte default: '.$key),
         };
     }
 
@@ -150,7 +160,7 @@ final class OperationalSettings
 
         // Preserve the exact legacy config/.env byte fallback, including
         // non-KiB-aligned values and the existing hard decoded body bound.
-        return (int) ($this->defaultValue($key) * 1024);
+        return $this->defaultBytes($key);
     }
 
     /** @return array{connect:int,request:int} */
@@ -182,7 +192,7 @@ final class OperationalSettings
     public function sshTransferLimits(): array
     {
         $overrides = $this->overrides();
-        $configuredMax = (int) ($this->defaultValue('ssh_transfer_max_kib') * 1024);
+        $configuredMax = $this->defaultBytes('ssh_transfer_max_kib');
         $configuredSeconds = (int) $this->defaultValue('ssh_transfer_max_seconds');
 
         return [

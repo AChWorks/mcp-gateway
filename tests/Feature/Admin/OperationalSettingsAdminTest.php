@@ -324,6 +324,17 @@ final class OperationalSettingsAdminTest extends TestCase
         self::assertSame($settings->batchLimits()['global_active'], $defaults['batch_global_active']);
     }
 
+    public function test_runtime_configured_byte_defaults_never_round_trip_through_floats(): void
+    {
+        config()->set('bridge.http.max_response_bytes', PHP_INT_MAX);
+        config()->set('bridge.http.readonly_tool_max_response_bytes', PHP_INT_MAX - 1);
+        config()->set('ssh.file_transfer.max_bytes', PHP_INT_MAX);
+        $settings = new OperationalSettings;
+        self::assertSame(PHP_INT_MAX, $settings->responseLimitBytes(false));
+        self::assertSame(PHP_INT_MAX - 1, $settings->responseLimitBytes(true));
+        self::assertSame(67108864, $settings->sshTransferLimits()['max_bytes']);
+    }
+
     public function test_setting_delta_uses_current_key_catalog_without_version_specific_prefixes(): void
     {
         $this->actingAs($this->account('owner'));
