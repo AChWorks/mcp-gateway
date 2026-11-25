@@ -109,7 +109,8 @@ final readonly class SshVerificationState
             // Preserve the actionable diagnostic, but do not claim initial
             // onboarding was completed. A transport-only failure does not
             // invalidate an already verified login.
-            $pendingSetup = $locked->getAttribute('connection_state') === TargetConnectionState::Pending
+            $connectionState = $locked->getRawOriginal('connection_state');
+            $pendingSetup = $connectionState === TargetConnectionState::Pending->value
                 && SshManagedReverseEnrollment::query()
                     ->where('target_record_id', $locked->getKey())
                     ->where('state', '!=', 'revoked')
@@ -120,7 +121,7 @@ final readonly class SshVerificationState
             ], true);
             $locked->forceFill([
                 'connection_state' => $pendingSetup ? TargetConnectionState::Pending
-                    : ($transportFailure && $locked->connection_state === TargetConnectionState::Connected
+                    : ($transportFailure && $connectionState === TargetConnectionState::Connected->value
                         ? TargetConnectionState::Connected : TargetConnectionState::Error),
                 'last_error_code' => $reason,
                 'last_tested_at' => $now,

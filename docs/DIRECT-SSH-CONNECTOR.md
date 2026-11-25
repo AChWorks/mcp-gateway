@@ -71,7 +71,7 @@ previous successful verification.
 Sensitive route changes require scoped configuration permission, current-actor password confirmation,
 transaction and optimistic-revision gates. A path-only change clears current route verification but preserves the existing verified login and encrypted credentials. Synchronous SSH,
 SFTP, whole-file exchange and retained Jobs continue to use the same
-permission, pin, recheck and audit code. Retained Jobs include the shared transport revision and the separate endpoint/trust binding revision, so even a Reverse->Direct->Reverse round trip cannot reactivate a historical Job. Existing valid login envelopes are migrated once to a path-independent digest, with exact Target, endpoint, account and pinned host key checks. A genuine login identity change advances its own revision and re-seals credentials; changing only the path never decrypts or re-seals the login.
+permission, pin, recheck and audit code. Retained Jobs include the shared transport revision and the separate endpoint/trust binding revision, so even a Reverse->Direct->Reverse round trip cannot reactivate a historical Job. Existing valid login envelopes are migrated once to a path-independent digest, with exact Target, endpoint, account and pinned host key checks. A genuine login identity change advances its own revision and re-seals credentials; changing only the path never decrypts or re-seals the login. The one-time envelope migration preserves exact queued Batch bindings whose credential ciphertext is converted, without rewriting stale or already-dispatched journal evidence.
 
 The PHP application itself never obtains root access, changes SSHD,
 opens firewall rules or starts privileged systemd services. The **managed**

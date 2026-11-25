@@ -29,10 +29,11 @@ final class SshTargetIdentity
         $literal = $endpoint->configuredIp();
         $ip = $observed ?? $literal;
         $reverse = $target->usesReverseRoute();
+        $verified = $state === TargetConnectionState::Connected && $target->last_error_code === null;
         $ipStatus = $reverse && $seenAt !== null
-            ? ($state === TargetConnectionState::Connected ? 'reverse_route_verified' : 'reverse_route_stale')
+            ? ($verified ? 'reverse_route_verified' : 'reverse_route_stale')
             : ($observed !== null
-                ? ($state === TargetConnectionState::Connected && $target->last_error_code === null ? 'last_verified' : 'stale')
+                ? ($verified ? 'last_verified' : 'stale')
                 : ($literal !== null ? 'registered_unverified' : 'not_yet_verified'));
 
         $host = $ip ?? $endpoint->host;

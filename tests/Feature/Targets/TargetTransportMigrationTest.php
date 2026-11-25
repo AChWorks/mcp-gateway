@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Targets;
 
+use App\Application\Batch\TargetBatchBinding;
 use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
@@ -37,6 +38,7 @@ final class TargetTransportMigrationTest extends TestCase
         Schema::clearResolvedInstance('db.schema');
         $baseline = require database_path('migrations/0001_01_01_000001_create_gateway_v3_schema.php');
         $baseline->up();
+        (require database_path('migrations/0001_01_01_000002_create_target_batch_journal.php'))->up();
     }
 
     protected function tearDown(): void
@@ -89,6 +91,65 @@ final class TargetTransportMigrationTest extends TestCase
         self::assertSame('connected', $reverse->connection_state->value);
         self::assertSame($cipher, $credential->fresh()->encrypted_payload);
         self::assertNotSame($records[2]['digest'], SshTargetBinding::hash($reverse, $reverse->sshConfig));
+    }
+
+    public function test_upgrade_preserves_only_exact_queued_batch_bindings_and_never_rewrites_dispatched_evidence(): void
+    {
+        $record = $this->legacy('reverse', 2, null, 4);
+        $target = DB::table('targets')->where('id', $record['id'])->sole();
+        $cipher = DB::table('target_credentials')->where('id', $record['credential'])->value('encrypted_payload');
+        $binding = hash('sha256', implode("\0", [
+            $record['id'], $target->target_id, 'ssh_direct', '', '4',
+            $record['digest'], $record['credential'], 'ssh_auth', hash('sha256', $cipher),
+        ]));
+        $stale = hash('sha256', 'previous-authorization');
+        $result = Crypt::encryptString('confirmed remote outcome');
+        $items = [];
+        foreach ([
+            ['queued', $binding, null, null],
+            ['queued', $stale, null, null],
+            ['dispatching', $binding, (string) Str::uuid(), null],
+            ['completed', $binding, (string) Str::uuid(), $result],
+        ] as $index => [$state, $hash, $attempt, $evidence]) {
+            $batchId = (string) Str::ulid();
+            DB::table('target_batches')->insert([
+                'id' => $batchId, 'actor_user_id' => 1, 'source_channel' => 'web',
+                'client_identity_hash' => hash('sha256', 'fixture-client'),
+                'request_id' => (string) Str::uuid(),
+                'request_fingerprint' => hash('sha256', 'preview-'.$index),
+                'request_intent_hash' => hash('sha256', 'intent-'.$index),
+                'capability_key' => 'ssh_command', 'arguments_ciphertext' => Crypt::encryptString('{}'),
+                'execution_mode' => 'rolling', 'parallelism' => 1, 'target_count' => 1,
+            ]);
+            $id = (string) Str::ulid();
+            DB::table('target_batch_items')->insert([
+                'id' => $id, 'batch_id' => $batchId,
+                'target_record_id' => $record['id'], 'target_id_snapshot' => $target->target_id,
+                'connector_type_snapshot' => 'ssh_direct', 'target_binding_hash' => $hash,
+                'position' => 0, 'status' => $state, 'dispatch_attempt_id' => $attempt,
+                'result_ciphertext' => $evidence,
+            ]);
+            $items[] = $id;
+        }
+
+        $convert = require database_path('migrations/0001_01_01_000004_detach_ssh_login_from_transport.php');
+        $convert->up();
+        $converted = DB::table('target_credentials')->where('id', $record['credential'])->value('encrypted_payload');
+        self::assertNotSame($cipher, $converted);
+        $convertedHash = DB::table('target_batch_items')->where('id', $items[0])->value('target_binding_hash');
+        self::assertNotSame($binding, $convertedHash);
+        // Restart before the schema migration must not re-encrypt or rebind.
+        $convert->up();
+        self::assertSame($converted, DB::table('target_credentials')->where('id', $record['credential'])->value('encrypted_payload'));
+        (require database_path('migrations/0001_01_01_000005_move_reverse_to_target_transport.php'))->up();
+
+        $current = app(TargetBatchBinding::class)->hash(Target::query()->findOrFail($record['id']));
+        self::assertSame($current, $convertedHash);
+        self::assertSame($current, DB::table('target_batch_items')->where('id', $items[0])->value('target_binding_hash'));
+        self::assertSame($stale, DB::table('target_batch_items')->where('id', $items[1])->value('target_binding_hash'));
+        self::assertSame($binding, DB::table('target_batch_items')->where('id', $items[2])->value('target_binding_hash'));
+        self::assertSame($binding, DB::table('target_batch_items')->where('id', $items[3])->value('target_binding_hash'));
+        self::assertSame($result, DB::table('target_batch_items')->where('id', $items[3])->value('result_ciphertext'));
     }
 
     public function test_invalid_legacy_envelope_aborts_conversion_without_partial_credential_loss(): void

@@ -201,7 +201,11 @@ final class TargetInventory
                     // Same-IP accounts remain distinct and require explicit target_id.
                     ->orWhereHas('sshConfig', static function (Builder $ssh) use ($lookupHost, $lookupPort, $lookupUsername): void {
                         $ssh->where(static function (Builder $addresses) use ($lookupHost): void {
-                            $addresses->where('host', $lookupHost)->orWhere('observed_peer_ip', $lookupHost);
+                            $addresses->where('host', $lookupHost)->orWhere(static function (Builder $observed) use ($lookupHost): void {
+                                $observed->where('observed_peer_ip', $lookupHost)
+                                    ->where(static fn (Builder $current) => $current
+                                        ->where('targets.transport_revision', 0)->orWhereNotNull('targets.last_tested_at'));
+                            });
                         });
                         if ($lookupPort !== null) {
                             $ssh->where('port', $lookupPort);
