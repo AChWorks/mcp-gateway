@@ -286,6 +286,7 @@ final readonly class SshFileRuntime
         User $user, Target $target, string $path, string $contentBase64,
         bool $overwrite = false, ?int $expectedSize = null, ?int $expectedMtime = null,
         ?string $expectedTargetBinding = null, bool $preserveOriginalOwner = false,
+        ?string $expectedCredentialMaterial = null,
     ): array {
         $this->validatePath($path);
         if ($path === '/' || str_ends_with($path, '/')
@@ -567,7 +568,7 @@ final readonly class SshFileRuntime
                     'publish_method' => $overwrite ? 'posix_replace' : 'exclusive_hardlink',
                     'overwrote' => $overwrite,
                 ];
-            }, expectedTargetBinding: $expectedTargetBinding);
+            }, expectedTargetBinding: $expectedTargetBinding, expectedCredentialMaterial: $expectedCredentialMaterial);
     }
 
     /** @param Closure(SFTP,string,SshTargetConfig,Closure():void,string):array<string,mixed> $operation
@@ -576,6 +577,7 @@ final readonly class SshFileRuntime
     private function operate(
         User $user, Target $target, GatewayPermission $permission,
         Closure $operation, ?int $deadlineNs = null, ?string $expectedTargetBinding = null,
+        ?string $expectedCredentialMaterial = null,
     ): array {
         // This is an end-to-end budget, including admission and credential
         // lookups, not a fresh timeout for each SFTP packet or path operation.
@@ -587,7 +589,7 @@ final readonly class SshFileRuntime
         }
 
         return $this->admission->run((string) $target->getKey(), function () use (
-            $user, $target, $permission, $operation, $deadlineNs, $expectedTargetBinding,
+            $user, $target, $permission, $operation, $deadlineNs, $expectedTargetBinding, $expectedCredentialMaterial,
         ): array {
             $this->ensureFileDeadline($deadlineNs);
             $fresh = Target::query()->whereKey($target->getKey())->first();
@@ -621,8 +623,10 @@ final readonly class SshFileRuntime
             $configId = (string) $config->getKey();
             $credentialId = (string) $credential->getKey();
             $credentialDigest = hash('sha256', (string) $credential->encrypted_payload);
-            if ($expectedTargetBinding !== null
-                && ! hash_equals($expectedTargetBinding, $binding)) {
+            if (($expectedTargetBinding !== null
+                && ! hash_equals($expectedTargetBinding, $binding))
+                || ($expectedCredentialMaterial !== null
+                    && ! hash_equals($expectedCredentialMaterial, SshTargetVault::materialFingerprint($credential)))) {
                 throw new SshTargetConnectionException('target_changed');
             }
 

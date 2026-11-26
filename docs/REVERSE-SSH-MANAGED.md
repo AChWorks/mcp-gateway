@@ -153,7 +153,7 @@ point-in-time proof, not a heartbeat.
   revoke and Gateway feature state using a PHP-owned file lock. No PHP
   request gains OS root access. Disabling Gateway routing remains
   possible even if the host reader is damaged; the resulting application
-  route then fails closed and host reconciliation is still required.
+  route then fails closed and host reconciliation is still required. Global disable advances the transport revision of each currently bound managed Target before key publication, without changing its login credential or manual/Direct/Relay paths. Re-enable cannot revive prior admissions. An identical reconciled save does not advance either revision.
 - The Target installer refuses pre-planted non-root-owned or
   group/world-writable root state directories, malicious lock paths and
   unsafe control-key ownership/mode **before** token consumption. It
@@ -180,7 +180,7 @@ single-command installer, real local TLS and one-use HTTP enrollment against
 Laravel/SQLite, separately restricted control and Target SSHD identities,
 a persistent Target systemd service, real Gateway pinned login/Command/SFTP,
 a managed retained SSH Job with verified binding, a second one-command setup after an already claimed but unverified enrollment (new OS account/unit/state while the old files still exist), safe repeat invocation,
-explicit stopped-control-host health diagnosis, and systemd reconnection.
+explicit stopped-control-host health diagnosis, systemd reconnection, and real Owner disable/re-enable with control-key publication, stale operation/verification fences and fresh pinned Command/SFTP.
 It also uses a real existing `deploy.prod` Unix account in CI to cover
 the dotted-username contract and rejects unsafe root-state ownership and
 lock-file symlinks before claim. A separate disposable Chromium browser

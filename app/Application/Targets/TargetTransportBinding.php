@@ -8,6 +8,7 @@ use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Support\CorrelationId;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -83,7 +84,7 @@ final readonly class TargetTransportBinding
     }
 
     /**
-     * The Relay administrator holds the Relay and Target locks. Disabling
+     * The route administrator holds the provider and Target locks. Disabling
      * cannot be prevented by an exhausted epoch or an unresolved connector
      * transition; the disabled route itself prevents new network dispatch.
      */
@@ -91,8 +92,34 @@ final readonly class TargetTransportBinding
     {
         $epoch = (int) $locked->transport_revision;
         $this->applyBinding(
-            $locked, $locked->getAttribute('relay_record_id'), null, null, min(4294967295, $epoch + 1), 'target-relay-disabled',
+            $locked, $locked->getAttribute('relay_record_id'), $locked->reverse_listener_port,
+            $locked->reverse_tunnel_identity, min(4294967295, $epoch + 1),
+            $locked->usesReverseRoute() ? 'target-reverse-disabled' : 'target-relay-disabled',
         );
+    }
+
+    /**
+     * Called under the managed gateway row lock, before committing the new
+     * control intent. Manual Reverse and Direct/Relay Targets are unaffected.
+     */
+    public function changeManagedReverseAvailability(bool $enabled): void
+    {
+        $targets = Target::query()->whereExists(static function (Builder $query): void {
+            $query->selectRaw('1')->from((new SshManagedReverseEnrollment)->getTable())
+                ->whereColumn('target_record_id', 'targets.id')
+                ->where('state', '!=', 'revoked')
+                ->whereColumn('listener_port', 'targets.reverse_listener_port')
+                ->whereColumn('tunnel_identity', 'targets.reverse_tunnel_identity');
+        })->orderBy('id')->lockForUpdate()->get();
+        foreach ($targets as $target) {
+            if ($enabled) {
+                if ((int) $target->transport_revision >= 4294967295) {
+                    throw new TargetConnectorFailure(__('The Target transport revision is exhausted.'), 'enabled');
+                }
+            } else {
+                $this->disableBoundTarget($target);
+            }
+        }
     }
 
     /** Caller owns the Target lock and has validated/allocated the listener. */

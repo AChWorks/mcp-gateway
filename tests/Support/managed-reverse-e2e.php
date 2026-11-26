@@ -7,14 +7,19 @@
  */
 declare(strict_types=1);
 
+use App\Application\Batch\TargetBatchBinding;
 use App\Application\Mcp\SshJobMcpToolHandlers;
+use App\Application\Targets\SshCommandRuntime;
+use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshManagedReverseEnrollmentService;
 use App\Application\Targets\SshManagedReverseHostReadiness;
 use App\Application\Targets\SshManagedReverseInstallCommand;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetConnectionService;
+use App\Application\Targets\SshVerificationState;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
+use App\Http\Controllers\Admin\SshManagedReverseController;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
@@ -25,6 +30,8 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\SshDirect\SshVerifiedTransport;
 use App\Models\User;
 use Illuminate\Contracts\Console\Kernel;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use phpseclib4\Net\SFTP;
@@ -187,6 +194,104 @@ try {
         exit(0);
     }
 
+    if ($mode === 'authority-aba') {
+        $job = DB::table('ssh_command_jobs')->where('target_record_id', $target->getKey())
+            ->where('status', 'completed')->sole();
+        $owner = User::query()->findOrFail($job->user_id);
+        Auth::guard()->setUser($owner);
+        $oldBinding = SshTargetBinding::hash($target, $config);
+        $oldBatch = app(TargetBatchBinding::class)->hash($target);
+        $oldEpoch = $target->transport_revision;
+        $oldCipher = (string) $credential->encrypted_payload;
+        $keyPath = $manifest['authorized_keys_file'];
+        $keyPolicy = file_get_contents($keyPath);
+        if ($oldBatch === null || ! is_string($keyPolicy) || $keyPolicy === '') {
+            throw new RuntimeException('Expected an admitted Batch identity and installed control key.');
+        }
+        $verification = app(SshVerificationState::class);
+        $attempt = $verification->begin($target, $config, $credential);
+        $save = static function (bool $enabled): SshManagedReverseGateway {
+            $gateway = SshManagedReverseGateway::query()->findOrFail(1);
+            $request = Request::create('/admin/settings/reverse-ssh', 'PUT', [
+                'revision' => $gateway->revision,
+                'enabled' => $enabled ? '1' : '0',
+                'control_host' => $gateway->control_host,
+                'control_port' => $gateway->control_port,
+                'control_user' => $gateway->control_user,
+                'control_host_key' => $gateway->control_host_key,
+                'current_password' => 'StrongPassword!234',
+            ]);
+            $request->setUserResolver(static fn () => Auth::user());
+            $request->setLaravelSession(app('session.store'));
+            app()->instance('request', $request);
+            app()->call([app(SshManagedReverseController::class), 'save'], ['request' => $request]);
+            $current = $gateway->fresh();
+            if ($current->enabled !== $enabled || $current->publication_pending) {
+                throw new RuntimeException('Owner save did not reconcile actual control-key policy.');
+            }
+
+            return $current;
+        };
+        $deny = static function (callable $operation, string $reason): void {
+            try {
+                $operation();
+                throw new RuntimeException('Stale or disabled authority unexpectedly admitted a remote operation.');
+            } catch (SshTargetConnectionException $e) {
+                if ($e->reason !== $reason) {
+                    throw $e;
+                }
+            }
+        };
+        $commands = app(SshCommandRuntime::class);
+        $files = app(SshFileRuntime::class);
+        $disabled = $save(false);
+        if (file_get_contents($keyPath) !== '' || $target->fresh()->transport_revision !== $oldEpoch + 1) {
+            throw new RuntimeException('Disable did not publish empty control policy and advance route epoch.');
+        }
+        $deny(fn () => $commands->run($owner, $target, 'true'), 'reverse_route_not_approved');
+        $enabled = $save(true);
+        $fresh = $target->fresh();
+        $binding = SshTargetBinding::hash($fresh, $config);
+        $newBatch = app(TargetBatchBinding::class)->hash($fresh);
+        if ($enabled->revision !== $disabled->revision + 1
+            || file_get_contents($keyPath) !== $keyPolicy
+            || $fresh->transport_revision !== $oldEpoch + 1
+            || $fresh->connection_state->value !== 'connected'
+            || $fresh->last_tested_at !== null
+            || $binding === $oldBinding || $newBatch === null || $newBatch === $oldBatch
+            || ! hash_equals($oldCipher, (string) $credential->fresh()->encrypted_payload)) {
+            throw new RuntimeException('Re-enable revived old authority or changed independent login identity.');
+        }
+        $noOp = $save(true);
+        if ($noOp->revision !== $enabled->revision || $target->fresh()->transport_revision !== $oldEpoch + 1) {
+            throw new RuntimeException('Identical reconciled save must not advance revisions.');
+        }
+        $deny(fn () => $verification->succeeded($target, $config, $credential, $attempt, '127.0.0.1'), 'target_changed');
+        $deny(fn () => $commands->run($owner, $target, 'true', expectedTargetBinding: $oldBinding), 'target_changed');
+        $path = '/home/deploy.prod/.mcp-reverse-aba-'.bin2hex(random_bytes(6));
+        $deny(fn () => $files->write($owner, $target, $path, base64_encode('stale'), expectedTargetBinding: $oldBinding), 'target_changed');
+        $status = app(SshJobMcpToolHandlers::class)->status(
+            $owner, $target->target_id, hash('sha256', 'managed-reverse-e2e-job'), $job->id,
+        );
+        $retained = DB::table('ssh_command_jobs')->where('id', $job->id)->sole();
+        if (($status['error']['code'] ?? null) !== 'target_not_found'
+            || $retained->target_binding_hash !== $oldBinding || $retained->status !== 'completed') {
+            throw new RuntimeException('Old Job was revived or its historical evidence was rewritten.');
+        }
+        app(SshTargetConnectionService::class)->test($fresh);
+        $fresh = $target->fresh();
+        $written = $files->write($owner, $fresh, $path, base64_encode('managed-fresh-authority'), expectedTargetBinding: $binding);
+        if (($written['status'] ?? null) !== 'completed') {
+            throw new RuntimeException('Fresh SFTP publication failed after re-enable.');
+        }
+        $result = $commands->run($owner, $fresh, 'cat -- '.escapeshellarg($path).' && rm -- '.escapeshellarg($path), expectedTargetBinding: $binding);
+        if ($result['exit_code'] !== 0 || $result['stdout'] !== 'managed-fresh-authority') {
+            throw new RuntimeException('Fresh pinned command did not observe the exact new SFTP bytes.');
+        }
+        echo "PASS: real Owner controller disable/re-enable, key publication, stale command/SFTP/Job/Batch/Verify fences and fresh pinned work.\n";
+        exit(0);
+    }
+
     if ($mode === 'verify') {
         if (is_file($root.'/verified-login-cipher-sha') && ! hash_equals(
             (string) file_get_contents($root.'/verified-login-cipher-sha'),
@@ -285,7 +390,7 @@ try {
     // Only fixed-mode diagnostic context is disclosed, never the token/key.
     fwrite(STDERR, sprintf(
         "FAIL: managed Reverse SSH E2E mode=%s, exception=%s, message=%s\n",
-        in_array($mode, ['enroll', 'reissue', 'readiness', 'readiness-stopped', 'verify', 'job', 'offline', 'revoke'], true) ? $mode : 'invalid',
+        in_array($mode, ['enroll', 'reissue', 'readiness', 'readiness-stopped', 'verify', 'job', 'authority-aba', 'offline', 'revoke'], true) ? $mode : 'invalid',
         $exception::class,
         $exception->getMessage(),
     ));

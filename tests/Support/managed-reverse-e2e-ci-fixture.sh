@@ -332,6 +332,7 @@ for i in {1..30}; do
 done
 [[ "$job_runtime_ready" == true ]] || die "Dedicated Target login systemd --user manager did not start."
 php tests/Support/managed-reverse-e2e.php job
+php tests/Support/managed-reverse-e2e.php authority-aba
 echo "PASS: local pinned host readiness, degraded stopped SSHD state, reconnection and real managed retained Job."
 # A second paste must not duplicate the Target OS user/service/key.
 sudo env CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/one-command.sh" \

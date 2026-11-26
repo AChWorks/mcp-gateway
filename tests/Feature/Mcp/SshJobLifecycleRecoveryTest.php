@@ -7,13 +7,16 @@ use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshJobCoordinator;
 use App\Application\Targets\SshTargetConnectionException;
+use App\Application\Targets\SshTargetReconfiguration;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
+use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -732,6 +735,81 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         )['error']['code']);
         self::assertSame(1, DB::table('ssh_command_jobs')->count(), 'An old Job must not be relaunched or erased.');
         self::assertSame('launch_unknown', DB::table('ssh_command_jobs')->where('id', $id)->value('status'));
+    }
+
+    public function test_same_endpoint_credential_rotation_fences_new_job_stages_without_changing_peer_identity(): void
+    {
+        [$user, $target] = $this->fixture();
+        $config = SshTargetConfig::query()->sole();
+        $oldCredential = TargetCredential::query()->sole();
+        $oldMaterial = SshTargetVault::materialFingerprint($oldCredential);
+        $binding = SshTargetBinding::hash($target, $config);
+        $service = app(SshTargetReconfiguration::class);
+        $input = [
+            'configuration_revision' => $service->revision($target),
+            'ssh_host' => $config->host, 'ssh_port' => $config->port,
+            'ssh_username' => $config->username, 'ssh_host_key' => $config->pinned_host_key,
+            'ssh_auth_method' => 'password', 'ssh_trust_confirmed' => 'yes', 'ssh_password' => 'new-secret',
+        ];
+        self::assertTrue($service->update($target, $input));
+        // Isolated runtime test: actual fresh authentication is covered by
+        // the native fixture; no network is permitted in this test.
+        $target->fresh()->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        self::assertSame($binding, SshTargetBinding::hash($target->fresh(), $config->fresh()));
+        $newMaterial = SshTargetVault::materialFingerprint($oldCredential->fresh());
+        self::assertNotSame($oldMaterial, $newMaterial);
+
+        $policy = new class implements SshDialAddressPolicy
+        {
+            public int $attempts = 0;
+
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                $this->attempts++;
+                throw new SshTargetConnectionException('egress_denied');
+            }
+        };
+        $this->app->instance(SshDialAddressPolicy::class, $policy);
+        $commands = app(SshCommandRuntime::class);
+        $files = app(SshFileRuntime::class);
+        $stream = fopen('php://temp', 'w+b');
+        self::assertIsResource($stream);
+        fwrite($stream, 'fixture');
+        rewind($stream);
+        try {
+            foreach ([
+                fn () => $commands->run($user, $target, 'true', 5, $binding, expectedCredentialMaterial: $oldMaterial),
+                fn () => $files->write($user, $target, '/tmp/fixture', base64_encode('fixture'), expectedTargetBinding: $binding, expectedCredentialMaterial: $oldMaterial),
+                fn () => $files->uploadFromStream($user, $target, '/tmp/fixture', $stream, 7, hash('sha256', 'fixture'), 65536, 30, '/tmp', expectedTargetBinding: $binding, expectedCredentialMaterial: $oldMaterial),
+            ] as $operation) {
+                try {
+                    $operation();
+                    self::fail('A new phase must reject its stale login material before dialing.');
+                } catch (SshTargetConnectionException $exception) {
+                    self::assertSame('target_changed', $exception->reason);
+                }
+            }
+            self::assertSame(0, $policy->attempts);
+            try {
+                $commands->run($user, $target, 'true', 5, $binding, expectedCredentialMaterial: $newMaterial);
+                self::fail('Fixture policy denies every real dial.');
+            } catch (SshTargetConnectionException $exception) {
+                self::assertSame('egress_denied', $exception->reason);
+            }
+            self::assertSame(1, $policy->attempts);
+        } finally {
+            fclose($stream);
+        }
+
+        // A genuine endpoint A -> B -> A must still fence its old identity.
+        foreach (['other.example.test', $config->host] as $host) {
+            self::assertTrue($service->update($target->fresh(), [
+                ...$input, 'configuration_revision' => $service->revision($target->fresh()),
+                'ssh_host' => $host, 'ssh_password' => null,
+            ]));
+        }
+        self::assertSame(2, $config->fresh()->binding_revision);
+        self::assertNotSame($binding, SshTargetBinding::hash($target->fresh(), $config->fresh()));
     }
 
     public function test_rebound_target_cannot_receive_later_job_phase_commands_or_sftp(): void

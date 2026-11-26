@@ -3,13 +3,19 @@
 namespace Tests\Feature\Admin;
 
 use App\Application\Access\UserAccessManager;
+use App\Application\Batch\TargetBatchBinding;
 use App\Application\Targets\SshManagedReverseAuthorizedKeys;
 use App\Application\Targets\SshManagedReverseEnrollmentService;
 use App\Application\Targets\SshManagedReverseHostReadiness;
+use App\Application\Targets\SshTargetConnectionException;
+use App\Application\Targets\SshTargetRegistration;
+use App\Application\Targets\SshVerificationState;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
+use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
+use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -608,6 +614,106 @@ final class SshManagedReverseAdminTest extends TestCase
                     ->assertDontSee('Owner Repair could not complete key publication.');
             }
         }
+    }
+
+    public function test_global_disable_and_reenable_fence_old_bindings_without_touching_other_paths_or_login(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $url = '/admin/settings/reverse-ssh';
+        $this->put($url, $this->settings(true))->assertSessionHasNoErrors();
+        $this->fixtureLocalReady();
+        $started = app(SshManagedReverseEnrollmentService::class)->begin(
+            'aba-managed', 'Managed', '8.8.8.8', 2222, 'deploy', $this->publicKey(52),
+        );
+        app(SshManagedReverseEnrollmentService::class)->claim(
+            $started['enrollment']->id, $started['token'], $this->publicKey(61),
+        );
+        $target = Target::query()->where('target_id', 'aba-managed')->sole();
+        $config = $target->sshConfig;
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
+        $verification = app(SshVerificationState::class);
+        $initial = $verification->begin($target, $config, $credential);
+        $verification->succeeded($target, $config, $credential, $initial, '127.0.0.1');
+        $target->refresh();
+        $config->refresh();
+        $oldAttempt = $verification->begin($target, $config, $credential);
+        $binding = SshTargetBinding::hash($target, $config);
+        $batch = app(TargetBatchBinding::class);
+        $batchBinding = $batch->hash($target);
+        self::assertNotNull($batchBinding);
+        $epoch = $target->transport_revision;
+        $keyPolicy = file_get_contents($this->keyFile);
+        self::assertStringContainsString($this->publicKey(61), $keyPolicy);
+
+        config()->set('ssh.reverse_approved_routes', json_encode([
+            'manual-unaffected' => ['port' => 62441, 'tunnel_identity' => 'manual-fixture'],
+        ], JSON_THROW_ON_ERROR));
+        $registration = app(SshTargetRegistration::class);
+        $manual = $registration->register('manual-unaffected', 'Manual', '1.1.1.1', 22,
+            'deploy', $this->publicKey(52), 'password', 'fixture', null,
+            routeMode: 'reverse', reversePort: 62441, tunnelIdentity: 'manual-fixture');
+        $direct = $registration->register('direct-unaffected', 'Direct', '8.8.4.4', 2222,
+            'deploy', $this->publicKey(52), 'password', 'fixture', null);
+        $otherBindings = [SshTargetBinding::hash($manual, $manual->sshConfig), SshTargetBinding::hash($direct, $direct->sshConfig)];
+
+        $this->put($url, [...$this->settings(true), 'revision' => 1])->assertSessionHasNoErrors();
+        self::assertSame(1, SshManagedReverseGateway::query()->sole()->revision);
+        self::assertSame($epoch, $target->fresh()->transport_revision);
+        self::assertSame($keyPolicy, file_get_contents($this->keyFile));
+
+        // Fail the actual key publication AFTER the disable intent commits.
+        app()->instance(SshManagedReverseAuthorizedKeys::class, new class extends SshManagedReverseAuthorizedKeys
+        {
+            protected function publish(string $contents): void
+            {
+                throw new RuntimeException('Disposable disable publication failure');
+            }
+        });
+        $this->put($url, [...$this->settings(false), 'revision' => 1])->assertSessionHasErrors('site');
+        self::assertFalse(SshManagedReverseGateway::active());
+        self::assertTrue(SshManagedReverseGateway::query()->sole()->publication_pending);
+        self::assertSame($epoch + 1, $target->fresh()->transport_revision);
+        self::assertSame($keyPolicy, file_get_contents($this->keyFile));
+        $policy = app(SshReverseRoutePolicy::class);
+        try {
+            $policy->forTarget($target->fresh());
+            self::fail('A stale published key cannot authorize a disabled managed route.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('reverse_route_not_approved', $exception->reason);
+        }
+
+        app()->forgetInstance(SshManagedReverseAuthorizedKeys::class);
+        $this->post($url.'/repair', ['current_password' => 'StrongPassword!234'])->assertSessionHasNoErrors();
+        self::assertSame('', file_get_contents($this->keyFile));
+        $this->put($url, [...$this->settings(false), 'revision' => 2])->assertSessionHasNoErrors();
+        self::assertSame(2, SshManagedReverseGateway::query()->sole()->revision);
+        self::assertSame($epoch + 1, $target->fresh()->transport_revision);
+
+        $this->put($url, [...$this->settings(true), 'revision' => 2])->assertSessionHasNoErrors();
+        $fresh = $target->fresh();
+        self::assertTrue(SshManagedReverseGateway::active());
+        self::assertNotNull($policy->forTarget($fresh));
+        self::assertSame($keyPolicy, file_get_contents($this->keyFile));
+        self::assertSame($epoch + 1, $fresh->transport_revision);
+        self::assertSame($target->reverse_listener_port, $fresh->reverse_listener_port);
+        self::assertSame($target->reverse_tunnel_identity, $fresh->reverse_tunnel_identity);
+        self::assertSame('connected', $fresh->connection_state->value);
+        self::assertSame($credential->encrypted_payload, $credential->fresh()->encrypted_payload);
+        self::assertNotSame($binding, SshTargetBinding::hash($fresh, $config->fresh()));
+        self::assertNotNull($batch->hash($fresh));
+        self::assertNotSame($batchBinding, $batch->hash($fresh));
+        self::assertNull($fresh->last_tested_at);
+        self::assertSame($otherBindings, [SshTargetBinding::hash($manual->fresh(), $manual->sshConfig), SshTargetBinding::hash($direct->fresh(), $direct->sshConfig)]);
+
+        $verification->failed($target, $config, $credential, $oldAttempt, 'tcp_unreachable');
+        try {
+            $verification->succeeded($target, $config, $credential, $oldAttempt, '127.0.0.1');
+            self::fail('An old verification cannot revive after disable and reenable.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('target_changed', $exception->reason);
+        }
+        self::assertNull($target->fresh()->last_tested_at);
+        self::assertNull($target->fresh()->last_error_code);
     }
 
     public function test_global_publication_receipt_requires_owner_reconciliation(): void

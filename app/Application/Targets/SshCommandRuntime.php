@@ -41,6 +41,7 @@ final readonly class SshCommandRuntime
         User $user, Target $target, string $command, int $timeoutSeconds = 10,
         ?string $expectedTargetBinding = null,
         ?Closure $beforeRemoteEffect = null,
+        ?string $expectedCredentialMaterial = null,
     ): array {
         if ($target->connector_type !== 'ssh_direct') {
             throw new SshTargetConnectionException('unsupported_connector');
@@ -62,7 +63,7 @@ final readonly class SshCommandRuntime
             throw new SshTargetConnectionException('timeout_unsupported');
         }
 
-        return $this->admission->run((string) $target->getKey(), function () use ($user, $target, $command, $timeoutSeconds, $expectedTargetBinding, $beforeRemoteEffect): array {
+        return $this->admission->run((string) $target->getKey(), function () use ($user, $target, $command, $timeoutSeconds, $expectedTargetBinding, $beforeRemoteEffect, $expectedCredentialMaterial): array {
             $fresh = Target::query()->whereKey($target->getKey())->first();
             $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
             if ($fresh instanceof Target && $fresh->operations_paused) {
@@ -78,8 +79,10 @@ final readonly class SshCommandRuntime
                 || ! $config instanceof SshTargetConfig || ! $credential instanceof TargetCredential) {
                 throw new SshTargetConnectionException('credential_unavailable');
             }
-            if ($expectedTargetBinding !== null
-                && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($fresh, $config))) {
+            if (($expectedTargetBinding !== null
+                && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($fresh, $config)))
+                || ($expectedCredentialMaterial !== null
+                    && ! hash_equals($expectedCredentialMaterial, SshTargetVault::materialFingerprint($credential)))) {
                 throw new SshTargetConnectionException('target_changed');
             }
             try {

@@ -126,13 +126,16 @@ final readonly class SshTargetReconfiguration
             $loginChanged = $identityChanged || $replacement !== null;
             $bindingChanged = $loginChanged || $routeChanged;
             $currentBindingRevision = (int) ($config->binding_revision ?? 0);
-            if ($loginChanged && $currentBindingRevision >= 4294967295) {
+            if ($identityChanged && $currentBindingRevision >= 4294967295) {
                 throw new TargetConnectorFailure(
                     __('The SSH binding revision is exhausted; do not reuse an older route or historical Job identity.'),
                     'configuration_revision',
                 );
             }
-            $nextBindingRevision = $currentBindingRevision + ($loginChanged ? 1 : 0);
+            // This epoch fences endpoint/trust ABA, not credential material.
+            // Replacement on the same endpoint is fenced independently by
+            // the exact credential record and material at dispatch.
+            $nextBindingRevision = $currentBindingRevision + ($identityChanged ? 1 : 0);
 
             if (! $bindingChanged) {
                 return false;

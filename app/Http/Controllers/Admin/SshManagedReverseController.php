@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Admin;
 use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Targets\SshManagedReverseAuthorizedKeys;
 use App\Application\Targets\SshManagedReverseHostReadiness;
+use App\Application\Targets\TargetConnectorFailure;
+use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Access\GatewayPermission;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
@@ -54,7 +56,7 @@ final class SshManagedReverseController extends Controller
 
     public function save(
         Request $request, AdministratorPasswordConfirmation $password,
-        SshManagedReverseAuthorizedKeys $keys,
+        SshManagedReverseAuthorizedKeys $keys, TargetTransportBinding $bindings,
     ): RedirectResponse {
         Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate([
@@ -92,8 +94,8 @@ final class SshManagedReverseController extends Controller
                 ]);
             }
         }
-        $saveIntent = static function () use ($fields, $endpoint, $pin, $enabled): void {
-            DB::transaction(function () use ($fields, $endpoint, $pin, $enabled): void {
+        $saveIntent = static function () use ($fields, $endpoint, $pin, $enabled, $bindings, $keys): bool {
+            return DB::transaction(function () use ($fields, $endpoint, $pin, $enabled, $bindings, $keys): bool {
                 $current = SshManagedReverseGateway::query()->whereKey(1)->lockForUpdate()->first();
                 $revision = $current instanceof SshManagedReverseGateway ? (int) $current->revision : 0;
                 if ($revision !== (int) $fields['revision']) {
@@ -101,15 +103,26 @@ final class SshManagedReverseController extends Controller
                         'revision' => __('Reverse SSH settings changed in another session. Reload before applying changes.'),
                     ]);
                 }
-                if ($current && SshManagedReverseEnrollment::query()
-                    ->where('state', '!=', 'revoked')->exists()
-                    && ($current->control_host !== $endpoint->host
-                        || $current->control_port !== $endpoint->port
-                        || $current->control_user !== $endpoint->username
-                        || $current->control_host_key !== $pin->canonicalLine())) {
+                $identityChanged = $current && ($current->control_host !== $endpoint->host
+                    || $current->control_port !== $endpoint->port
+                    || $current->control_user !== $endpoint->username
+                    || $current->control_host_key !== $pin->canonicalLine());
+                if ($identityChanged && SshManagedReverseEnrollment::query()
+                    ->where('state', '!=', 'revoked')->exists()) {
                     throw ValidationException::withMessages([
                         'control_host' => __('Revoke or safely migrate active enrollments before rotating the control endpoint/identity.'),
                     ]);
+                }
+                if ($current && ! $identityChanged && (bool) $current->enabled === $enabled && ! $current->publication_pending
+                    && (! $keys->canPublish() || $keys->isReconciled())) {
+                    return false;
+                }
+                if ($current && (bool) $current->enabled !== $enabled) {
+                    try {
+                        $bindings->changeManagedReverseAvailability($enabled);
+                    } catch (TargetConnectorFailure $exception) {
+                        throw ValidationException::withMessages([$exception->field ?? 'enabled' => $exception->getMessage()]);
+                    }
                 }
                 SshManagedReverseGateway::query()->updateOrCreate(['id' => 1], [
                     'enabled' => $enabled,
@@ -120,6 +133,8 @@ final class SshManagedReverseController extends Controller
                     'revision' => $revision + 1,
                     'publication_pending' => true,
                 ]);
+
+                return true;
             }, 3);
         };
 
@@ -129,8 +144,9 @@ final class SshManagedReverseController extends Controller
             // immediately if the external publication later fails.
             try {
                 $keys->withPolicyLock(static function () use ($saveIntent, $keys): void {
-                    $saveIntent();
-                    $keys->sync();
+                    if ($saveIntent()) {
+                        $keys->sync();
+                    }
                 });
             } catch (\RuntimeException) {
                 return redirect()->route('admin.reverse-ssh.index')
