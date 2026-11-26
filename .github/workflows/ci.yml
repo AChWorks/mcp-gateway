@@ -189,8 +189,10 @@ jobs:
 
       - name: Install isolated OpenSSH fixture dependencies
         run: |
-          sudo apt-get update -qq
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server
+          if ! command -v sshd >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server
+          fi
 
       - name: Verify real restricted OpenSSH control host
         run: bash tests/Support/managed-reverse-host-ci-fixture.sh

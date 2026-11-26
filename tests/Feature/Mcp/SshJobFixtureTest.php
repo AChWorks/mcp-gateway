@@ -340,8 +340,8 @@ SH;
             'reverse-job-fixture', 'Reverse SSH Job fixture', 'fixture.example.test',
             (int) getenv('SSH_FIXTURE_PORT_MODERN'), (string) getenv('SSH_FIXTURE_USER'),
             trim((string) file_get_contents((string) getenv('SSH_FIXTURE_ED25519_HOST_PUB'))),
-            'private_key', (string) file_get_contents((string) getenv('SSH_FIXTURE_RSA_LOGIN_KEY')),
-            (string) getenv('SSH_FIXTURE_KEY_PASSPHRASE'),
+            'private_key', (string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_PRIVATE_KEY')),
+            getenv('SSH_JOB_FIXTURE_PASSPHRASE') ?: null,
             null, 'reverse', $forwardPort, 'job-test-forward',
         );
         // Use actual transport login, not merely a fake Connected flag.
@@ -383,7 +383,12 @@ SH;
             'ssh_route_mode' => 'direct',
         ]);
         $target->refresh();
-        self::assertSame(TargetConnectionState::Disconnected, $target->connection_state);
+        // Route-only changes preserve the credential/connection lifecycle
+        // but invalidate the previous path's verification observation.
+        self::assertSame(TargetConnectionState::Connected, $target->connection_state);
+        self::assertNull($target->last_tested_at);
+        self::assertSame('direct', $target->transportKind());
+        self::assertNotSame($expectedBinding, SshTargetBinding::hash($target, $config->fresh()));
         self::assertSame($id, $tools->list($owner, $target->target_id, $client, cursor: $cursor, limit: 1)['result']['jobs'][0]['job_id']);
         self::assertSame($id, $tools->start($owner, $target->target_id, $client, $requestId, 'printf reverse_retained_job_ok', 60)['result']['job_id']);
         app(SshTargetConnectionService::class)->test($target);

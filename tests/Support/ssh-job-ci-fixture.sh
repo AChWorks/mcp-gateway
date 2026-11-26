@@ -10,7 +10,9 @@ set -Eeuo pipefail
 [[ -f "${SSH_FIXTURE_RSA_LOGIN_KEY:-/nonexistent}" ]] || { echo 'Missing existing fixture key.' >&2; exit 2; }
 
 user="$SSH_FIXTURE_USER"
+job_login_key=""
 cleanup() {
+  if [[ -n "$job_login_key" ]]; then rm -f -- "$job_login_key"; fi
   sudo loginctl disable-linger "$user" >/dev/null 2>&1 || true
   sudo loginctl terminate-user "$user" >/dev/null 2>&1 || true
 }
@@ -41,6 +43,20 @@ sudo runuser -u "$user" -- env \
 
 php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
   --filter=test_job_longer_than_http_budget_has_bounded_output_durable_exit_and_verified_cancel
+
+# The first test deliberately uses the encrypted OpenSSH login key. Remaining
+# tests exercise lifecycle/authority rather than passphrase parsing. Repeated
+# pure-PHP bcrypt key derivation dominates their duration (measured ~9s/load
+# on Dev versus ~0.002s for the same key without a passphrase). Keep the
+# authorized key unchanged, using only a private temporary copy on this
+# disposable runner. The ordinary SSH fixture also covers encrypted login.
+job_login_key="$(mktemp "${TMPDIR:-/tmp}/mcp-job-fixture-key.XXXXXXXX")"
+install -m 600 "$SSH_FIXTURE_RSA_LOGIN_KEY" "$job_login_key"
+ssh-keygen -q -p -P "$SSH_FIXTURE_KEY_PASSPHRASE" -N '' -f "$job_login_key" >/dev/null
+[[ "$(ssh-keygen -y -f "$job_login_key" | awk '{print $1, $2}')" == "$(awk '{print $1, $2}' "$SSH_FIXTURE_RSA_LOGIN_KEY.pub")" ]] ||
+  { echo 'Job fixture login identity changed unexpectedly.' >&2; exit 1; }
+export SSH_JOB_FIXTURE_PRIVATE_KEY="$job_login_key"
+export SSH_JOB_FIXTURE_PASSPHRASE=""
 
 # Regression: no systemd-wide file-size cap may prevent a legitimate >1 MiB
 # child write; oversized stdout/stderr alone must stay bounded and harmless.
