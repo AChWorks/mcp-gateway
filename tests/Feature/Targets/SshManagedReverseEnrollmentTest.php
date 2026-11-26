@@ -10,6 +10,7 @@ use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\SshTargetReconfiguration;
 use App\Application\Targets\TargetConnectorFailure;
+use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
@@ -310,7 +311,7 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         $this->gateway();
         file_put_contents($this->keyFile, '');
         $started = $this->begin();
-        $writer = new class extends SshManagedReverseAuthorizedKeys
+        $writer = new class(app(TargetTransportBinding::class)) extends SshManagedReverseAuthorizedKeys
         {
             public bool $fail = true;
 
@@ -357,7 +358,7 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         $this->gateway();
         file_put_contents($this->keyFile, '');
         $started = $this->begin();
-        $writer = new class extends SshManagedReverseAuthorizedKeys
+        $writer = new class(app(TargetTransportBinding::class)) extends SshManagedReverseAuthorizedKeys
         {
             public bool $interrupt = true;
 
@@ -395,7 +396,7 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         app(SshManagedReverseEnrollmentService::class)->claim(
             $started['enrollment']->id, $started['token'], $this->publicKey(61),
         );
-        $writer = new class extends SshManagedReverseAuthorizedKeys
+        $writer = new class(app(TargetTransportBinding::class)) extends SshManagedReverseAuthorizedKeys
         {
             public bool $fail = true;
 
@@ -420,7 +421,7 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         self::assertSame('revoked', $started['enrollment']->fresh()->state);
         self::assertTrue($started['enrollment']->fresh()->publication_pending);
         self::assertSame(1, TargetCredential::query()->where('target_record_id', $target->id)->count());
-        self::assertSame(2, $target->fresh()->transport_revision);
+        self::assertSame(3, $target->fresh()->transport_revision);
         self::assertSame(TargetConnectionState::Pending, $target->fresh()->connection_state);
         self::assertStringContainsString($this->publicKey(61), file_get_contents($this->keyFile));
         try {
@@ -433,7 +434,7 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         $service->revoke($started['enrollment']);
         self::assertSame('', file_get_contents($this->keyFile));
         self::assertFalse($started['enrollment']->fresh()->publication_pending);
-        self::assertSame(2, $target->fresh()->transport_revision);
+        self::assertSame(3, $target->fresh()->transport_revision);
     }
 
     public function test_expired_or_uncertain_pending_enrollment_can_reissue_with_same_target_and_retired_port(): void
@@ -502,7 +503,7 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         $this->gateway();
         file_put_contents($this->keyFile, '');
         $started = $this->begin();
-        $writer = new class extends SshManagedReverseAuthorizedKeys
+        $writer = new class(app(TargetTransportBinding::class)) extends SshManagedReverseAuthorizedKeys
         {
             public bool $drift = true;
 
@@ -567,7 +568,7 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         self::assertSame('revoked', $started['enrollment']->fresh()->state);
         self::assertTrue($started['enrollment']->fresh()->publication_pending);
         self::assertSame(1, TargetCredential::query()->count());
-        self::assertSame(2, $started['enrollment']->target->fresh()->transport_revision);
+        self::assertSame(3, $started['enrollment']->target->fresh()->transport_revision);
         app(SshManagedReverseAuthorizedKeys::class)->sync();
         self::assertSame('', file_get_contents($this->keyFile));
     }
@@ -580,7 +581,7 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         app(SshManagedReverseEnrollmentService::class)->claim(
             $started['enrollment']->id, $started['token'], $this->publicKey(61),
         );
-        $writer = new class extends SshManagedReverseAuthorizedKeys
+        $writer = new class(app(TargetTransportBinding::class)) extends SshManagedReverseAuthorizedKeys
         {
             protected function publish(string $contents): void
             {

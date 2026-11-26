@@ -8,6 +8,7 @@ use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Support\CorrelationId;
+use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 
@@ -84,41 +85,73 @@ final readonly class TargetTransportBinding
     }
 
     /**
-     * The route administrator holds the provider and Target locks. Disabling
-     * cannot be prevented by an exhausted epoch or an unresolved connector
-     * transition; the disabled route itself prevents new network dispatch.
+     * Caller holds the provider and Target locks. Both availability edges
+     * fence old snapshots; Disable remains possible at the stored epoch limit.
      */
-    public function disableBoundTarget(Target $locked): void
+    public function changeBoundTargetAvailability(Target $locked, bool $enabled): void
     {
         $epoch = (int) $locked->transport_revision;
+        $reverse = $locked->usesReverseRoute();
+        if ($enabled && $epoch >= 4294967295) {
+            throw new TargetConnectorFailure(
+                __('Cannot enable this route while an assigned Target binding revision is exhausted.'),
+                $reverse ? 'enabled' : 'relay',
+            );
+        }
+
         $this->applyBinding(
             $locked, $locked->getAttribute('relay_record_id'), $locked->reverse_listener_port,
             $locked->reverse_tunnel_identity, min(4294967295, $epoch + 1),
-            $locked->usesReverseRoute() ? 'target-reverse-disabled' : 'target-relay-disabled',
+            'target-'.($reverse ? 'reverse' : 'relay').($enabled ? '-enabled' : '-disabled'),
         );
     }
 
-    /**
-     * Called under the managed gateway row lock, before committing the new
-     * control intent. Manual Reverse and Direct/Relay Targets are unaffected.
-     */
-    public function changeManagedReverseAvailability(bool $enabled): void
+    /** @return EloquentBuilder<Target> */
+    private function managedTargets(bool $activating = false, bool $global = true): EloquentBuilder
     {
-        $targets = Target::query()->whereExists(static function (Builder $query): void {
+        return Target::query()->whereExists(static function (Builder $query) use ($activating, $global): void {
             $query->selectRaw('1')->from((new SshManagedReverseEnrollment)->getTable())
                 ->whereColumn('target_record_id', 'targets.id')
-                ->where('state', '!=', 'revoked')
                 ->whereColumn('listener_port', 'targets.reverse_listener_port')
-                ->whereColumn('tunnel_identity', 'targets.reverse_tunnel_identity');
-        })->orderBy('id')->lockForUpdate()->get();
-        foreach ($targets as $target) {
-            if ($enabled) {
-                if ((int) $target->transport_revision >= 4294967295) {
-                    throw new TargetConnectorFailure(__('The Target transport revision is exhausted.'), 'enabled');
-                }
-            } else {
-                $this->disableBoundTarget($target);
+                ->whereColumn('tunnel_identity', 'targets.reverse_tunnel_identity')
+                ->where('state', '!=', 'revoked');
+            if ($activating) {
+                $query->where(static function (Builder $query) use ($global): void {
+                    $query->where(static fn (Builder $claimed) => $claimed
+                        ->where('state', 'claimed')->where('publication_pending', true));
+                    if ($global) {
+                        $query->orWhere('state', 'active');
+                    }
+                });
             }
+        });
+    }
+
+    /** Called under the managed gateway row lock, before enabling intent. */
+    public function assertManagedReverseCanEnable(): void
+    {
+        if ($this->managedTargets()->where('transport_revision', '>=', 4294967295)->exists()) {
+            throw new TargetConnectorFailure(__('The Target transport revision is exhausted.'), 'enabled');
+        }
+    }
+
+    /** Global Disable commits before external publication. */
+    public function disableManagedReverse(): void
+    {
+        foreach ($this->managedTargets()->orderBy('id')->lockForUpdate()->get() as $target) {
+            $this->changeBoundTargetAvailability($target, false);
+        }
+    }
+
+    /**
+     * Only a verified publication receipt restores authority. A global
+     * receipt opens active and newly claimed routes; an enrollment-only
+     * receipt opens just its claimed routes. No-key pending routes stay closed.
+     */
+    public function activateManagedReverse(bool $global): void
+    {
+        foreach ($this->managedTargets(activating: true, global: $global)->orderBy('id')->lockForUpdate()->get() as $target) {
+            $this->changeBoundTargetAvailability($target, true);
         }
     }
 

@@ -19,6 +19,8 @@ class SshManagedReverseAuthorizedKeys
 {
     private int $lockDepth = 0;
 
+    public function __construct(private readonly TargetTransportBinding $bindings) {}
+
     private function filePath(): string
     {
         return (string) config('ssh.managed_reverse.authorized_keys_file');
@@ -74,9 +76,9 @@ class SshManagedReverseAuthorizedKeys
         $file = $this->filePath();
 
         return $this->hostManifest() !== null
-            && is_file($file) && ! is_link($file) && is_writable($file)
-            && is_dir(dirname($file)) && ! is_link(dirname($file))
-            && is_writable(dirname($file));
+            && @is_file($file) && ! @is_link($file) && @is_writable($file)
+            && @is_dir(dirname($file)) && ! @is_link(dirname($file))
+            && @is_writable(dirname($file));
     }
 
     /**
@@ -94,15 +96,15 @@ class SshManagedReverseAuthorizedKeys
             return $operation();
         }
         $file = $this->filePath().'.sync.lock';
-        if (! $this->canPublish() || is_link($file) || (file_exists($file) && ! is_file($file))) {
+        if (! $this->canPublish() || @is_link($file) || (@file_exists($file) && ! @is_file($file))) {
             throw new RuntimeException('Managed Reverse SSH policy lock or host reader is unsafe/unavailable.');
         }
-        $handle = fopen($file, 'c');
+        $handle = @fopen($file, 'c');
         if ($handle === false) {
             throw new RuntimeException('Cannot open managed Reverse SSH publication lock.');
         }
         try {
-            if (! flock($handle, LOCK_EX)) {
+            if (! @flock($handle, LOCK_EX)) {
                 throw new RuntimeException('Cannot lock managed Reverse SSH key publication.');
             }
             $this->lockDepth++;
@@ -115,7 +117,7 @@ class SshManagedReverseAuthorizedKeys
         }
     }
 
-    /** @return array{contents:string,gateway_pending:bool,pending_ids:list<string>} */
+    /** @return array{contents:string,gateway_revision:int,gateway_enabled:bool,gateway_pending:bool,pending_ids:list<string>} */
     private function snapshot(): array
     {
         $gateway = SshManagedReverseGateway::query()->whereKey(1)->lockForUpdate()->first();
@@ -140,11 +142,19 @@ class SshManagedReverseAuthorizedKeys
             }
         }
 
+        // A disabled reader publishes no claimed keys. Keep those claims
+        // pending until their key is actually published on a later Enable.
+        $pending = SshManagedReverseEnrollment::query()->where('publication_pending', true);
+        if (! $gateway->enabled) {
+            $pending->where('state', '!=', 'claimed');
+        }
+
         return [
             'contents' => implode("\n", $lines).($lines ? "\n" : ''),
+            'gateway_revision' => $gateway->revision,
+            'gateway_enabled' => (bool) $gateway->enabled,
             'gateway_pending' => (bool) $gateway->publication_pending,
-            'pending_ids' => SshManagedReverseEnrollment::query()
-                ->where('publication_pending', true)->orderBy('id')->lockForUpdate()
+            'pending_ids' => $pending->orderBy('id')->lockForUpdate()
                 ->pluck('id')->all(),
         ];
     }
@@ -157,35 +167,31 @@ class SshManagedReverseAuthorizedKeys
     {
         $path = $this->filePath();
         $temporary = $path.'.'.bin2hex(random_bytes(12)).'.tmp';
-        if (file_put_contents($temporary, $contents, LOCK_EX) === false) {
+        if (@file_put_contents($temporary, $contents, LOCK_EX) === false) {
             throw new RuntimeException('Cannot stage Reverse SSH public-key policy.');
         }
         try {
-            if (! chmod($temporary, 0600) || ! rename($temporary, $path)) {
+            if (! @chmod($temporary, 0600) || ! @rename($temporary, $path)) {
                 throw new RuntimeException('Cannot publish Reverse SSH public-key policy.');
             }
-            if (file_get_contents($path) !== $contents) {
+            if (@file_get_contents($path) !== $contents) {
                 throw new RuntimeException('Published Reverse SSH policy does not match the committed intent.');
             }
         } finally {
-            if (is_file($temporary)) {
-                unlink($temporary);
+            if (@is_file($temporary)) {
+                @unlink($temporary);
             }
         }
     }
 
-    /** The current reader must agree with durable admission policy and have no outstanding transitions. */
+    /** The reader must match current policy with no outstanding publishable transitions. */
     public function isReconciled(): bool
     {
-        if (! $this->canPublish() || SshManagedReverseGateway::query()
-            ->where('publication_pending', true)->exists() || SshManagedReverseEnrollment::query()
-            ->where('publication_pending', true)->exists()) {
-            return false;
-        }
         try {
-            $expected = DB::transaction(fn (): string => $this->snapshot()['contents']);
+            $snapshot = DB::transaction(fn (): array => $this->snapshot());
 
-            return file_get_contents($this->filePath()) === $expected;
+            return ! $snapshot['gateway_pending'] && $snapshot['pending_ids'] === []
+                && @file_get_contents($this->filePath()) === $snapshot['contents'];
         } catch (\Throwable) {
             return false;
         }
@@ -201,8 +207,20 @@ class SshManagedReverseAuthorizedKeys
             // A failed/crashed finalization leaves claimed/revoked receipts;
             // an Owner can safely repeat the exact publication.
             DB::transaction(function () use ($snapshot): void {
+                // Bind the receipt to the provider revision even when
+                // different intents have identical key bytes. Preserve the
+                // gateway -> Target -> enrollment lock order for mutations.
+                $gateway = SshManagedReverseGateway::query()->whereKey(1)->lockForUpdate()->first();
+                if ($gateway === null || $gateway->revision !== $snapshot['gateway_revision']
+                    || (bool) $gateway->enabled !== $snapshot['gateway_enabled']
+                    || (bool) $gateway->publication_pending !== $snapshot['gateway_pending']) {
+                    throw new RuntimeException('Managed Reverse SSH policy changed during publication. Reconcile before use.');
+                }
+                if ($snapshot['gateway_enabled'] && ($snapshot['gateway_pending'] || $snapshot['pending_ids'] !== [])) {
+                    $this->bindings->activateManagedReverse($snapshot['gateway_pending']);
+                }
                 $current = $this->snapshot();
-                if ($current !== $snapshot || file_get_contents($this->filePath()) !== $snapshot['contents']) {
+                if ($current !== $snapshot || @file_get_contents($this->filePath()) !== $snapshot['contents']) {
                     throw new RuntimeException('Managed Reverse SSH policy changed during publication. Reconcile before use.');
                 }
                 if ($snapshot['gateway_pending']) {

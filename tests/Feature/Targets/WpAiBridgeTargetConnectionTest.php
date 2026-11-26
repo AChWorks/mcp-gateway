@@ -4,9 +4,11 @@ namespace Tests\Feature\Targets;
 
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\ConnectionRelayAdministration;
+use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetTransportBinding;
 use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
+use App\Application\Targets\WpAiBridgeTargetReconfiguration;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
@@ -2814,6 +2816,78 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         DB::unprepared('DROP TRIGGER fail_intent');
     }
 
+    public function test_each_target_bound_discovery_request_checks_the_exact_route_epoch(): void
+    {
+        $first = $this->relay('discovery-first', 46081);
+        $second = $this->relay('discovery-second', 46082);
+        $bindings = app(TargetTransportBinding::class);
+        $admin = app(ConnectionRelayAdministration::class);
+        $connection = app(WpAiBridgeTargetConnectionService::class);
+        $reconfigure = app(WpAiBridgeTargetReconfiguration::class);
+        foreach (['begin', 'testConnection', 'origin'] as $action) {
+            foreach (['direct-relay', 'disabled', 'relay-aba', 'direct-ok', 'relay-ok'] as $scenario) {
+                $id = strtolower($action).'-'.$scenario;
+                $target = $this->target($id);
+                $change = static function (?string $relayId) use ($bindings, $target): void {
+                    $target->refresh();
+                    self::assertTrue($bindings->change($target, $bindings->revision($target), $relayId));
+                };
+                if (in_array($scenario, ['disabled', 'relay-aba', 'relay-ok'], true)) {
+                    $change($first->relay_id);
+                }
+                $target->refresh();
+                $original = clone $target;
+                $configQuery = DB::table('wp_ai_bridge_target_configs')->where('target_record_id', $target->getKey());
+                $before = (array) $configQuery->sole();
+                $revision = $reconfigure->revision($target);
+                $count = Http::recorded()->count();
+                $valid = in_array($scenario, ['direct-ok', 'relay-ok'], true);
+                $this->duringBridgeRequest = static function (Request $request) use ($scenario, $change, $admin, $first, $second): void {
+                    self::assertStringEndsWith('/.well-known/oauth-protected-resource', $request->url());
+                    switch ($scenario) {
+                        case 'direct-relay':
+                            $change($first->relay_id);
+                            break;
+                        case 'disabled':
+                            self::assertTrue($admin->setEnabled($first, $first->fresh()->lifecycle_revision, false));
+                            break;
+                        case 'relay-aba':
+                            $change($second->relay_id);
+                            $change($first->relay_id);
+                            break;
+                    }
+                };
+
+                try {
+                    match ($action) {
+                        'begin' => $connection->begin($original),
+                        'testConnection' => $connection->testConnection($original),
+                        'origin' => $reconfigure->update($original, [
+                            'base_url' => 'https://new-'.$id.'.example.test', 'configuration_revision' => $revision,
+                        ]),
+                    };
+                    self::assertTrue($valid, 'Discovery crossed a retired route.');
+                } catch (WpAiBridgeTargetConnectionException|TargetConnectorFailure $e) {
+                    self::assertFalse($valid, $e->getMessage());
+                    self::assertSame('relay_unavailable', $e->reason);
+                }
+
+                self::assertSame($count + ($valid ? 2 : 1), Http::recorded()->count());
+                if (! $valid) {
+                    self::assertSame($before, (array) $configQuery->sole(),
+                        'Superseded discovery must not persist success or failure against the new route.');
+                    self::assertNull($target->fresh()->last_tested_at);
+                    self::assertNull($target->fresh()->last_error_code);
+                    self::assertSame(TargetConnectionState::Disconnected, $target->fresh()->connection_state);
+                    self::assertFalse(DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $target->getKey())->exists());
+                }
+                if ($scenario === 'disabled') {
+                    self::assertTrue($admin->setEnabled($first, $first->fresh()->lifecycle_revision, true));
+                }
+            }
+        }
+    }
+
     public function test_route_changes_and_disable_preserve_wordpress_authorization_and_use_new_route(): void
     {
         $target = $this->target('alpha');
@@ -2831,7 +2905,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         foreach ([$first->relay_id, $second->relay_id, null] as $route) {
             $target->refresh();
             if ($route === null) {
-                self::assertTrue(app(ConnectionRelayAdministration::class)->disable($second->fresh(), 1));
+                self::assertTrue(app(ConnectionRelayAdministration::class)->setEnabled($second->fresh(), 1, false));
                 $target->refresh();
                 self::assertSame(TargetConnectionState::Connected, $target->connection_state);
                 self::assertSame($cipher, $this->credential($target)->encrypted_payload);
@@ -2895,7 +2969,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $url = $service->begin($target->fresh());
         parse_str((string) parse_url($url, PHP_URL_QUERY), $args);
         $flowId = DB::table('wp_ai_bridge_oauth_flows')->value('id');
-        self::assertTrue(app(ConnectionRelayAdministration::class)->disable($relay->fresh(), 1));
+        self::assertTrue(app(ConnectionRelayAdministration::class)->setEnabled($relay->fresh(), 1, false));
         try {
             $service->completeCallback($args['state'], 'code', 'https://alpha.example.test', null);
             self::fail('Token exchange succeeded with an unavailable route.');

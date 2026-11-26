@@ -139,8 +139,9 @@ point-in-time proof, not a heartbeat.
 - Key-reader publication and DB intent are deliberately **not** one
   transaction: a one-use claim commits `claimed + publication_pending`
   before a public-key file is atomically published. Only after the
-  reader bytes are confirmed and a new DB finalization commits does
-  the enrollment become `active`. A failure/crash leaves a durable
+  reader bytes are confirmed against the exact provider revision and a new
+  DB finalization commits does the enrollment become `active` and
+  advance its Target transport revision. A failure/crash leaves a durable
   pending receipt and blocks the managed route until Owner
   reconciliation. The Owner can safely retry **Reconcile restricted
   public keys**. Activation is never inferred solely from a written file.
@@ -149,11 +150,18 @@ point-in-time proof, not a heartbeat.
   failures leave a visible/retriable Owner action. Do not describe
   revocation as fully completed while host policy is still pending.
   Local delete/forget remains blocked until the host reader is reconciled.
-- Existing PHP processes coordinate policy publication with claim, reissue,
-  revoke and Gateway feature state using a PHP-owned file lock. No PHP
-  request gains OS root access. Disabling Gateway routing remains
-  possible even if the host reader is damaged; the resulting application
-  route then fails closed and host reconciliation is still required. Global disable advances the transport revision of each currently bound managed Target before key publication, without changing its login credential or manual/Direct/Relay paths. Re-enable cannot revive prior admissions. An identical reconciled save does not advance either revision.
+- PHP processes serialize host publication, claim, reissue and Enable
+  with a PHP-owned file lock. No PHP request gains OS root access. Global
+  Disable and scoped revoke first commit local closure under database
+  locks, even when the host reader or publication lock is damaged. A
+  superseded publication receipt cannot finalize a different provider
+  revision, even if its key bytes are identical. Global Disable advances
+  the transport revision of each currently bound managed Target; Enable
+  advances the revision of each newly available route only when publication
+  is confirmed. This fences work and verification from both before and
+  during the disabled/pending interval without changing login credentials
+  or manual/Direct/Relay paths. An identical reconciled save does not
+  advance either revision.
 - The Target installer refuses pre-planted non-root-owned or
   group/world-writable root state directories, malicious lock paths and
   unsafe control-key ownership/mode **before** token consumption. It

@@ -257,7 +257,7 @@ final class WpAiBridgeTargetRegistrationTest extends TestCase
         self::assertSame(46081, $routes->httpRouteForTarget($first)?->loopbackPort);
         Http::assertSentCount(4);
 
-        self::assertTrue(app(ConnectionRelayAdministration::class)->disable($relay->fresh(), 1));
+        self::assertTrue(app(ConnectionRelayAdministration::class)->setEnabled($relay->fresh(), 1, false));
         $secondConfig = WpAiBridgeTargetConfig::query()->where('target_record_id', $second->getKey())->sole();
         self::assertNotNull($secondConfig->metadata_checked_at);
         self::assertNull($second->fresh()->last_tested_at);
