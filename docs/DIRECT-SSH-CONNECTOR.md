@@ -92,6 +92,8 @@ A substantive edit invalidates old verified peer/login evidence. An old in-fligh
 
 ## 2. Exact Gateway permissions and OS authority
 
+Before presenting stored credentials, the transport checks current execution/control authority and the exact admitted Target/endpoint/trust/route/material or verification attempt after host-key exchange. New command and SFTP staging/publication effects also recheck authority. Existing cleanup and uncertain-result handling remain separate from a grant to start new work. These boundaries apply to native direct, Relay and Reverse paths; they do not imply a distributed atomic login or publication.
+
 The three existing Gateway capabilities are:
 - `ssh.command.run`: arbitrary non-interactive shell commands under the configured OS account;
 - `ssh.file.read`: bounded SFTP metadata, directory and file-read operations;

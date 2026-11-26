@@ -14,6 +14,7 @@ use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetCredential;
 use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Http\DnsResolver;
@@ -291,9 +292,10 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         self::assertTrue($handlers->execute($operator, 'alpha', 'demo/read', [])['ok']);
         $membershipQueries = array_filter($queries, static fn (string $sql): bool => str_contains($sql, 'target_group_users'));
         // One membership query for initial Target reachability, one for
-        // request-entry permissions and one fresh check after remote Ability
-        // classification. Each stage batches all permissions in one query.
-        self::assertLessThanOrEqual(3, count($membershipQueries),
+        // request-entry permissions and one per new downstream dispatch
+        // (Initialize, Classification, Execute). No membership query per
+        // permission and no additional actor grant is required for cleanup.
+        self::assertCount(5, $membershipQueries,
             'Membership lookup must remain bounded across entry and fresh dispatch authorization.');
 
         DB::table('target_group_permission_denials')->insert([
@@ -886,6 +888,32 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         $revoked = $handler->receive($owner, 'alpha', $file);
         self::assertFalse($revoked['ok']);
         self::assertSame('limits', $revoked['error']['phase']);
+        self::assertSame(0, $this->syntheticBeginCount);
+        Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'files.oaiusercontent.com'));
+    }
+
+    public function test_chatgpt_signed_source_cannot_be_fetched_after_wordpress_grant_changes_during_dns(): void
+    {
+        $owner = $this->user('owner');
+        $this->pair('alpha');
+        $this->chatFilePayload = 'must-not-fetch';
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                if ($host === 'files.oaiusercontent.com') {
+                    TargetCredential::query()->sole()->supersedeAuthority();
+                }
+
+                return ['1.1.1.1'];
+            }
+        });
+        $result = app(WordpressFileInputMcpToolHandlers::class)->receive($owner, 'alpha', [
+            'download_url' => 'https://files.oaiusercontent.com/private/fixture?sig=opaque',
+            'file_id' => 'fixture',
+        ]);
+        self::assertFalse($result['ok']);
+        self::assertSame('forbidden', $result['error']['code'] ?? null);
         self::assertSame(0, $this->syntheticBeginCount);
         Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'files.oaiusercontent.com'));
     }

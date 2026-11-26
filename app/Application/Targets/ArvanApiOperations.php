@@ -3,7 +3,8 @@
 namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
-use App\Application\Mcp\McpDispatchAdmission;
+use App\Application\Access\OperationAdmission;
+use App\Application\Access\VerifiedExecutionContext;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
@@ -11,6 +12,7 @@ use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetConfig;
 use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetVault;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
+use App\Infrastructure\Connectors\Relay\LocalSocks5Route;
 use App\Infrastructure\Http\Api\ApiHttpTransport;
 use App\Infrastructure\Http\Api\OpenApiOperationCatalog;
 use App\Infrastructure\Http\OutboundRequestException;
@@ -18,6 +20,7 @@ use App\Infrastructure\Http\SafeHttpClient;
 use App\Models\User;
 use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
+use Closure;
 use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
@@ -35,7 +38,7 @@ final readonly class ArvanApiOperations
 
     public function __construct(
         private AccessControl $access,
-        private McpDispatchAdmission $admission,
+        private OperationAdmission $admission,
         private ActivityRecorder $activity,
         private SafeHttpClient $http,
         private ApiHttpTransport $transport,
@@ -49,11 +52,12 @@ final readonly class ArvanApiOperations
         User $user, string $targetId, int $offset = 0, int $limit = 20, ?string $search = null,
     ): array {
         $operation = 'arvan-api-catalog';
+        $context = $this->admission->capture($user);
         $target = $this->target($user, $targetId, GatewayPermission::ArvanApiInspect);
         if (! $target instanceof Target) {
             return $this->failed($operation, null, 'target_not_found');
         }
-        if (($reason = $this->blockedReason($user, $target, GatewayPermission::ArvanApiInspect)) !== null) {
+        if (($reason = $this->blockedReason($context, $user, $target, GatewayPermission::ArvanApiInspect)) !== null) {
             return $this->failed($operation, $target, $reason);
         }
         if ($offset < 0 || $limit < 1 || $limit > 100 || ($search !== null && mb_strlen($search) > 255)) {
@@ -71,7 +75,9 @@ final readonly class ArvanApiOperations
 
         try {
             // Public documentation retrieval never receives the API key.
-            $response = $this->http->getApiDocument($config->spec_url, relay: $this->relays->httpRouteForTarget($target));
+            $relay = $this->relays->httpRouteForTarget($target);
+            $response = $this->http->getApiDocument($config->spec_url, relay: $relay,
+                beforeDispatch: $this->guard($context, $user, $target, GatewayPermission::ArvanApiInspect, $config, $relay));
             if ($response->status < 200 || $response->status >= 300) {
                 return $this->failed($operation, $target, 'catalog_unavailable', [
                     'http_status' => $response->status, 'failure_origin' => 'downstream_http',
@@ -80,7 +86,10 @@ final readonly class ArvanApiOperations
             }
             $result = $this->catalog->page($this->catalog->parse($response->body), $offset, $limit, $search);
         } catch (OutboundRequestException|InvalidArgumentException $exception) {
-            return $this->failed($operation, $target, 'catalog_unavailable', [
+            $code = $exception instanceof OutboundRequestException && in_array($exception->reason, ['forbidden', 'target_paused', 'target_changed'], true)
+                ? $exception->reason : 'catalog_unavailable';
+
+            return $this->failed($operation, $target, $code, [
                 'failure_stage' => 'operation',
                 'exception_class' => $exception::class,
                 'source_error_message' => $exception->getMessage(),
@@ -115,6 +124,7 @@ final readonly class ArvanApiOperations
         array $formFields = [], array $formFiles = [], ?string $accept = null,
     ): array {
         $operation = 'arvan-api-request';
+        $context = $this->admission->capture($user);
         $method = strtoupper(trim($method));
         $permission = match ($method) {
             'GET', 'HEAD', 'OPTIONS' => GatewayPermission::ArvanApiRead,
@@ -126,7 +136,7 @@ final readonly class ArvanApiOperations
         if (! $target instanceof Target) {
             return $this->failed($operation, null, 'target_not_found');
         }
-        if (($reason = $this->blockedReason($user, $target, $permission)) !== null) {
+        if (($reason = $this->blockedReason($context, $user, $target, $permission)) !== null) {
             return $this->failed($operation, $target, $reason);
         }
         if (! preg_match('/^[A-Z][A-Z0-9-]*$/D', $method)
@@ -147,31 +157,18 @@ final readonly class ArvanApiOperations
             return $this->failed($operation, $target, 'credential_unavailable');
         }
 
-        // Fresh authorization and revocation boundary AFTER reading Target and
-        // credential. No token is sent if identity/grants/pause changed.
-        $freshUser = User::query()->find($user->getKey());
-        $currentConfig = $this->config($target);
-        $currentCredential = $this->credential($target);
-        if (! $freshUser instanceof User
-            || $this->blockedReason($freshUser, $target, $permission) !== null
-            || ! $currentConfig instanceof ArvanApiTargetConfig
-            || ! $currentCredential instanceof TargetCredential
-            || ! hash_equals($currentConfig->base_url, $config->base_url)
-            || ! hash_equals($currentCredential->dispatchFingerprint(), $credential->dispatchFingerprint())) {
-            return $this->failed($operation, $target, 'forbidden');
-        }
-
         // Use a stable, correlatable HTTP identity for all dispatched
         // outcomes. Never copy query, JSON body, key or raw client headers
         // into Activity. The path is selectively redacted before persistence.
         $identity = $this->apiIdentity($method, $path, $key);
 
         try {
+            $relay = $this->relays->httpRouteForTarget($target);
             $response = $this->transport->request(
                 $config->base_url, $method, $path, $query, $bodyJson,
                 ['Authorization' => 'Apikey '.$key, 'Accept' => 'application/json'],
                 $bodyText, $contentType, $formFields, $formFiles, $accept,
-                relay: $this->relays->httpRouteForTarget($target),
+                relay: $relay, beforeDispatch: $this->guard($context, $user, $target, $permission, $config, $relay, $credential),
             );
         } catch (OutboundRequestException $exception) {
             $unknown = $permission !== GatewayPermission::ArvanApiRead && ! $exception->preDispatch;
@@ -417,14 +414,43 @@ final readonly class ArvanApiOperations
             ->where('connector_type', 'arvancloud')->where('target_id', $targetId)->first();
     }
 
-    private function blockedReason(User $user, Target $target, GatewayPermission $permission): ?string
+    private function blockedReason(VerifiedExecutionContext $context, User $user, Target $target, GatewayPermission $permission): ?string
     {
-        if (! $this->access->allows($user, $permission, $target)
-            || ! $this->admission->allows($user)) {
+        if (! $this->admission->allows($context, $user, $target, $permission)) {
             return 'forbidden';
         }
 
         return TargetOperationGate::isPaused($target) ? 'target_paused' : null;
+    }
+
+    /** @return Closure():void */
+    private function guard(VerifiedExecutionContext $context, User $user, Target $target,
+        GatewayPermission $permission, ArvanApiTargetConfig $config, ?LocalSocks5Route $relay,
+        ?TargetCredential $credential = null): Closure
+    {
+        return function () use ($context, $user, $target, $permission, $config, $relay, $credential): void {
+            $fresh = Target::query()->find($target->getKey());
+            $currentConfig = $this->config($target);
+            if (! $fresh instanceof Target || $fresh->connector_type !== 'arvancloud'
+                || ! $currentConfig instanceof ArvanApiTargetConfig
+                || $currentConfig->getKey() !== $config->getKey()
+                || $currentConfig->base_url !== $config->base_url
+                || ($credential === null && $currentConfig->spec_url !== $config->spec_url)) {
+                throw new OutboundRequestException('target_changed', 'ArvanCloud Target configuration changed before dispatch.', [], true);
+            }
+            $reason = $this->blockedReason($context, $user, $fresh, $permission);
+            if ($reason !== null) {
+                throw new OutboundRequestException($reason, 'ArvanCloud operation authority changed before dispatch.', [], true);
+            }
+            if ($credential !== null) {
+                $current = $this->credential($fresh);
+                if (! $current instanceof TargetCredential
+                    || ! hash_equals($credential->dispatchFingerprint(), $current->dispatchFingerprint())) {
+                    throw new OutboundRequestException('target_changed', 'ArvanCloud credential changed before dispatch.', [], true);
+                }
+            }
+            $this->relays->httpRouteAtEpoch((string) $target->getKey(), (int) $target->transport_revision, $relay, true);
+        };
     }
 
     private function config(Target $target): ?ArvanApiTargetConfig

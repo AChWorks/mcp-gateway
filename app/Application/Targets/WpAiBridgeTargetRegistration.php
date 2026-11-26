@@ -8,6 +8,7 @@ use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeDiscovery;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Models\User;
+use Closure;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -25,7 +26,7 @@ final readonly class WpAiBridgeTargetRegistration
         private TargetTransportBinding $bindings,
     ) {}
 
-    public function register(string $targetId, string $displayName, string $baseUrl, ?string $aiGuidance = null, ?string $relayId = null, ?User $creator = null): Target
+    public function register(string $targetId, string $displayName, string $baseUrl, ?string $aiGuidance = null, ?string $relayId = null, ?User $creator = null, ?Closure $authorize = null): Target
     {
         $targetId = strtolower(trim($targetId));
         $displayName = trim($displayName);
@@ -41,11 +42,18 @@ final readonly class WpAiBridgeTargetRegistration
 
         // Existing discovery enforces HTTPS, DNS pinning, public outbound policy,
         // bounded response sizes, same-origin OAuth URLs and supported protocols.
-        $metadata = $this->discovery->discover($baseUrl, fn () => $this->relays->routeForSelection($relayId));
+        $metadata = $this->discovery->discover($baseUrl, fn () => $this->relays->routeForSelection($relayId), function () use ($authorize): void {
+            if ($authorize !== null && ! $authorize()) {
+                throw new TargetConnectorFailure(__('This action is unauthorized.'), null, 'forbidden');
+            }
+        });
         $hash = hash('sha256', $metadata->baseUrl);
 
         try {
-            return DB::transaction(function () use ($targetId, $displayName, $aiGuidance, $metadata, $hash, $relayId, $creator): Target {
+            return DB::transaction(function () use ($targetId, $displayName, $aiGuidance, $metadata, $hash, $relayId, $creator, $authorize): Target {
+                if ($authorize !== null && ! $authorize()) {
+                    throw new TargetConnectorFailure(__('This action is unauthorized.'), null, 'forbidden');
+                }
                 // Connector-scoped reservation prevents same-endpoint registration
                 // racing against future reassignment, but never blocks SSH/Agent
                 // Targets at the same host.

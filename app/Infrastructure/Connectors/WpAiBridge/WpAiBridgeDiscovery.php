@@ -17,14 +17,14 @@ final class WpAiBridgeDiscovery
     ) {}
 
     /** @param Closure(): ?LocalSocks5Route $resolveRoute */
-    public function discover(string $baseUrl, Closure $resolveRoute): BridgeDiscovery
+    public function discover(string $baseUrl, Closure $resolveRoute, ?Closure $authorize = null): BridgeDiscovery
     {
         // Local route rejection is not a downstream metadata observation.
         $relay = $resolveRoute();
         try {
             $baseUrl = $this->targets->canonicalBaseUrl($baseUrl);
             $protectedUrl = $this->targets->appendPath($baseUrl, '/.well-known/oauth-protected-resource');
-            $protected = $this->http->get($protectedUrl, relay: $relay);
+            $protected = $this->http->get($protectedUrl, relay: $relay, beforeDispatch: $this->guard($resolveRoute, $relay, $authorize));
         } catch (UnsafeOutboundTarget $exception) {
             throw new BridgeDiscoveryException('unsafe_target', 'The WordPress site is not a safe public HTTPS target.', $exception->diagnostics());
         } catch (OutboundRequestException $exception) {
@@ -73,7 +73,7 @@ final class WpAiBridgeDiscovery
         $relay = $resolveRoute();
         try {
             $serverUrl = $this->targets->appendPath($issuer, '/.well-known/oauth-authorization-server');
-            $server = $this->http->get($serverUrl, relay: $relay);
+            $server = $this->http->get($serverUrl, relay: $relay, beforeDispatch: $this->guard($resolveRoute, $relay, $authorize));
         } catch (UnsafeOutboundTarget $exception) {
             throw new BridgeDiscoveryException('unsafe_target', 'WP AI Bridge authorization metadata target is unsafe.', $exception->diagnostics());
         } catch (OutboundRequestException $exception) {
@@ -133,6 +133,18 @@ final class WpAiBridgeDiscovery
             $tokenUrl,
             $revocationUrl,
         );
+    }
+
+    /** @param Closure():?LocalSocks5Route $resolveRoute */
+    private function guard(Closure $resolveRoute, ?LocalSocks5Route $expected, ?Closure $authorize): Closure
+    {
+        return static function () use ($resolveRoute, $expected, $authorize): void {
+            $authorize?->__invoke();
+            $current = $resolveRoute();
+            if ($current != $expected) {
+                throw new OutboundRequestException('network_failure', 'Discovery route changed before dispatch.', ['failure_stage' => 'connection_setup'], true);
+            }
+        };
     }
 
     /** @param array<string, mixed> $document */

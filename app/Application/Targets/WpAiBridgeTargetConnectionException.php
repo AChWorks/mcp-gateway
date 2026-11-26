@@ -7,7 +7,7 @@ use RuntimeException;
 final class WpAiBridgeTargetConnectionException extends RuntimeException
 {
     /** @param array<string,mixed> $diagnostics Safe scalar cause metadata only. */
-    public function __construct(public readonly string $reason, string $message, public readonly array $diagnostics = [])
+    public function __construct(public readonly string $reason, string $message, public readonly array $diagnostics = [], public readonly ?WpAiBridgeRefreshIdentity $refreshIdentity = null)
     {
         parent::__construct($message);
     }

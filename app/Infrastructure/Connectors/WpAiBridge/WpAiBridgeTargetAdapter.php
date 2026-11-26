@@ -3,7 +3,6 @@
 namespace App\Infrastructure\Connectors\WpAiBridge;
 
 use App\Application\Batch\TargetBatchBindingContributor;
-use App\Application\Batch\WordpressTargetBatchIdentity;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorResult;
@@ -22,6 +21,7 @@ use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Models\User;
 use App\Support\OperationDiagnostics;
+use Closure;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -37,7 +37,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
      */
     public function batchBindingParts(array $targets): array
     {
-        return $this->container->make(WordpressTargetBatchIdentity::class)->parts($targets);
+        return $this->container->make(WpAiBridgeTargetAuthority::class)->parts($targets);
     }
 
     public function type(): string
@@ -89,7 +89,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
         }
     }
 
-    public function register(array $input, ?User $creator = null): Target
+    public function register(array $input, ?User $creator = null, ?Closure $authorize = null): Target
     {
         try {
             return $this->container->make(WpAiBridgeTargetRegistration::class)->register(
@@ -99,6 +99,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
                 $input['ai_guidance'] ?? null,
                 $input['connection_relay_id'] ?? null,
                 $creator,
+                $authorize,
             );
         } catch (ConnectionRelayUnavailable) {
             throw new TargetConnectorFailure(__('The selected Connection Relay is disabled or no longer exists.'), 'connection_relay_id', 'relay_unavailable');
@@ -140,20 +141,20 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
         return $this->container->make(WpAiBridgeTargetReconfiguration::class)->revision($target);
     }
 
-    public function updateConfiguration(Target $target, array $input): TargetConnectorResult
+    public function updateConfiguration(Target $target, array $input, ?Closure $authorize = null): TargetConnectorResult
     {
-        $changed = $this->container->make(WpAiBridgeTargetReconfiguration::class)->update($target, $input);
+        $changed = $this->container->make(WpAiBridgeTargetReconfiguration::class)->update($target, $input, $authorize);
 
         return new TargetConnectorResult(statusMessage: $changed
             ? __('WordPress origin updated after safe metadata discovery. Reauthorize this Target with WordPress OAuth before using it.')
             : __('No WordPress origin change was necessary.'));
     }
 
-    public function connect(Target $target): TargetConnectorResult
+    public function connect(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
         try {
             return new TargetConnectorResult(
-                redirectUrl: $this->container->make(WpAiBridgeTargetConnectionService::class)->begin($target),
+                redirectUrl: $this->container->make(WpAiBridgeTargetConnectionService::class)->begin($target, $authorize),
                 authorizedOrigin: (string) WpAiBridgeTargetConfig::query()
                     ->where('target_record_id', $target->getKey())->value('base_url'),
             );
@@ -162,13 +163,13 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
         }
     }
 
-    public function reconnect(Target $target): TargetConnectorResult
+    public function reconnect(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
         try {
-            $this->container->make(WpAiBridgeTargetConnectionService::class)->disconnect($target);
+            $this->container->make(WpAiBridgeTargetConnectionService::class)->disconnect($target, authorize: $authorize);
 
             return new TargetConnectorResult(
-                redirectUrl: $this->container->make(WpAiBridgeTargetConnectionService::class)->begin($target),
+                redirectUrl: $this->container->make(WpAiBridgeTargetConnectionService::class)->begin($target, $authorize),
                 authorizedOrigin: (string) WpAiBridgeTargetConfig::query()
                     ->where('target_record_id', $target->getKey())->value('base_url'),
             );
@@ -177,10 +178,10 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
         }
     }
 
-    public function disconnect(Target $target): TargetConnectorResult
+    public function disconnect(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
         try {
-            $revoked = $this->container->make(WpAiBridgeTargetConnectionService::class)->disconnect($target);
+            $revoked = $this->container->make(WpAiBridgeTargetConnectionService::class)->disconnect($target, authorize: $authorize);
 
             return new TargetConnectorResult(statusMessage: $revoked
                 ? __('WordPress Target disconnected after confirmed credential revocation.')
@@ -190,10 +191,10 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
         }
     }
 
-    public function test(Target $target): TargetConnectorResult
+    public function test(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
         try {
-            $this->container->make(WpAiBridgeTargetConnectionService::class)->testConnection($target);
+            $this->container->make(WpAiBridgeTargetConnectionService::class)->testConnection($target, $authorize);
 
             return new TargetConnectorResult(statusMessage: __('WordPress metadata is reachable and compatible.'));
         } catch (WpAiBridgeTargetConnectionException $exception) {

@@ -2,6 +2,7 @@
 
 namespace App\Application\Batch;
 
+use App\Application\Access\VerifiedExecutionContext;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\League\Repositories\AccessTokenRepository;
 use App\Models\User;
@@ -20,23 +21,20 @@ final readonly class DeferredBatchAuthority
     /** @return array<string,mixed> */
     public function captureMcp(User $user, Request $request): array
     {
-        $client = $request->attributes->get('oauth_client_id');
-        $profile = $request->attributes->get('oauth_client_profile_key');
-        $generation = $request->attributes->get('oauth_client_profile_generation');
-        $tokenId = $request->attributes->get('oauth_access_token_id');
-        if (! is_string($client) || $client === '' || ! is_string($profile) || $profile === ''
-            || ! is_int($generation) || $generation < 1
-            || ! is_string($tokenId) || $tokenId === ''
-            || $request->attributes->get('oauth_user_id') !== (string) $user->getKey()
-            || ! $this->tokens->authorizesDispatch($tokenId, (int) $user->getKey(), $client, $profile, $generation)) {
+        $context = $request->attributes->get(VerifiedExecutionContext::REQUEST_ATTRIBUTE);
+        if (! $context instanceof VerifiedExecutionContext || $context->channel !== 'mcp'
+            || $context->actorId !== (int) $user->getKey()
+            || $context->clientId === null || $context->profileKey === null
+            || $context->profileGeneration === null || $context->tokenId === null || $context->authorizationId === null
+            || $context->authorizationId !== $this->tokens->dispatchAuthorizationId(
+                $context->tokenId, $context->actorId, $context->clientId, $context->profileKey, $context->profileGeneration,
+            )) {
             throw new RuntimeException('MCP Batch requires a currently valid, middleware-verified token and consent.');
         }
-        $authorization = DB::table('oauth_access_tokens')
-            ->where('id', $tokenId)->where('user_id', $user->getKey())
-            ->whereNull('revoked_at')->value('authorization_id');
-        if (! is_string($authorization) || $authorization === '') {
-            throw new RuntimeException('MCP authorization identity is missing.');
-        }
+        $client = $context->clientId;
+        $profile = $context->profileKey;
+        $generation = $context->profileGeneration;
+        $authorization = $context->authorizationId;
 
         return [
             'source_channel' => 'mcp', 'client_id' => $client,

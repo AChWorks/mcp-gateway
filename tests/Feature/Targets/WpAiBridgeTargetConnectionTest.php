@@ -10,6 +10,7 @@ use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetReconfiguration;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
@@ -24,6 +25,7 @@ use GuzzleHttp\Exception\ConnectTimeoutException as GuzzleConnectTimeoutExceptio
 use GuzzleHttp\Exception\NetworkTimeoutException as GuzzleNetworkTimeoutException;
 use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Promise\PromiseInterface;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
@@ -35,6 +37,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Sleep;
 use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use Tests\TestCase;
 
@@ -60,6 +63,8 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
     private bool $rejectProtectedCatalogProbe = false;
 
     private int $catalogProbeCalls = 0;
+
+    private ?\Closure $duringCatalogProbe = null;
 
     private bool $failTokenExchange = false;
 
@@ -339,7 +344,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             app(ActivityRecorder::class)
                 ->recordRequired((string) Str::uuid(), 'wordpress-disconnect-remote-revocation-attested',
                     'operator-attested', $locked);
-        });
+        }, static fn (): bool => true);
         self::assertSame(TargetConnectionState::Disconnected, $alpha->refresh()->connection_state);
         self::assertSame(0, DB::table('wp_ai_bridge_revocation_intents')->count());
         self::assertSame(0, DB::table('target_credentials')->count());
@@ -671,6 +676,138 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         }
     }
 
+    /** @return array<string,array{string}> */
+    public static function recoveryClaimChanges(): array
+    {
+        return [
+            'different intent' => ['replacement'],
+            'disappeared intent, expired bearer' => ['missing'],
+            'same grant successor' => ['successor'],
+            'expired successor' => ['expired_successor'],
+            'superseded semantic grant' => ['grant'],
+            'changed predecessor material' => ['material'],
+            'unchanged exact intent' => ['exact'],
+        ];
+    }
+
+    #[DataProvider('recoveryClaimChanges')]
+    public function test_ambiguous_recovery_is_exact_at_locked_claim(string $change): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $this->failRefreshOnce = true;
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $authorized = true;
+        $armed = false;
+        $changed = false;
+        $originalId = null;
+        $replacementId = (string) Str::ulid();
+        $initialFingerprint = $this->credential($target)->dispatchFingerprint();
+
+        Sleep::fake();
+        Sleep::whenFakingSleep(function () use ($target, &$authorized, &$armed, &$originalId, $change): void {
+            $authorized = false;
+            $originalId = (string) DB::table('wp_ai_bridge_refresh_intents')->value('id');
+            DB::table('wp_ai_bridge_refresh_intents')->update(['created_at' => now()->subSeconds(20)]);
+            // Simulate another lifecycle operation returning the Target to
+            // Connected. Its intent/material change occurs at locked claim.
+            if (in_array($change, ['missing', 'successor', 'expired_successor'], true)) {
+                $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+            }
+            $armed = true;
+        });
+        DB::listen(function (QueryExecuted $query) use ($target, $change, &$armed, &$changed, $replacementId): void {
+            $sql = str_replace(['"', chr(96)], '', strtolower($query->sql));
+            if (! $armed || $changed || ! str_contains($sql, 'from targets where targets.id = ?')
+                || ! in_array('withLockedTarget', array_column(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS), 'function'), true)) {
+                return;
+            }
+            $changed = true;
+            $armed = false;
+            if ($change === 'replacement') {
+                DB::table('wp_ai_bridge_refresh_intents')->update(['id' => $replacementId]);
+            } elseif ($change === 'grant') {
+                $this->credential($target)->supersedeAuthority();
+            } elseif ($change === 'material') {
+                $this->expire($target);
+            } elseif (in_array($change, ['missing', 'successor', 'expired_successor'], true)) {
+                if ($change !== 'missing') {
+                    $credential = $this->credential($target);
+                    $vault = app(WpAiBridgeTargetVault::class);
+                    $prior = $vault->openCredential($target, $credential);
+                    $expiry = $change === 'successor' ? now()->addHour() : now()->subMinute();
+                    $credential->forceFill(['encrypted_payload' => $vault->sealCredential(
+                        $target, $prior['client_id'], $prior['resource_url'],
+                        'alpha-concurrent-access', 'alpha-concurrent-refresh', $expiry, $prior['scopes'],
+                    )])->save();
+                    DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $credential->getKey())
+                        ->update(['generation' => 2, 'access_expires_at' => $expiry, 'refresh_due_at' => now()->subMinute()]);
+                }
+                DB::table('wp_ai_bridge_refresh_intents')->delete();
+            }
+        });
+
+        try {
+            $result = $service->routingContextWithRecovery($target, authorize: static function () use (&$authorized): bool {
+                return $authorized;
+            });
+            if (! in_array($change, ['exact', 'successor'], true)) {
+                self::fail('Old recovery selected unrelated or fresh authority.');
+            }
+            self::assertSame($change === 'exact' ? 'alpha-rotated-access' : 'alpha-concurrent-access', $result['access_token']);
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertNotContains($change, ['exact', 'successor']);
+            self::assertContains($exception->reason, ['refresh_pending', 'refresh_conflict', 'target_changed']);
+        } finally {
+            Sleep::fake(false);
+        }
+        self::assertTrue($changed, 'The deterministic mutation-boundary barrier must run.');
+        self::assertFalse($authorized);
+        self::assertSame($change === 'exact' ? 2 : 1, $this->refreshCalls);
+        if (in_array($change, ['exact', 'successor'], true)) {
+            self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+            self::assertSame(2, (int) DB::table('wp_ai_bridge_credential_metadata')->value('generation'));
+        } else {
+            // The deterministic SQLite barrier injects the competing state
+            // inside the claim transaction; its rejection rolls the injected
+            // mutation back as well. No extra claim or token send survives.
+            $this->assertDatabaseHas('wp_ai_bridge_refresh_intents', ['id' => $originalId, 'attempts' => 1]);
+            self::assertSame($initialFingerprint, $this->credential($target)->dispatchFingerprint());
+            self::assertSame(1, (int) DB::table('wp_ai_bridge_credential_metadata')->value('generation'));
+        }
+    }
+
+    public function test_ambiguous_recovery_cannot_follow_a_retired_route(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $relay = $this->relay('replacement-route', 46081);
+        $this->failRefreshOnce = true;
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $bindings = app(TargetTransportBinding::class);
+
+        Sleep::fake();
+        Sleep::whenFakingSleep(function () use ($target, $relay, $bindings): void {
+            DB::table('wp_ai_bridge_refresh_intents')->update(['created_at' => now()->subSeconds(20)]);
+            self::assertTrue($bindings->change($target->fresh(), $bindings->revision($target->fresh()), $relay->relay_id));
+        });
+        try {
+            $service->routingContextWithRecovery($target);
+            self::fail('Recovery followed a different route.');
+        } catch (WpAiBridgeTargetConnectionException|OutboundRequestException $exception) {
+            self::assertContains($exception->reason, ['target_changed', 'refresh_conflict', 'relay_unavailable']);
+        } finally {
+            Sleep::fake(false);
+        }
+
+        self::assertSame(1, $this->refreshCalls);
+        self::assertSame(1, (int) DB::table('wp_ai_bridge_refresh_intents')->value('attempts'));
+        self::assertSame(1, (int) DB::table('wp_ai_bridge_credential_metadata')->value('generation'));
+        self::assertSame(1, $target->fresh()->transport_revision);
+    }
+
     public function test_concurrent_reader_reuses_only_a_committed_refresh_successor(): void
     {
         $target = $this->target('alpha');
@@ -720,6 +857,96 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
         } finally {
             Sleep::fake(false);
+        }
+    }
+
+    /** @return array<string,array{string}> */
+    public static function concurrentSuccessorChanges(): array
+    {
+        return [
+            'different pending intent' => ['replacement'],
+            'expired successor' => ['expired'],
+            'superseded successor grant' => ['grant'],
+        ];
+    }
+
+    #[DataProvider('concurrentSuccessorChanges')]
+    public function test_waiting_reader_cannot_acquire_unrelated_or_new_refresh_authority(string $change): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $this->expire($target);
+        $this->seedPendingRefresh($target);
+        $replacementId = (string) Str::ulid();
+        $sleeps = 0;
+
+        Sleep::fake();
+        Sleep::whenFakingSleep(function () use ($target, $change, $replacementId, &$sleeps): void {
+            if (++$sleeps !== 1) {
+                return;
+            }
+
+            // Unlike the locked-claim barrier, this state is committed before
+            // the waiting reader reacquires its Target lock.
+            if ($change === 'replacement') {
+                DB::table('wp_ai_bridge_refresh_intents')->update([
+                    'id' => $replacementId, 'created_at' => now()->subSeconds(20),
+                ]);
+
+                return;
+            }
+
+            DB::transaction(function () use ($target, $change): void {
+                $credential = $this->credential($target);
+                $vault = app(WpAiBridgeTargetVault::class);
+                $prior = $vault->openCredential($target, $credential);
+                $expiry = $change === 'expired' ? now()->subMinute() : now()->addHour();
+                $credential->forceFill(['encrypted_payload' => $vault->sealCredential(
+                    $target, $prior['client_id'], $prior['resource_url'],
+                    'alpha-concurrent-access', 'alpha-concurrent-refresh', $expiry, $prior['scopes'],
+                )])->save();
+                if ($change === 'grant') {
+                    $credential->supersedeAuthority();
+                }
+                DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $credential->getKey())
+                    ->update(['generation' => 2, 'access_expires_at' => $expiry, 'refresh_due_at' => now()->subSecond()]);
+                DB::table('wp_ai_bridge_refresh_intents')->delete();
+            });
+        });
+
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        try {
+            $service->routingContextWithRecovery($target, authorize: static fn (): bool => false);
+            self::fail('A waiting reader accepted unrelated or expired refresh authority.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertContains($exception->reason, ['refresh_pending', 'refresh_conflict']);
+        } finally {
+            Sleep::fake(false);
+        }
+
+        self::assertSame(1, $sleeps);
+        self::assertSame(0, $this->refreshCalls);
+        if ($change === 'replacement') {
+            $this->assertDatabaseHas('wp_ai_bridge_refresh_intents', ['id' => $replacementId, 'attempts' => 1]);
+            self::assertSame(1, (int) DB::table('wp_ai_bridge_credential_metadata')->value('generation'));
+
+            return;
+        }
+
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+        self::assertSame(2, (int) DB::table('wp_ai_bridge_credential_metadata')->value('generation'));
+        if ($change === 'expired') {
+            try {
+                $service->routingContext($target, authorize: static fn (): bool => false);
+                self::fail('Fresh ordinary rotation requires current admission.');
+            } catch (WpAiBridgeTargetConnectionException $exception) {
+                self::assertSame('forbidden', $exception->reason);
+            }
+            self::assertSame(0, $this->refreshCalls);
+            self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
+            self::assertSame('alpha-rotated-access',
+                $service->routingContext($target, authorize: static fn (): bool => true)['access_token']);
+            self::assertSame(1, $this->refreshCalls);
         }
     }
 
@@ -1446,7 +1673,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         try {
             $service->reconcileRevokedRefresh($target, (string) $intent->id, static function () use (&$auditRecorded): void {
                 $auditRecorded = true;
-            });
+            }, static fn (): bool => true);
             self::fail('Manual reconciliation cannot settle before 60 + 15 + 15 seconds.');
         } catch (WpAiBridgeTargetConnectionException $exception) {
             self::assertSame('refresh_settling', $exception->reason);
@@ -1461,7 +1688,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         ]);
         $service->reconcileRevokedRefresh($target, (string) $intent->id, static function () use (&$auditRecorded): void {
             $auditRecorded = true;
-        });
+        }, static fn (): bool => true);
         self::assertTrue($auditRecorded);
         self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->count());
         self::assertSame(0, DB::table('target_credentials')->count());
@@ -2062,6 +2289,33 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             app(WpAiBridgeTargetConnectionService::class)->accessToken($target));
     }
 
+    public function test_idle_maintenance_cannot_recover_a_replacement_intent(): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        DB::table('wp_ai_bridge_credential_metadata')->where('credential_id', $this->credential($target)->getKey())
+            ->update(['refresh_due_at' => now()->subMinute()]);
+        $this->failRefreshOnce = true;
+        $replacementId = (string) Str::ulid();
+
+        Sleep::fake();
+        Sleep::whenFakingSleep(static function () use ($replacementId): void {
+            DB::table('wp_ai_bridge_refresh_intents')->update([
+                'id' => $replacementId, 'created_at' => now()->subSeconds(20),
+            ]);
+        });
+        try {
+            self::assertSame(1, Artisan::call('gateway:wordpress-credentials-maintain'));
+            Sleep::assertSleptTimes(1);
+        } finally {
+            Sleep::fake(false);
+        }
+
+        self::assertSame(1, $this->refreshCalls);
+        $this->assertDatabaseHas('wp_ai_bridge_refresh_intents', ['id' => $replacementId, 'attempts' => 1]);
+        self::assertSame(1, (int) DB::table('wp_ai_bridge_credential_metadata')->value('generation'));
+    }
+
     public function test_idle_refresh_terminal_rejection_never_queues_automatic_recovery(): void
     {
         $target = $this->target('alpha');
@@ -2319,7 +2573,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         try {
             $service->reconcileRevokedRefresh($target, $intent->id, static function (): void {
                 throw new \RuntimeException('Synthetic mandatory audit database failure.');
-            });
+            }, static fn (): bool => true);
             self::fail('An absent mandatory audit was treated as completed reconciliation.');
         } catch (\RuntimeException $exception) {
             self::assertSame('Synthetic mandatory audit database failure.', $exception->getMessage());
@@ -2587,6 +2841,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
                 static function (): void {
                     self::fail('Invalid cancel wrote audit.');
                 },
+                static fn (): bool => true,
             );
             self::fail('Unknown revocation was cancelled.');
         } catch (WpAiBridgeTargetConnectionException $exception) {
@@ -2651,6 +2906,74 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             'target_id' => 'alpha', 'operation' => 'wordpress-disconnect-cancel-verified',
             'outcome' => 'success',
         ]);
+        self::assertSame(['alpha-refresh'], $this->revocationTokenAttempts);
+    }
+
+    /** @return array<string,array{string}> */
+    public static function cancellationAuthorityChanges(): array
+    {
+        return [
+            'connect denial' => ['connect'],
+            'disconnect denial' => ['disconnect'],
+            'scope removed' => ['scope'],
+            'account disabled' => ['account'],
+        ];
+    }
+
+    #[DataProvider('cancellationAuthorityChanges')]
+    public function test_cancel_disconnect_rechecks_current_control_after_catalog_response(string $change): void
+    {
+        $target = $this->target('alpha');
+        $admin = $this->user('administrator', 'selected');
+        DB::table('user_target_access')->insert([
+            'user_id' => $admin->getKey(), 'target_record_id' => $target->getKey(), 'allowed' => true,
+        ]);
+        $this->pair($target);
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $this->revokeFailureMode = 'pre_dispatch';
+        try {
+            $service->disconnect($target);
+            self::fail('Expected a proven never-sent revoke.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('network_failure', $exception->reason);
+        }
+        $intent = DB::table('wp_ai_bridge_revocation_intents')->sole();
+        $before = $this->credential($target)->dispatchFingerprint();
+        $this->allowProtectedCatalogProbe = true;
+        $this->revokeFailureMode = null;
+        $this->duringCatalogProbe = static function () use ($admin, $change): void {
+            if ($change === 'account') {
+                User::query()->whereKey($admin->getKey())->update(['access_enabled' => false]);
+            } elseif ($change === 'scope') {
+                DB::table('user_target_access')->where('user_id', $admin->getKey())->delete();
+            } else {
+                DB::table('user_permission_denials')->insert([
+                    'user_id' => $admin->getKey(),
+                    'permission' => ($change === 'connect' ? GatewayPermission::TargetsConnect : GatewayPermission::TargetsDisconnect)->value,
+                ]);
+            }
+        };
+        $payload = ['intent_id' => $intent->id, 'confirm_target_id' => 'alpha',
+            'current_password' => 'CorrectHorse!234'];
+        $this->actingAs($admin)->post('/admin/targets/alpha/cancel-disconnect', $payload)
+            ->assertSessionHasErrors('target')->assertSessionHas('diagnostic_code', 'forbidden');
+        self::assertSame(1, $this->catalogProbeCalls);
+        $this->assertDatabaseHas('wp_ai_bridge_revocation_intents', [
+            'id' => $intent->id, 'phase' => 'retryable', 'token_confirmed' => 0,
+        ]);
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        self::assertSame($before, $this->credential($target)->dispatchFingerprint());
+        $this->assertDatabaseMissing('activity_events', [
+            'operation' => 'wordpress-disconnect-cancel-verified', 'outcome' => 'success',
+        ]);
+
+        $this->duringCatalogProbe = null;
+        $this->actingAs($this->user('owner', 'all'))->post('/admin/targets/alpha/cancel-disconnect', $payload)
+            ->assertAdminRedirect('/admin/targets/alpha')->assertSessionHas('status');
+        self::assertSame(2, $this->catalogProbeCalls);
+        self::assertSame(0, DB::table('wp_ai_bridge_revocation_intents')->count());
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        self::assertSame($before, $this->credential($target)->dispatchFingerprint());
         self::assertSame(['alpha-refresh'], $this->revocationTokenAttempts);
     }
 
@@ -2745,6 +3068,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
                 $target, $id, static function (): void {
                     throw new \RuntimeException('Audit storage unavailable');
                 },
+                static fn (): bool => true,
             );
             self::fail('Failed audit committed local delete.');
         } catch (\RuntimeException $exception) {
@@ -2760,6 +3084,81 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         ]);
         self::assertSame(0, DB::table('target_credentials')->count());
         self::assertSame(TargetConnectionState::Disconnected, $target->refresh()->connection_state);
+    }
+
+    /** @return array<string,array{string}> */
+    public static function attestationOperations(): array
+    {
+        return ['refresh' => ['refresh'], 'disconnect' => ['disconnect']];
+    }
+
+    #[DataProvider('attestationOperations')]
+    public function test_attestation_rechecks_control_under_target_lock(string $operation): void
+    {
+        $target = $this->target('alpha');
+        $admin = $this->user('administrator', 'selected');
+        DB::table('user_target_access')->insert([
+            'user_id' => $admin->getKey(), 'target_record_id' => $target->getKey(), 'allowed' => true,
+        ]);
+        $this->pair($target);
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        if ($operation === 'refresh') {
+            $this->expire($target);
+            $this->failRefreshOnce = true;
+            $table = 'wp_ai_bridge_refresh_intents';
+            try {
+                $service->accessToken($target);
+                self::fail('Expected ambiguous refresh.');
+            } catch (WpAiBridgeTargetConnectionException $exception) {
+                self::assertSame('refresh_ambiguous', $exception->reason);
+            }
+            DB::table($table)->update(['created_at' => now()->subMinutes(3)]);
+        } else {
+            $this->failRevocation = true;
+            $table = 'wp_ai_bridge_revocation_intents';
+            try {
+                $service->disconnect($target);
+                self::fail('Expected unresolved revocation.');
+            } catch (WpAiBridgeTargetConnectionException) {
+            }
+            DB::table($table)->update(['updated_at' => now()->subMinutes(3)]);
+        }
+
+        $intentId = (string) DB::table($table)->value('id');
+        $before = $this->credential($target)->dispatchFingerprint();
+        $refreshCalls = $this->refreshCalls;
+        $revokeAttempts = $this->revocationTokenAttempts;
+        $boundary = false;
+        DB::listen(static function (QueryExecuted $query) use ($admin, &$boundary): void {
+            $sql = str_replace(['"', chr(96)], '', strtolower($query->sql));
+            if ($boundary || ! str_contains($sql, 'from targets where targets.id = ?')
+                || ! in_array('withLockedTarget', array_column(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS), 'function'), true)) {
+                return;
+            }
+            $boundary = true;
+            DB::table('user_permission_denials')->insert([
+                'user_id' => $admin->getKey(), 'permission' => GatewayPermission::TargetsDisconnect->value,
+            ]);
+        });
+        $payload = [
+            'intent_id' => $intentId, 'confirm_target_id' => 'alpha',
+            'wordpress_client_revoked' => 'yes', 'other_clients_affected' => 'yes',
+            'current_password' => 'CorrectHorse!234',
+        ];
+        $path = '/admin/targets/alpha/reconcile-'.$operation;
+        $this->actingAs($admin)->post($path, $payload)
+            ->assertSessionHasErrors('target')->assertSessionHas('diagnostic_code', 'forbidden');
+        self::assertTrue($boundary);
+        self::assertSame($before, $this->credential($target)->dispatchFingerprint());
+        $this->assertDatabaseHas($table, ['id' => $intentId]);
+        $this->assertDatabaseMissing('activity_events', [
+            'operation' => 'wordpress-'.$operation.'-remote-revocation-attested', 'outcome' => 'operator-attested',
+        ]);
+        $this->actingAs($this->user('owner', 'all'))->post($path, $payload)->assertSessionHas('status');
+        self::assertSame(0, DB::table($table)->count());
+        self::assertSame(0, DB::table('target_credentials')->count());
+        self::assertSame($refreshCalls, $this->refreshCalls);
+        self::assertSame($revokeAttempts, $this->revocationTokenAttempts);
     }
 
     public function test_disconnect_replay_fence_migration_prevents_downgrade_with_unresolved_intents(): void
@@ -3375,6 +3774,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
                 && ($rpc['params']['arguments']['ability_name'] ?? null) === 'wp-ai-bridge/abilities-read'
                 && $request->hasHeader('Authorization', 'Bearer '.explode('.', $host)[0].'-access')) {
                 $this->catalogProbeCalls++;
+                $this->duringCatalogProbe?->__invoke();
 
                 return Http::response([
                     'jsonrpc' => '2.0', 'id' => 2,

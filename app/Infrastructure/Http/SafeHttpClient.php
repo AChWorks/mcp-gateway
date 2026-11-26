@@ -5,6 +5,7 @@ namespace App\Infrastructure\Http;
 use App\Application\Operations\OperationalSettings;
 use App\Infrastructure\Connectors\Relay\LocalSocks5Route;
 use App\Support\OperationTiming;
+use Closure;
 use GuzzleHttp\Exception\ConnectException as GuzzleConnectException;
 use GuzzleHttp\TransferStats;
 use Illuminate\Http\Client\ConnectionException;
@@ -22,21 +23,21 @@ final class SafeHttpClient
     ) {}
 
     /** @param array<string, string> $headers */
-    public function get(string $url, array $headers = [], ?LocalSocks5Route $relay = null): SafeHttpResponse
+    public function get(string $url, array $headers = [], ?LocalSocks5Route $relay = null, ?Closure $beforeDispatch = null): SafeHttpResponse
     {
-        return $this->send('GET', $url, $headers, [], 'none', relay: $relay);
+        return $this->send('GET', $url, $headers, [], 'none', relay: $relay, beforeDispatch: $beforeDispatch);
     }
 
     /**
      * On-demand API schema fetch has its own configurable JSON/YAML budget,
      * independent of the small WordPress operation response default.
      */
-    public function getApiDocument(string $url, ?LocalSocks5Route $relay = null): SafeHttpResponse
+    public function getApiDocument(string $url, ?LocalSocks5Route $relay = null, ?Closure $beforeDispatch = null): SafeHttpResponse
     {
         $budget = (int) config('bridge.http.api_document_max_bytes', 2097152);
 
         return $this->send('GET', $url, [], [], 'none',
-            min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, $budget)), relay: $relay);
+            min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, $budget)), relay: $relay, beforeDispatch: $beforeDispatch);
     }
 
     /** Only the allowlisted ChatGPT file origin may include signed queries. */
@@ -52,31 +53,31 @@ final class SafeHttpClient
      *
      * @param  resource  $sink
      */
-    public function streamChatgptFile(string $url, int $maxBytes, mixed $sink, int $timeoutSeconds): SafeHttpResponse
+    public function streamChatgptFile(string $url, int $maxBytes, mixed $sink, int $timeoutSeconds, ?Closure $beforeDispatch = null): SafeHttpResponse
     {
         if (! is_resource($sink) || $maxBytes < 1 || $timeoutSeconds < 1) {
             throw new OutboundRequestException('file_staging_unavailable', 'Private file staging is unavailable.');
         }
 
-        return $this->send('GET', $url, [], [], 'none', $maxBytes, null, true, $sink, $timeoutSeconds);
+        return $this->send('GET', $url, [], [], 'none', $maxBytes, null, true, $sink, $timeoutSeconds, beforeDispatch: $beforeDispatch);
     }
 
     /**
      * @param  array<string, scalar|null>  $form
      * @param  array<string, string>  $headers
      */
-    public function postForm(string $url, array $form, array $headers = [], ?LocalSocks5Route $relay = null): SafeHttpResponse
+    public function postForm(string $url, array $form, array $headers = [], ?LocalSocks5Route $relay = null, ?Closure $beforeDispatch = null): SafeHttpResponse
     {
-        return $this->send('POST', $url, $headers, $form, 'form', relay: $relay);
+        return $this->send('POST', $url, $headers, $form, 'form', relay: $relay, beforeDispatch: $beforeDispatch);
     }
 
     /**
      * @param  array<string, mixed>  $json
      * @param  array<string, string>  $headers
      */
-    public function postJson(string $url, array $json, array $headers = [], ?int $responseLimitBytes = null, ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null): SafeHttpResponse
+    public function postJson(string $url, array $json, array $headers = [], ?int $responseLimitBytes = null, ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null, ?Closure $beforeDispatch = null): SafeHttpResponse
     {
-        return $this->send('POST', $url, $headers, $json, 'json', $responseLimitBytes, $timing, relay: $relay);
+        return $this->send('POST', $url, $headers, $json, 'json', $responseLimitBytes, $timing, relay: $relay, beforeDispatch: $beforeDispatch);
     }
 
     /**
@@ -92,7 +93,7 @@ final class SafeHttpClient
     public function requestApi(
         string $method, string $url, array $headers = [], array $query = [],
         ?string $rawBody = null, ?string $contentType = null,
-        ?array $formFields = null, ?array $multipartParts = null, ?LocalSocks5Route $relay = null,
+        ?array $formFields = null, ?array $multipartParts = null, ?LocalSocks5Route $relay = null, ?Closure $beforeDispatch = null,
     ): SafeHttpResponse {
         if (preg_match('/^[A-Z][A-Z0-9-]*$/D', $method) !== 1 || in_array($method, ['CONNECT', 'TRACE'], true)) {
             throw new OutboundRequestException('invalid_input', 'Unsupported outbound HTTP method.', [], true);
@@ -109,13 +110,13 @@ final class SafeHttpClient
 
         return $this->send($method, $url, $headers, $payload, $format,
             responseLimitBytes: min(self::ABSOLUTE_MAX_RESPONSE_BYTES, max(1024, (int) config('bridge.http.api_response_max_bytes', 1048576))),
-            relay: $relay, query: $query, rawContentType: $contentType);
+            relay: $relay, query: $query, rawContentType: $contentType, beforeDispatch: $beforeDispatch);
     }
 
     /** @param array<string, string> $headers */
-    public function delete(string $url, array $headers = [], ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null): SafeHttpResponse
+    public function delete(string $url, array $headers = [], ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null, ?Closure $beforeDispatch = null): SafeHttpResponse
     {
-        return $this->send('DELETE', $url, $headers, [], 'none', null, $timing, relay: $relay);
+        return $this->send('DELETE', $url, $headers, [], 'none', null, $timing, relay: $relay, beforeDispatch: $beforeDispatch);
     }
 
     /**
@@ -124,7 +125,7 @@ final class SafeHttpClient
      * @param  'none'|'form'|'json'|'raw_body'|'multipart'  $format
      * @param  array<string,mixed>  $query
      */
-    private function send(string $method, string $url, array $headers, array|string $payload, string $format, ?int $responseLimitBytes = null, ?OperationTiming $timing = null, bool $chatgptFile = false, mixed $fileSink = null, ?int $fileTimeoutSeconds = null, ?LocalSocks5Route $relay = null, array $query = [], ?string $rawContentType = null): SafeHttpResponse
+    private function send(string $method, string $url, array $headers, array|string $payload, string $format, ?int $responseLimitBytes = null, ?OperationTiming $timing = null, bool $chatgptFile = false, mixed $fileSink = null, ?int $fileTimeoutSeconds = null, ?LocalSocks5Route $relay = null, array $query = [], ?string $rawContentType = null, ?Closure $beforeDispatch = null): SafeHttpResponse
     {
         $network = $this->settings->httpTimeoutsSeconds();
         $connectTimeout = $network['connect'];
@@ -200,6 +201,16 @@ final class SafeHttpClient
                 ->timeout($remainingSeconds)
                 ->accept($chatgptFile ? '*/*' : 'application/json')
                 ->withHeaders($chatgptFile ? ['Accept-Encoding' => 'identity', ...$headers] : $headers);
+
+            // DNS and request preparation may have outlived the original
+            // authority. Check the exact operation at the final local send
+            // boundary; never hold a database lock through the wire call.
+            $beforeDispatch?->__invoke();
+            $remainingSeconds = ($deadlineNs - hrtime(true)) / 1_000_000_000;
+            if ($remainingSeconds <= 0) {
+                throw new OutboundRequestException('network_failure', 'Outbound request deadline expired before dispatch.', ['failure_stage' => 'deadline_before_dispatch'], true);
+            }
+            $request->connectTimeout(min($connectTimeout, $remainingSeconds))->timeout($remainingSeconds);
 
             $httpStarted = $timing?->stamp() ?? 0;
             $timing?->outboundCall();

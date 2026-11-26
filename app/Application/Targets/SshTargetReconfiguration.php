@@ -13,6 +13,7 @@ use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Support\CorrelationId;
+use Closure;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use phpseclib4\Crypt\PublicKeyLoader;
@@ -36,7 +37,7 @@ final readonly class SshTargetReconfiguration
     }
 
     /** @param array<string,mixed> $input */
-    public function update(Target $target, array $input): bool
+    public function update(Target $target, array $input, ?Closure $authorize = null): bool
     {
         try {
             $endpoint = SshRegisteredEndpoint::fromInput(
@@ -74,9 +75,12 @@ final readonly class SshTargetReconfiguration
 
         return DB::transaction(function () use (
             $target, $input, $endpoint, $pin, $method, $password, $key, $passphrase,
-            $routeMode, $reversePort, $tunnelIdentity,
+            $routeMode, $reversePort, $tunnelIdentity, $authorize,
         ): bool {
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
+            if ($authorize !== null && ! $authorize()) {
+                throw new TargetConnectorFailure(__('This action is unauthorized.'), null, 'forbidden');
+            }
             $config = SshTargetConfig::query()->where('target_record_id', $locked->getKey())->lockForUpdate()->firstOrFail();
             $routeChanged = $routeMode !== ($locked->usesReverseRoute() ? 'reverse' : 'direct')
                 || $reversePort !== $locked->reverse_listener_port

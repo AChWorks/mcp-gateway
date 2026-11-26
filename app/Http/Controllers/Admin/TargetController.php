@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AccessControl;
 use App\Application\Access\AdministratorPasswordConfirmation;
+use App\Application\Access\OperationAdmission;
 use App\Application\Admin\TargetConnectorAdmin;
 use App\Application\Targets\SshManagedReverseHostReadiness;
 use App\Application\Targets\TargetConnectorAdapter;
@@ -282,7 +283,7 @@ final class TargetController extends Controller
         }
 
         try {
-            $target = $adapter->register($validated, $user);
+            $target = $adapter->register($validated, $user, app(OperationAdmission::class)->globalGuard($user, GatewayPermission::TargetsCreate));
         } catch (TargetConnectorFailure $exception) {
             $code = $exception->reason ?? 'registration_rejected';
             // An adapter can establish whether an outbound request happened;
@@ -403,10 +404,14 @@ final class TargetController extends Controller
     {
         Gate::authorize(GatewayPermission::TargetsRemove->value, $target);
         $request->validate(['confirm_remove' => ['required', 'in:yes']]);
+        $actor = $request->user();
+        abort_unless($actor instanceof User, 403);
+        $authorize = app(OperationAdmission::class)->targetGuard($actor, $target, [GatewayPermission::TargetsRemove]);
 
         try {
-            DB::transaction(static function () use ($target, $activity, $connectors): void {
+            DB::transaction(static function () use ($target, $activity, $connectors, $authorize): void {
                 $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
+                abort_unless($authorize(), 403);
                 $id = $locked->getKey();
 
                 if (SshManagedReverseEnrollment::query()
@@ -464,22 +469,23 @@ final class TargetController extends Controller
                 'confirm_target_id' => __('Type the exact Target ID to confirm local removal.'),
             ]);
         }
-        $confirmation->confirm($request);
-        // A local-only forget must not leave a live control key installed in
-        // the host reader file after the enrollment DB row cascades away.
-        if (SshManagedReverseEnrollment::query()
-            ->where('target_record_id', $target->getKey())
-            ->where(static fn ($query) => $query->where('state', '!=', 'revoked')
-                ->orWhere('publication_pending', true))->exists()) {
-            throw ValidationException::withMessages([
-                'target' => __('Revoke the managed Reverse SSH route first. Forgetting locally cannot silently leave its host control key active.'),
-            ]);
-        }
-
-        DB::transaction(static function () use ($target, $activity): void {
-            // Lock the original immutable record, not a potentially reused
-            // public target_id. Deleting/re-enrolling is never permission reuse.
+        $actor = $confirmation->confirm($request);
+        $authorize = app(OperationAdmission::class)->targetGuard($actor, $target, [GatewayPermission::TargetsRemove]);
+        DB::transaction(static function () use ($target, $activity, $authorize): void {
+            // Lock the original immutable record before the current grant
+            // and local credential removal decision.
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
+            abort_unless($authorize(), 403);
+            // A local-only forget must not leave a live control key installed in
+            // the host reader file after the enrollment DB row cascades away.
+            if (SshManagedReverseEnrollment::query()
+                ->where('target_record_id', $locked->getKey())
+                ->where(static fn ($query) => $query->where('state', '!=', 'revoked')
+                    ->orWhere('publication_pending', true))->exists()) {
+                throw ValidationException::withMessages([
+                    'target' => __('Revoke the managed Reverse SSH route first. Forgetting locally cannot silently leave its host control key active.'),
+                ]);
+            }
 
             $activity->recordRequired(
                 CorrelationId::current(),

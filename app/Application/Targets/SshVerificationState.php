@@ -43,6 +43,33 @@ final readonly class SshVerificationState
         return $attemptId;
     }
 
+    public function assertCurrentAttempt(Target $target, SshTargetConfig $config,
+        TargetCredential $credential, string $attemptId): void
+    {
+        $current = Target::query()->find($target->getKey());
+        $currentConfig = SshTargetConfig::query()->find($config->getKey());
+        $currentCredential = TargetCredential::query()->find($credential->getKey());
+        if (! $this->sameIdentity($current, $currentConfig, $currentCredential, $target, $config, $credential)) {
+            throw new SshTargetConnectionException('target_changed');
+        }
+        if (! hash_equals($attemptId, (string) $currentConfig?->verification_attempt_id)) {
+            throw new SshTargetConnectionException('verification_superseded');
+        }
+    }
+
+    public function abandon(Target $target, SshTargetConfig $config, TargetCredential $credential, string $attemptId): void
+    {
+        DB::transaction(function () use ($target, $config, $credential, $attemptId): void {
+            $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->first();
+            $currentConfig = SshTargetConfig::query()->find($config->getKey());
+            $currentCredential = TargetCredential::query()->find($credential->getKey());
+            if ($this->sameIdentity($locked, $currentConfig, $currentCredential, $target, $config, $credential)
+                && $currentConfig !== null && hash_equals($attemptId, (string) $currentConfig->verification_attempt_id)) {
+                $currentConfig->forceFill(['verification_attempt_id' => null])->save();
+            }
+        });
+    }
+
     public function succeeded(
         Target $target, SshTargetConfig $config, TargetCredential $credential,
         string $attemptId, string $peerIp,

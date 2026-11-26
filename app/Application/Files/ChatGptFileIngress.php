@@ -4,6 +4,7 @@ namespace App\Application\Files;
 
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
+use Closure;
 use Throwable;
 
 /**
@@ -118,7 +119,7 @@ final readonly class ChatGptFileIngress
      *
      * @throws OutboundRequestException
      */
-    public function download(array $file, int $maxBytes, int $timeoutSeconds, string $mode): array
+    public function download(array $file, int $maxBytes, int $timeoutSeconds, string $mode, ?Closure $beforeDispatch = null): array
     {
         if (! self::validFile($file) || $maxBytes < 1 || $timeoutSeconds < 1) {
             throw new OutboundRequestException('invalid_file_input', 'A supported ChatGPT file input is required.');
@@ -135,7 +136,7 @@ final readonly class ChatGptFileIngress
             // The signed-source GET keeps its short-lived HTTPS budget even when
             // the subsequent SSH transfer has a longer Owner-selected deadline.
             $this->http->streamChatgptFile($file['download_url'], $maxBytes, $stream,
-                $mode === 'ssh' ? min(120, $timeoutSeconds) : $timeoutSeconds);
+                $mode === 'ssh' ? min(120, $timeoutSeconds) : $timeoutSeconds, $beforeDispatch);
             $stat = fstat($stream);
             if (! is_array($stat) || $stat['size'] < 0
                 || $stat['size'] > $maxBytes || fseek($stream, 0) !== 0) {

@@ -28,12 +28,12 @@ final readonly class SshVerifiedTransport
     public function authenticate(
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
-        ?SshReverseRoute $route = null, ?LocalSocks5Route $relay = null,
+        ?SshReverseRoute $route = null, ?LocalSocks5Route $relay = null, ?Closure $beforeLogin = null,
     ): string {
         return $this->withAuthenticatedSession(
             $endpoint, $pin, $authMethod, $secret, $passphrase,
             static fn (SSH2 $ssh, string $peerIp): string => $peerIp,
-            $route, $relay,
+            $route, $relay, $beforeLogin,
         );
     }
 
@@ -47,11 +47,11 @@ final readonly class SshVerifiedTransport
     public function withAuthenticatedSession(
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
-        Closure $operation, ?SshReverseRoute $route = null, ?LocalSocks5Route $relay = null,
+        Closure $operation, ?SshReverseRoute $route = null, ?LocalSocks5Route $relay = null, ?Closure $beforeLogin = null,
     ): mixed {
         return $this->withAuthenticatedOperation(
             $endpoint, $pin, $authMethod, $secret, $passphrase, $operation, false,
-            null, $route, $relay,
+            null, $route, $relay, $beforeLogin,
         );
     }
 
@@ -60,7 +60,7 @@ final readonly class SshVerifiedTransport
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
         Closure $operation, ?int $deadlineNs = null, ?SshReverseRoute $route = null,
-        ?LocalSocks5Route $relay = null,
+        ?LocalSocks5Route $relay = null, ?Closure $beforeLogin = null,
     ): mixed {
         return $this->withAuthenticatedOperation(
             $endpoint, $pin, $authMethod, $secret, $passphrase,
@@ -71,7 +71,7 @@ final readonly class SshVerifiedTransport
 
                 return $operation($ssh, $peerIp);
             },
-            true, $deadlineNs, $route, $relay,
+            true, $deadlineNs, $route, $relay, $beforeLogin,
         );
     }
 
@@ -80,7 +80,7 @@ final readonly class SshVerifiedTransport
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
         Closure $operation, bool $requireSftp, ?int $deadlineNs = null,
-        ?SshReverseRoute $route = null, ?LocalSocks5Route $relay = null,
+        ?SshReverseRoute $route = null, ?LocalSocks5Route $relay = null, ?Closure $beforeLogin = null,
     ): mixed {
         if ($route !== null && $relay !== null) {
             throw new SshTargetConnectionException('egress_denied');
@@ -216,6 +216,10 @@ final readonly class SshVerifiedTransport
                 throw new SshTargetConnectionException('host_key_mismatch');
             }
 
+            // KEX and DNS are network boundaries. Never present stored
+            // credentials after the originating authorization was retired.
+            $beforeLogin?->__invoke();
+            $this->assertDeadline($deadlineNs);
             try {
                 $authenticated = $authMethod === 'password'
                     ? $ssh->login($endpoint->username, $secret)

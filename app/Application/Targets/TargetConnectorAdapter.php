@@ -4,6 +4,7 @@ namespace App\Application\Targets;
 
 use App\Domain\Targets\Target;
 use App\Models\User;
+use Closure;
 
 interface TargetConnectorAdapter
 {
@@ -22,7 +23,7 @@ interface TargetConnectorAdapter
     public function safeOldInputFields(): array;
 
     /** @param array<string, mixed> $input */
-    public function register(array $input, ?User $creator = null): Target;
+    public function register(array $input, ?User $creator = null, ?Closure $authorize = null): Target;
 
     public function registrationStatus(): string;
 
@@ -41,15 +42,15 @@ interface TargetConnectorAdapter
     public function configurationRevision(Target $target): string;
 
     /** @param array<string, mixed> $input */
-    public function updateConfiguration(Target $target, array $input): TargetConnectorResult;
+    public function updateConfiguration(Target $target, array $input, ?Closure $authorize = null): TargetConnectorResult;
 
-    public function connect(Target $target): TargetConnectorResult;
+    public function connect(Target $target, ?Closure $authorize = null): TargetConnectorResult;
 
-    public function reconnect(Target $target): TargetConnectorResult;
+    public function reconnect(Target $target, ?Closure $authorize = null): TargetConnectorResult;
 
-    public function disconnect(Target $target): TargetConnectorResult;
+    public function disconnect(Target $target, ?Closure $authorize = null): TargetConnectorResult;
 
-    public function test(Target $target): TargetConnectorResult;
+    public function test(Target $target, ?Closure $authorize = null): TargetConnectorResult;
 
     /** @return array<string, mixed> */
     public function adminDetails(Target $target): array;

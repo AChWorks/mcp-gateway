@@ -92,9 +92,9 @@ final readonly class AccessTokenRepository implements AccessTokenRepositoryInter
      * effect boundary. Identity is supplied only by the verified HTTP
      * middleware, never by MCP Tool arguments or caller-controlled metadata.
      */
-    public function authorizesDispatch(
+    public function dispatchAuthorizationId(
         string $tokenId, int $userId, string $clientId, string $profileKey, int $profileGeneration,
-    ): bool {
+    ): ?string {
         $row = $this->findToken($tokenId);
         if ($row === null || ! $this->tokenUsable($row)
             || (int) $row->user_id !== $userId
@@ -105,7 +105,7 @@ final readonly class AccessTokenRepository implements AccessTokenRepositoryInter
             || (string) $row->authorization_resource !== (string) config('oauth.resource')
             || ! hash_equals((string) $row->authorization_resource_hash,
                 hash('sha256', (string) config('oauth.resource')))) {
-            return false;
+            return null;
         }
 
         $scope = (string) config('oauth.scope');
@@ -113,7 +113,8 @@ final readonly class AccessTokenRepository implements AccessTokenRepositoryInter
         $consentScopes = json_decode((string) $row->authorization_scopes, true);
 
         return is_array($tokenScopes) && in_array($scope, $tokenScopes, true)
-            && is_array($consentScopes) && in_array($scope, $consentScopes, true);
+            && is_array($consentScopes) && in_array($scope, $consentScopes, true)
+            ? (string) $row->authorization_id : null;
     }
 
     private function findToken(string $tokenId): ?object
@@ -124,6 +125,7 @@ final readonly class AccessTokenRepository implements AccessTokenRepositoryInter
             ->where('tokens.id', $tokenId)
             ->select([
                 'tokens.user_id',
+                'tokens.authorization_id',
                 'tokens.client_id',
                 'tokens.resource',
                 'tokens.scopes',

@@ -5,8 +5,10 @@ namespace App\Http\Controllers\Admin;
 use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Domain\Access\GatewayPermission;
 use App\Http\Controllers\Controller;
+use App\Infrastructure\Activity\ActivityAttribution;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
+use App\Models\User;
 use App\Support\CorrelationId;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -100,7 +102,9 @@ final class OAuthClientAuthorizationsController extends Controller
             throw new NotFoundHttpException;
         }
 
-        DB::transaction(static function () use ($authorization, $request, $activity): void {
+        $actor = $request->user();
+        abort_unless($actor instanceof User, 403);
+        DB::transaction(static function () use ($authorization, $actor, $activity): void {
             $row = DB::table('oauth_authorizations')
                 ->where('id', $authorization)
                 ->lockForUpdate()
@@ -119,12 +123,13 @@ final class OAuthClientAuthorizationsController extends Controller
                 ->whereNull('revoked_at')
                 ->update(['revoked_at' => now(), 'updated_at' => now()]);
 
-            $request->attributes->set('oauth_client_id', (string) $row->client_id);
-            $request->attributes->set('oauth_client_profile_key', (string) $row->client_profile_key);
             $activity->recordRequired(
                 CorrelationId::current(),
                 'oauth-client-authorization-revoked',
                 'success',
+                attribution: ActivityAttribution::humanClientControl(
+                    (int) $actor->getKey(), (string) $row->client_id, (string) $row->client_profile_key,
+                ),
             );
         });
 

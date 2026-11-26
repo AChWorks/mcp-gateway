@@ -3,6 +3,7 @@
 namespace Tests\Feature\OAuth;
 
 use App\Application\Access\UserAccessManager;
+use App\Application\Access\VerifiedExecutionContext;
 use App\Application\Batch\BatchProviderResolver;
 use App\Application\Batch\TargetBatchOperationProvider;
 use App\Application\Batch\TargetBatchWorker;
@@ -721,16 +722,18 @@ final class ChatGptOAuthFlowTest extends TestCase
 
         $ownReference = (string) Str::uuid();
         $otherClientReference = (string) Str::uuid();
-        request()->attributes->set('oauth_user_id', (string) $user->getAuthIdentifier());
-        request()->attributes->set('oauth_client_profile_key', 'chatgpt');
-        request()->attributes->set('oauth_client_id', self::CLIENT_ID);
+        // Seed distinct, already verified event origins. Raw request
+        // attributes cannot replace the immutable execution context.
+        request()->attributes->set(VerifiedExecutionContext::REQUEST_ATTRIBUTE,
+            VerifiedExecutionContext::mcp($user, 'fixture-token', 'fixture-consent', self::CLIENT_ID, 'chatgpt', 1));
         app(ActivityRecorder::class)->record($ownReference, 'wordpress-ability-execute',
             'failure', $diagnosticTarget, 'downstream_rejected', [
                 'source_error_message' => 'Readable authorized diagnostic at /srv/app/source.php',
             ]);
 
-        request()->attributes->set('oauth_client_id', 'https://different.example.test/oauth/client.json');
-        request()->attributes->set('oauth_client_profile_key', 'fixture');
+        request()->attributes->set(VerifiedExecutionContext::REQUEST_ATTRIBUTE,
+            VerifiedExecutionContext::mcp($user, 'other-fixture-token', 'other-fixture-consent',
+                'https://different.example.test/oauth/client.json', 'fixture', 1));
         app(ActivityRecorder::class)->record($otherClientReference, 'wordpress-ability-execute',
             'failure', $diagnosticTarget, 'downstream_rejected', [
                 'source_error_message' => 'Foreign client diagnostic must not be read',

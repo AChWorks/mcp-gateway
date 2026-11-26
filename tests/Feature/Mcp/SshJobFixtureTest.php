@@ -22,6 +22,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Support\SftpAdmissionProbe;
 use Tests\TestCase;
 
 /** A disposable real OpenSSH fixture with a linger-enabled systemd user. */
@@ -82,7 +83,6 @@ final class SshJobFixtureTest extends TestCase
             .($streamed ? '# '.str_repeat('x', 20000)."\n" : '');
         DB::table('operational_settings')->where('id', 1)->update(['ssh_job_max_script_kib' => 64]);
 
-        $configRead = false;
         $fileChecks = 0;
         $changed = false;
         $disconnected = false;
@@ -96,19 +96,11 @@ final class SshJobFixtureTest extends TestCase
         $directory = '';
         $findStage = '';
         DB::listen(function (QueryExecuted $query) use (
-            &$configRead, &$fileChecks, &$changed, &$disconnected, &$reverified, &$finished,
+            &$fileChecks, &$changed, &$disconnected, &$reverified, &$finished,
             &$verifiedIp, &$zeroProof, &$payloadProof, &$directory, &$findStage,
             $owner, $target, $proofTarget, $config, $credential, $requestId,
         ): void {
-            $sql = str_replace(['"', chr(96)], '', strtolower($query->sql));
-            // Only consecutive original config+credential reads belong to
-            // the shared SFTP guard. Job probe/mkdir command queries must
-            // not move this mutation earlier than real script staging.
-            $fileCheck = $configRead && str_contains($sql, 'from target_credentials where target_credentials.id = ?')
-                && (string) ($query->bindings[0] ?? '') === (string) $credential->getKey();
-            $configRead = str_contains($sql, 'from ssh_direct_target_configs where ssh_direct_target_configs.id = ?')
-                && (string) ($query->bindings[0] ?? '') === (string) $config->getKey();
-            if ($finished || ! $fileCheck) {
+            if ($finished || ! SftpAdmissionProbe::readsCredential($query, (string) $credential->getKey())) {
                 return;
             }
             if ($reverified) {
@@ -118,7 +110,7 @@ final class SshJobFixtureTest extends TestCase
 
                 return;
             }
-            if ($changed || ++$fileChecks !== 3) {
+            if ($changed || ++$fileChecks !== SftpAdmissionProbe::PRE_PAYLOAD_FENCE) {
                 return;
             }
             $changed = true;
@@ -155,7 +147,7 @@ final class SshJobFixtureTest extends TestCase
             $finished = true;
         }
         self::assertTrue($changed, json_encode($denied));
-        self::assertSame(3, $fileChecks);
+        self::assertSame(SftpAdmissionProbe::PRE_PAYLOAD_FENCE, $fileChecks);
         self::assertTrue($disconnected);
         self::assertSame('127.0.0.1', $verifiedIp);
         self::assertTrue($reverified);

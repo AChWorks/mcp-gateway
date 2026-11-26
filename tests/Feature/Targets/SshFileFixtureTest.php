@@ -21,6 +21,7 @@ use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
+use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\OAuth\League\Entities\ClientEntity;
 use App\Infrastructure\OAuth\League\Entities\ScopeEntity;
@@ -36,6 +37,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use League\OAuth2\Server\CryptKey;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Support\SftpAdmissionProbe;
 use Tests\TestCase;
 
 /** Actual disposable OpenSSH SFTP fixture with an explicit loopback-only policy. */
@@ -327,7 +329,6 @@ final class SshFileFixtureTest extends TestCase
         $bearer = $mcp ? $this->fileMcpBearer($owner) : null;
         $findStage = 'find '.escapeshellarg($directory)
             ." -type f \\( -name payload -o -name '.gateway-stream-*.tmp' \\)";
-        $configRead = false;
         $fileChecks = 0;
         $changed = false;
         $reconfigured = false;
@@ -341,19 +342,11 @@ final class SshFileFixtureTest extends TestCase
         $payloadProof = null;
 
         DB::listen(function (QueryExecuted $query) use (
-            &$configRead, &$fileChecks, &$changed, &$reconfigured, &$disconnected, &$reverified,
+            &$fileChecks, &$changed, &$reconfigured, &$disconnected, &$reverified,
             &$finished, &$verifiedIp, &$zeroProof, &$payloadProof,
             $target, $proofTarget, $owner, $config, $credential, $change, $findStage,
         ): void {
-            $sql = str_replace(['"', chr(96)], '', strtolower($query->sql));
-            // Match consecutive config+credential identity reads. Command
-            // setup and reverification also read credentials, in a different
-            // order; they must not advance the SFTP-boundary counter.
-            $fileCheck = $configRead && str_contains($sql, 'from target_credentials where target_credentials.id = ?')
-                && (string) ($query->bindings[0] ?? '') === (string) $credential->getKey();
-            $configRead = str_contains($sql, 'from ssh_direct_target_configs where ssh_direct_target_configs.id = ?')
-                && (string) ($query->bindings[0] ?? '') === (string) $config->getKey();
-            if ($finished || ! $fileCheck) {
+            if ($finished || ! SftpAdmissionProbe::readsCredential($query, (string) $credential->getKey())) {
                 return;
             }
             if ($reverified) {
@@ -365,10 +358,10 @@ final class SshFileFixtureTest extends TestCase
 
                 return;
             }
-            if ($changed || ++$fileChecks !== 3) {
+            if ($changed || ++$fileChecks !== SftpAdmissionProbe::PRE_PAYLOAD_FENCE) {
                 return;
             }
-            // Post-login, pre-stage, pre-payload. QueryExecuted fires after
+            // Pre-login, post-login, pre-stage, pre-payload. QueryExecuted fires after
             // this guard's original rows were read. Mutate before returning
             // them, so only the subsequent publication guard sees the change.
             $changed = true;
@@ -429,7 +422,7 @@ final class SshFileFixtureTest extends TestCase
             $finished = true;
         }
         self::assertTrue($changed, json_encode($denied));
-        self::assertSame(3, $fileChecks);
+        self::assertSame(SftpAdmissionProbe::PRE_PAYLOAD_FENCE, $fileChecks);
         self::assertTrue($reconfigured);
         self::assertTrue($disconnected);
         self::assertSame('127.0.0.1', $verifiedIp);
@@ -818,6 +811,56 @@ final class SshFileFixtureTest extends TestCase
         self::assertSame($expected, stream_get_contents($sink));
         // Caller must discard this private sink after a failed digest check.
         fclose($sink);
+    }
+
+    public function test_real_ssh_login_boundary_denies_actor_revoked_during_dial_resolution(): void
+    {
+        $owner = $this->owner();
+        $target = $this->target('password');
+        // If login occurs before the guard, the actual fixture rejects this
+        // intentionally invalid password with authentication_failed.
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->sole();
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
+        $original = $credential->encrypted_payload;
+        $credential->supersedeAuthority(app(SshTargetVault::class)->seal($target, $config, 'invalid-fixture-password', null));
+
+        $resolver = new class($owner->getKey()) implements SshDialAddressPolicy
+        {
+            public bool $resolved = false;
+
+            public function __construct(private readonly int $actorId) {}
+
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                $this->resolved = true;
+                User::query()->whereKey($this->actorId)->update(['access_enabled' => false]);
+
+                return ['127.0.0.1'];
+            }
+        };
+        $this->app->instance(SshDialAddressPolicy::class, $resolver);
+
+        try {
+            app(SshCommandRuntime::class)->run($owner, $target, 'printf fixture');
+            self::fail('Revoked actor reached SSH command dispatch.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('forbidden', $exception->reason);
+            self::assertTrue($resolver->resolved);
+        }
+        // Positive control proves the native peer is reachable using the
+        // original material and a currently authorized actor.
+        $credential->refresh()->supersedeAuthority($original);
+        User::query()->whereKey($owner->getKey())->update(['access_enabled' => true]);
+        $this->app->instance(SshDialAddressPolicy::class, new class implements SshDialAddressPolicy
+        {
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                return ['127.0.0.1'];
+            }
+        });
+        $result = app(SshCommandRuntime::class)->run($owner->refresh(), $target, 'printf fixture');
+        self::assertSame('completed', $result['status']);
+        self::assertSame('fixture', $result['stdout']);
     }
 
     public function test_internal_streaming_api_denies_revoked_user_before_remote_login(): void

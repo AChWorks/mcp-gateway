@@ -3,7 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
-use App\Application\Mcp\McpDispatchAdmission;
+use App\Application\Access\OperationAdmission;
 use App\Application\Operations\OperationalSettings;
 use App\Domain\Access\AbilityExecutionClass;
 use App\Domain\Access\GatewayPermission;
@@ -11,6 +11,7 @@ use App\Domain\Targets\Target;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpClient;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpException;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetAuthority;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Models\User;
 use App\Support\CorrelationId;
@@ -26,8 +27,9 @@ final readonly class WordpressTargetOperations
         private ActivityRecorder $activity,
         private WpAiBridgeMcpClient $bridge,
         private ClientProfileRegistry $profiles,
-        private McpDispatchAdmission $dispatchAdmission,
+        private OperationAdmission $admission,
         private OperationalSettings $settings,
+        private WpAiBridgeTargetAuthority $authority,
     ) {}
 
     /** @return array<string, mixed> */
@@ -41,6 +43,7 @@ final readonly class WordpressTargetOperations
         ?string $search = null,
     ): array {
         $operation = 'wordpress-abilities-read';
+        $context = $this->admission->capture($user);
         $timing = OperationTiming::forWordpress();
         $lookedUpAt = $timing?->stamp() ?? 0;
         $target = $this->target($user, $target_id, GatewayPermission::WordpressAbilitiesInspect);
@@ -63,7 +66,9 @@ final readonly class WordpressTargetOperations
         }
 
         try {
-            $catalog = $this->bridge->readAbilities($target, CorrelationId::current(), $ability, $page, $per_page, $namespace, $search, $timing);
+            $catalog = $this->bridge->readAbilities($target, CorrelationId::current(),
+                fn (): bool => $this->admission->allows($context, $user, $target, GatewayPermission::WordpressAbilitiesInspect),
+                $ability, $page, $per_page, $namespace, $search, $timing);
         } catch (WpAiBridgeTargetConnectionException|WpAiBridgeMcpException $exception) {
             return $this->failed($operation, $target, $exception->reason, 'WordPress catalog request could not complete safely.', [
                 ...$this->safeDetails($exception), ...($timing?->details(true) ?? []),
@@ -75,16 +80,57 @@ final readonly class WordpressTargetOperations
         return ['ok' => true, 'target_id' => $target->target_id, 'catalog' => $catalog];
     }
 
+    public function fileScope(User $user, string $targetId): ?WordpressExecutionScope
+    {
+        $target = $this->target($user, $targetId);
+        if (! $target instanceof Target) {
+            return null;
+        }
+        $context = $this->admission->capture($user);
+        $permissions = $this->access->allowsTargetPermissions($user, $target, [
+            GatewayPermission::WordpressAbilitiesExecuteReadonly,
+            GatewayPermission::WordpressAbilitiesExecuteMutating,
+            GatewayPermission::WordpressAbilitiesExecuteDestructive,
+            GatewayPermission::WordpressAbilitiesExecuteUnclassified,
+        ]);
+        $parts = $this->authority->parts([$target])[(string) $target->getKey()] ?? null;
+        $route = $target->transportAuthorityFingerprint();
+        $binding = function () use ($target, $parts, $route): bool {
+            $fresh = Target::query()->find($target->getKey());
+
+            return $parts !== null && $fresh instanceof Target
+                && $fresh->connector_type === 'wp_ai_bridge'
+                && hash_equals($route, $fresh->transportAuthorityFingerprint())
+                && ($this->authority->parts([$fresh])[(string) $fresh->getKey()] ?? null) === $parts;
+        };
+
+        return new WordpressExecutionScope($context, $target, $permissions, $binding);
+    }
+
+    public function fileSourceAuthorized(User $user, WordpressExecutionScope $scope): bool
+    {
+        $needed = [GatewayPermission::WordpressAbilitiesExecuteReadonly, GatewayPermission::WordpressAbilitiesExecuteDestructive];
+        $current = $this->admission->permissions($scope->context, $user, $scope->target, $needed, true);
+        foreach ($needed as $permission) {
+            if (! ($scope->permissions[$permission->value] ?? false) || ! ($current[$permission->value] ?? false)) {
+                return false;
+            }
+        }
+
+        return ! TargetOperationGate::isPaused($scope->target) && ($scope->binding)();
+    }
+
     /**
      * @param  array<string, mixed>  $input
      * @return array<string, mixed>
      */
-    public function execute(User $user, string $target_id, string $ability, array $input, bool $readonlyOnly = false, bool $requiresAiAccess = false, ?Closure $beforeRemoteEffect = null): array
+    public function execute(User $user, string $target_id, string $ability, array $input, bool $readonlyOnly = false, bool $requiresAiAccess = false, ?Closure $beforeRemoteEffect = null, ?WordpressExecutionScope $scope = null): array
     {
         $operation = 'wordpress-ability-execute';
+        $context = $scope->context ?? $this->admission->capture($user, $beforeRemoteEffect);
         $timing = OperationTiming::forWordpress();
         $lookedUpAt = $timing?->stamp() ?? 0;
-        $target = $this->target($user, $target_id);
+        $target = $scope !== null ? $scope->target : $this->target($user, $target_id);
         if ($requiresAiAccess && ! $user->ai_access_enabled) {
             return $this->failed($operation, null, 'forbidden', 'AI connection is not authorized.');
         }
@@ -121,7 +167,7 @@ final readonly class WordpressTargetOperations
                     GatewayPermission::WordpressAbilitiesExecuteDestructive,
                     GatewayPermission::WordpressAbilitiesExecuteUnclassified,
                 ];
-            $allowed = $this->access->allowsTargetPermissions($user, $target, $permissions);
+            $allowed = $scope->permissions ?? $this->access->allowsTargetPermissions($user, $target, $permissions);
         } finally {
             $timing?->finish('authorization_ms', $authorizedAt);
         }
@@ -132,43 +178,42 @@ final readonly class WordpressTargetOperations
             return $this->failed($operation, $target, 'target_paused', 'This Target is paused by the Gateway Owner.');
         }
 
+        // Initialization and classification require at least one still
+        // positive entry grant, not a separate catalog permission (write-only
+        // actors remain supported). The final Ability uses its exact class.
+        $authorize = function (?AbilityExecutionClass $class = null) use ($allowed, $permissions, $context, $user, $target, $readonlyOnly, $requiresAiAccess, $scope): bool {
+            if ($scope !== null && ! ($scope->binding)()) {
+                return false;
+            }
+            $candidates = $class === null ? $permissions : [$class->permission()];
+            $candidates = array_values(array_filter($candidates, static fn (GatewayPermission $permission): bool => $allowed[$permission->value] ?? false));
+            if ($candidates === []) {
+                return false;
+            }
+            $current = $this->admission->permissions($context, $user, $target,
+                $readonlyOnly ? [...$candidates, GatewayPermission::TargetsView] : $candidates, $requiresAiAccess);
+            if ($readonlyOnly && ! ($current[GatewayPermission::TargetsView->value] ?? false)) {
+                return false;
+            }
+            foreach ($candidates as $permission) {
+                if ($current[$permission->value] ?? false) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+        if ($scope !== null && ! $authorize()) {
+            return $this->failed($operation, $target, 'forbidden', 'WordPress execution is not authorized.');
+        }
         try {
             $result = $this->bridge->executeAuthorizedAbility(
                 $target,
                 $ability,
                 $input,
                 CorrelationId::current(),
-                function (AbilityExecutionClass $class) use ($allowed, $user, $target, $readonlyOnly, $requiresAiAccess, $beforeRemoteEffect): bool {
-                    $permission = $class->permission();
-                    // The request-entry snapshot is an immutable ceiling:
-                    // later grants cannot elevate a previously denied class.
-                    if (! ($allowed[$permission->value] ?? false)) {
-                        return false;
-                    }
-
-                    // Downstream classification takes network time. Refresh the
-                    // actor and the exact Target-scoped permission immediately
-                    // before the connector dispatches; never trust an in-memory
-                    // User role/enabled state or stale group membership.
-                    $currentUser = User::query()->find($user->getKey());
-
-                    if (! $currentUser instanceof User || ($requiresAiAccess && ! $currentUser->ai_access_enabled)
-                        || ! $this->dispatchAdmission->allows($currentUser)) {
-                        return false;
-                    }
-
-                    // The Admin pilot also requires Target visibility. Check
-                    // both rights in one fresh evaluation so a revoked view
-                    // grant cannot survive classification and dispatch.
-                    $permissions = $readonlyOnly
-                        ? [$permission, GatewayPermission::TargetsView]
-                        : [$permission];
-                    $current = $this->access->allowsTargetPermissions($currentUser, $target, $permissions);
-
-                    return ($current[$permission->value] ?? false)
-                        && (! $readonlyOnly || ($current[GatewayPermission::TargetsView->value] ?? false))
-                        && ($beforeRemoteEffect === null || $beforeRemoteEffect());
-                },
+                $authorize,
+                $authorize,
                 $timing,
             );
         } catch (WpAiBridgeTargetConnectionException|WpAiBridgeMcpException $exception) {
@@ -201,6 +246,7 @@ final readonly class WordpressTargetOperations
         ?int $profileGeneration = null,
     ): array {
         $operation = 'wordpress-content-publish-create';
+        $context = $this->admission->capture($user);
         $target = $this->target($user, $targetId, GatewayPermission::WordpressContentPublishCreate);
         if (! $target instanceof Target) {
             return $this->failed($operation, null, 'target_not_found', 'WordPress Target is unavailable.');
@@ -219,11 +265,14 @@ final readonly class WordpressTargetOperations
         // The initial positive grant is an immutable admission ceiling.
         // An account, profile, membership or denial change during remote
         // catalog classification is independently rechecked at dispatch.
-        $admitted = $this->access->allowsWordpressPublish($user, $target)
-            && (! $throughAi || ($user->ai_access_enabled
-                && $this->profiles->authorizes((string) $clientId, $profileKey, $profileGeneration)))
-            && $this->dispatchAdmission->allows($user);
-        if (! $admitted) {
+        $authorize = function () use ($context, $user, $target, $clientId, $profileKey, $profileGeneration, $throughAi): bool {
+            $current = $this->admission->currentActor($context, $user, $throughAi);
+
+            return $current instanceof User
+                && $this->access->allowsWordpressPublish($current, $target)
+                && (! $throughAi || $this->profiles->authorizes((string) $clientId, $profileKey, $profileGeneration));
+        };
+        if (! $authorize()) {
             return $this->failed($operation, $target, 'forbidden', 'WordPress publication is not authorized.');
         }
         if (TargetOperationGate::isPaused($target)) {
@@ -250,19 +299,8 @@ final readonly class WordpressTargetOperations
                 'wp-ai-bridge/content-upsert',
                 $input,
                 CorrelationId::current(),
-                function (AbilityExecutionClass $class) use ($user, $target, $clientId, $profileKey, $profileGeneration, $throughAi): bool {
-                    if ($class !== AbilityExecutionClass::Mutating) {
-                        return false;
-                    }
-
-                    $current = User::query()->find($user->getKey());
-
-                    return $current instanceof User
-                        && $this->access->allowsWordpressPublish($current, $target)
-                        && (! $throughAi || ($current->ai_access_enabled
-                            && $this->profiles->authorizes((string) $clientId, $profileKey, $profileGeneration)))
-                        && $this->dispatchAdmission->allows($current);
-                },
+                $authorize,
+                fn (AbilityExecutionClass $class): bool => $class === AbilityExecutionClass::Mutating && $authorize(),
                 $timing,
                 fn (?array $contract, AbilityExecutionClass $class): bool => $this->supportsPublishCreate($contract, $class),
             );
