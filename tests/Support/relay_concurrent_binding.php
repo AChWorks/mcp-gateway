@@ -3,8 +3,8 @@
 declare(strict_types=1);
 
 // Isolated disposable MariaDB test worker. Never run against a live database.
-use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\TargetConnectorFailure;
+use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
@@ -27,7 +27,7 @@ DB::connection()->beforeExecuting(static function (string $sql) use ($argv): voi
 });
 try {
     $target = Target::query()->where('target_id', $argv[1])->firstOrFail();
-    $result = $app->make(ConnectionRelayTargetBinding::class)->change(
+    $result = $app->make(TargetTransportBinding::class)->change(
         $target, $argv[2], 'race-iran',
     );
     echo json_encode(['status' => $result ? 'bound' : 'unchanged'], JSON_THROW_ON_ERROR);

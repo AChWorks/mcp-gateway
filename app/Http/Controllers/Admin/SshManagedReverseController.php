@@ -5,25 +5,27 @@ namespace App\Http\Controllers\Admin;
 use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Targets\SshManagedReverseAuthorizedKeys;
 use App\Application\Targets\SshManagedReverseHostReadiness;
-use App\Domain\Access\GatewayRole;
+use App\Application\Targets\TargetConnectorFailure;
+use App\Application\Targets\TargetTransportBinding;
+use App\Domain\Access\GatewayPermission;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
-use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 use InvalidArgumentException;
 
 final class SshManagedReverseController extends Controller
 {
-    public function index(Request $request, SshManagedReverseAuthorizedKeys $keys, SshManagedReverseHostReadiness $readiness): View
+    public function index(SshManagedReverseAuthorizedKeys $keys, SshManagedReverseHostReadiness $readiness): View
     {
-        $this->requireOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $gateway = SshManagedReverseGateway::query()->find(1);
         $fileReady = $keys->canPublish();
         $health = $readiness->assess($gateway);
@@ -54,9 +56,9 @@ final class SshManagedReverseController extends Controller
 
     public function save(
         Request $request, AdministratorPasswordConfirmation $password,
-        SshManagedReverseAuthorizedKeys $keys,
+        SshManagedReverseAuthorizedKeys $keys, TargetTransportBinding $bindings,
     ): RedirectResponse {
-        $this->requireOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate([
             'revision' => ['required', 'integer', 'min:0'],
             'enabled' => ['required', 'in:0,1'],
@@ -92,8 +94,8 @@ final class SshManagedReverseController extends Controller
                 ]);
             }
         }
-        $saveIntent = static function () use ($fields, $endpoint, $pin, $enabled): void {
-            DB::transaction(function () use ($fields, $endpoint, $pin, $enabled): void {
+        $saveIntent = static function () use ($fields, $endpoint, $pin, $enabled, $bindings, $keys): bool {
+            return DB::transaction(function () use ($fields, $endpoint, $pin, $enabled, $bindings, $keys): bool {
                 $current = SshManagedReverseGateway::query()->whereKey(1)->lockForUpdate()->first();
                 $revision = $current instanceof SshManagedReverseGateway ? (int) $current->revision : 0;
                 if ($revision !== (int) $fields['revision']) {
@@ -101,15 +103,30 @@ final class SshManagedReverseController extends Controller
                         'revision' => __('Reverse SSH settings changed in another session. Reload before applying changes.'),
                     ]);
                 }
-                if ($current && SshManagedReverseEnrollment::query()
-                    ->where('state', '!=', 'revoked')->exists()
-                    && ($current->control_host !== $endpoint->host
-                        || $current->control_port !== $endpoint->port
-                        || $current->control_user !== $endpoint->username
-                        || $current->control_host_key !== $pin->canonicalLine())) {
+                $identityChanged = $current && ($current->control_host !== $endpoint->host
+                    || $current->control_port !== $endpoint->port
+                    || $current->control_user !== $endpoint->username
+                    || $current->control_host_key !== $pin->canonicalLine());
+                if ($identityChanged && SshManagedReverseEnrollment::query()
+                    ->where('state', '!=', 'revoked')->exists()) {
                     throw ValidationException::withMessages([
                         'control_host' => __('Revoke or safely migrate active enrollments before rotating the control endpoint/identity.'),
                     ]);
+                }
+                if ($current && ! $identityChanged && (bool) $current->enabled === $enabled && ! $current->publication_pending
+                    && (! $keys->canPublish() || $keys->isReconciled())) {
+                    return false;
+                }
+                if ($current && (bool) $current->enabled !== $enabled) {
+                    try {
+                        if ($enabled) {
+                            $bindings->assertManagedReverseCanEnable();
+                        } else {
+                            $bindings->disableManagedReverse();
+                        }
+                    } catch (TargetConnectorFailure $exception) {
+                        throw ValidationException::withMessages([$exception->field ?? 'enabled' => $exception->getMessage()]);
+                    }
                 }
                 SshManagedReverseGateway::query()->updateOrCreate(['id' => 1], [
                     'enabled' => $enabled,
@@ -120,32 +137,44 @@ final class SshManagedReverseController extends Controller
                     'revision' => $revision + 1,
                     'publication_pending' => true,
                 ]);
+
+                return true;
             }, 3);
         };
 
-        if ($keys->canPublish()) {
-            // Serialize configuration and key-reader policy with claim,
-            // reissue and revoke. Committed disable still fails closed
-            // immediately if the external publication later fails.
-            try {
-                $keys->withPolicyLock(static function () use ($saveIntent, $keys): void {
-                    $saveIntent();
-                    $keys->sync();
-                });
-            } catch (\RuntimeException) {
-                return redirect()->route('admin.reverse-ssh.index')
-                    ->with('reverse_ssh_operation', 'save_publication_failed')
-                    ->withErrors(['site' => __('The settings save may have committed, but restricted key publication was not confirmed. Inspect the saved revision and pending publication state; if pending, use Owner Repair. Do not repeat Save with a stale revision.')]);
+        $committed = false;
+        $intentStarted = false;
+        $commitAndPublish = static function () use ($saveIntent, $keys, $enabled, &$committed, &$intentStarted): void {
+            $intentStarted = true;
+            $committed = $saveIntent();
+            if ($committed) {
+                if ($enabled) {
+                    $keys->reconcileAsOwner();
+                } else {
+                    $keys->reconcileClosures();
+                }
             }
-        } else {
+        };
+
+        try {
             if ($enabled) {
-                throw ValidationException::withMessages([
-                    'enabled' => __('Cannot enable Reverse SSH with an unavailable host key reader.'),
-                ]);
+                // Enable requires a safe host publication lock before intent.
+                $keys->withPolicyLock($commitAndPublish);
+            } else {
+                // Local closure must not depend on obtaining the host lock.
+                // Publication separately reconciles the committed intent.
+                $commitAndPublish();
             }
-            // Disabling must remain available even with a degraded reader:
-            // application route authorization then fails closed immediately.
-            $saveIntent();
+        } catch (\RuntimeException $exception) {
+            if ($intentStarted && ! $committed) {
+                throw $exception;
+            }
+
+            return redirect()->route('admin.reverse-ssh.index')
+                ->with('reverse_ssh_operation', 'save_publication_failed')
+                ->withErrors(['site' => $committed
+                    ? __('The settings save committed locally, but restricted key publication was not confirmed. Inspect the pending publication state and use Owner Repair. Do not repeat Save with a stale revision.')
+                    : __('The settings save did not commit. Inspect the saved revision and host publication prerequisites before retrying.')]);
         }
 
         return redirect()->route('admin.reverse-ssh.index')
@@ -156,7 +185,7 @@ final class SshManagedReverseController extends Controller
         Request $request, AdministratorPasswordConfirmation $password,
         SshManagedReverseAuthorizedKeys $keys,
     ): RedirectResponse {
-        $this->requireOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $password->confirm($request);
         if (! $keys->canPublish()) {
             throw ValidationException::withMessages([
@@ -164,7 +193,7 @@ final class SshManagedReverseController extends Controller
             ]);
         }
         try {
-            $keys->sync();
+            $keys->reconcileAsOwner();
         } catch (\RuntimeException) {
             return redirect()->route('admin.reverse-ssh.index')
                 ->with('reverse_ssh_operation', 'repair_failed')
@@ -173,14 +202,5 @@ final class SshManagedReverseController extends Controller
 
         return redirect()->route('admin.reverse-ssh.index')
             ->with('status', __('Restricted public-key policy reconciled. Host SSHD status and reverse listeners still require verification.'));
-    }
-
-    private function requireOwner(Request $request): User
-    {
-        $user = $request->user();
-        abort_unless($user instanceof User && (string) $user->getRawOriginal('role') === GatewayRole::Owner->value
-            && $user->access_enabled, 403);
-
-        return $user;
     }
 }

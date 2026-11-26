@@ -6,6 +6,7 @@ use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Http\DnsResolver;
+use App\Infrastructure\Http\OutboundRequestException;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
@@ -89,7 +90,7 @@ try {
     };
 
     echo json_encode(['status' => 'ok', 'result' => $result], JSON_THROW_ON_ERROR);
-} catch (WpAiBridgeTargetConnectionException $exception) {
+} catch (WpAiBridgeTargetConnectionException|OutboundRequestException $exception) {
     echo json_encode(['status' => 'blocked', 'reason' => $exception->reason], JSON_THROW_ON_ERROR);
 } catch (Throwable $exception) {
     fwrite(STDERR, $exception::class.': '.$exception->getMessage()."\n");

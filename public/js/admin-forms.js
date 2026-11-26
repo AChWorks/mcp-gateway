@@ -133,13 +133,21 @@
             });
         }
         // One credential-confirmation field at a time. A switched Managed or
-        // Manual Reverse mode owns its own Owner confirmation and must not
+        // Manual Reverse mode owns its own actor confirmation and must not
         // submit the shared Relay password or an old Relay choice.
         const relaySelector = form.querySelector('#connection_relay_id');
         const relayPassword = form.querySelector('[data-relay-owner-password]');
         const relayPasswordGroup = form.querySelector('[data-relay-owner-group]');
-        const relayChosen = !managed && !manual && Boolean(relaySelector?.value);
-        if (relaySelector) relaySelector.disabled = manual || managed;
+        const relaySupported = Boolean(connector.value) && !managed && !manual;
+        const relaySection = form.querySelector('[data-target-relay]');
+        if (relaySection) relaySection.hidden = !relaySupported;
+        if (relaySelector) {
+            relaySelector.disabled = !relaySupported;
+            if (!relaySupported) relaySelector.value = '';
+        }
+        // Default connector enrollment requirements come from its adapter.
+        const connectorRequiresPassword = Boolean(connector.selectedOptions[0]?.hasAttribute('data-enrollment-password-required'));
+        const relayChosen = relaySupported && !connectorRequiresPassword && Boolean(relaySelector?.value);
         if (relayPasswordGroup) relayPasswordGroup.hidden = !relayChosen;
         if (relayPassword) {
             relayPassword.disabled = !relayChosen;

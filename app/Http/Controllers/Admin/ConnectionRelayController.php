@@ -6,7 +6,6 @@ use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Targets\ConnectionRelayAdministration;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Access\GatewayRole;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
@@ -25,9 +24,9 @@ use InvalidArgumentException;
 
 final class ConnectionRelayController extends Controller
 {
-    public function index(Request $request, ConnectionRelayOnboarding $onboarding): View
+    public function index(ConnectionRelayOnboarding $onboarding): View
     {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
 
         $relays = ConnectionRelay::query()->orderBy('display_name')->get();
 
@@ -46,7 +45,7 @@ final class ConnectionRelayController extends Controller
         Request $request, AdministratorPasswordConfirmation $password, ActivityRecorder $activity,
         ConnectionRelayOnboarding $onboarding,
     ): RedirectResponse {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate($this->rules());
         $password->confirm($request);
         [$endpoint, $pin] = $this->validatedEndpointAndPin($fields);
@@ -77,9 +76,9 @@ final class ConnectionRelayController extends Controller
 
     public function toggle(
         Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
-        ConnectionRelayAdministration $administration, ActivityRecorder $activity,
+        ConnectionRelayAdministration $administration,
     ): RedirectResponse {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate([
             'relay_revision' => ['required', 'integer', 'min:1'],
             'enable' => ['required', 'in:0,1'],
@@ -87,49 +86,25 @@ final class ConnectionRelayController extends Controller
         $password->confirm($request);
         $revision = (int) $fields['relay_revision'];
 
-        if ($fields['enable'] === '0') {
-            try {
-                $changed = $administration->disable($relay, $revision);
-            } catch (TargetConnectorFailure $exception) {
-                throw ValidationException::withMessages([$exception->field ?? 'relay' => $exception->getMessage()]);
-            }
-
-            return back()->with('status', $changed
-                ? __('Relay disabled. Assigned Targets remain assigned; reconnect after re-enabling.')
-                : __('Relay was already disabled.'));
+        $enabled = $fields['enable'] === '1';
+        try {
+            $changed = $administration->setEnabled($relay, $revision, $enabled);
+        } catch (TargetConnectorFailure $exception) {
+            throw ValidationException::withMessages([$exception->field ?? 'relay' => $exception->getMessage()]);
         }
 
-        DB::transaction(static function () use ($relay, $revision, $activity): void {
-            $current = ConnectionRelay::query()->whereKey($relay->getKey())->lockForUpdate()->firstOrFail();
-            if ((int) $current->lifecycle_revision !== $revision) {
-                throw ValidationException::withMessages(['relay_revision' => __('Relay settings changed. Refresh and retry.')]);
-            }
-            if ($current->enabled) {
-                return;
-            }
-            if ((int) $current->lifecycle_revision >= 4294967295) {
-                throw ValidationException::withMessages(['relay_revision' => __('Relay revision is exhausted.')]);
-            }
-            if (DB::table('targets')->where('relay_record_id', $current->getKey())
-                ->where('relay_binding_revision', '>=', 4294967295)->exists()) {
-                throw ValidationException::withMessages([
-                    'relay' => __('Cannot enable this Relay while an assigned Target binding revision is exhausted.'),
-                ]);
-            }
-            DB::table('connection_relays')->where('id', $current->getKey())->update([
-                'enabled' => true,
-                'lifecycle_revision' => (int) $current->lifecycle_revision + 1,
-                'updated_at' => now(),
-            ]);
-            $activity->recordRequired(CorrelationId::current(), 'connection-relay-enable', 'success');
-        }, 3);
+        if (! $enabled) {
+            return back()->with('status', $changed
+                ? __('Relay disabled. Assigned Targets and their authorization are preserved; re-enable the Relay or change the route to restore network access.')
+                : __('Relay was already disabled.'));
+        }
 
         return back()->with('status', __('Relay enabled. Test the SSH tunnel and the selected Target normally.'));
     }
 
     public function test(Request $request, ConnectionRelay $relay): RedirectResponse
     {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         // The same simple listener check works before and after enabling.
         // Target-specific SSH/TLS credentials are tested on the Target page.
         $port = (int) $relay->local_socks_port;
@@ -157,7 +132,7 @@ final class ConnectionRelayController extends Controller
         Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
         ActivityRecorder $activity,
     ): RedirectResponse {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate([
             ...$this->rules(), 'relay_revision' => ['required', 'integer', 'min:1'],
         ]);
@@ -215,7 +190,7 @@ final class ConnectionRelayController extends Controller
         Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
         ActivityRecorder $activity,
     ): RedirectResponse {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate([
             'display_name' => ['required', 'string', 'max:160'],
             'relay_revision' => ['required', 'integer', 'min:1'],
@@ -246,7 +221,7 @@ final class ConnectionRelayController extends Controller
         Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
         ActivityRecorder $activity,
     ): RedirectResponse {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate([
             'relay_revision' => ['required', 'integer', 'min:1'],
             'confirm_relay_id' => ['required', 'string', 'max:64'],
@@ -311,7 +286,7 @@ final class ConnectionRelayController extends Controller
         Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
         ConnectionRelayOnboarding $onboarding, ActivityRecorder $activity,
     ): RedirectResponse {
-        $this->authorizeOwner($request);
+        Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate(['relay_revision' => ['required', 'integer', 'min:1']]);
         $password->confirm($request);
 
@@ -329,12 +304,6 @@ final class ConnectionRelayController extends Controller
 
         return redirect()->route('admin.connection-relays.index')
             ->with('status', __('Two complete Relay setup commands are ready. Run the Relay command first.'));
-    }
-
-    private function authorizeOwner(Request $request): void
-    {
-        Gate::authorize(GatewayPermission::SecurityManage->value);
-        abort_unless($request->user()?->getRawOriginal('role') === GatewayRole::Owner->value, 403);
     }
 
     /** @return array<string,array<int,string>> */

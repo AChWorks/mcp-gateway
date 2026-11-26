@@ -1,6 +1,6 @@
 <div class="target-recovery-actions" aria-label="{{ __('Safe WordPress recovery actions') }}">
     @if ($refreshPending)
-        <p class="muted">{{ __('A token refresh is unresolved. Disconnect, Cancel disconnect and Reauthorize are unavailable. Follow the separate Owner-only refresh reconciliation procedure below.') }}</p>
+        <p class="muted">{{ __('A token refresh is unresolved. Disconnect, Cancel disconnect and Reauthorize are unavailable. Follow the separate refresh reconciliation procedure or ask an authorized Target disconnect operator.') }}</p>
     @elseif ($revocationPending && $revocationIntent !== null)
         @if ($recovery['canFinish'])
             @can('targets.disconnect', $target)
@@ -19,10 +19,8 @@
         @endif
 
         @if ($recovery['canCancel'])
-            @can('security.manage')
                 @can('targets.connect', $target)
                     @can('targets.disconnect', $target)
-                        @if (auth()->user()?->role === \App\Domain\Access\GatewayRole::Owner)
                             <details class="target-recovery-details">
                                 <summary>{{ __('Cancel pending disconnect — verify no revoke was sent') }}</summary>
                                 <p id="cancel-disconnect-help">{{ __('This option is offered only because the stored revoke attempt is proven never dispatched and zero token revocations were acknowledged. Gateway must also confirm that the existing access token still works with an authenticated WordPress catalog request. Metadata alone is not enough. If verification fails, the Target stays blocked.') }}</p>
@@ -40,18 +38,14 @@
                                     <button class="button button-secondary" type="submit">{{ __('Verify WordPress authorization and cancel') }}</button>
                                 </form>
                             </details>
-                        @endif
                     @endcan
                 @endcan
-            @endcan
         @endif
 
         @if ($recovery['needsExternalProof'])
-            @can('security.manage')
                 @can('targets.disconnect', $target)
-                    @if (auth()->user()?->role === \App\Domain\Access\GatewayRole::Owner)
                         <details class="target-recovery-details">
-                            <summary>{{ __('WordPress-side recovery for uncertain revocation (Owner)') }}</summary>
+                            <summary>{{ __('WordPress-side recovery for uncertain revocation') }}</summary>
                             <p id="reconcile-disconnect-help">{{ __('Sign in to the exact WordPress origin below. In WP AI Bridge → OAuth Clients, REMOVE this Gateway client from Approved OAuth Clients and SAVE. This invalidates unknown token successors but also revokes other non-ChatGPT OAuth clients for that WordPress site. WordPress logout or revoking one old token is insufficient.') }}</p>
                             <p>{{ __('Verify the change and retain evidence. Do not proceed while any operation could still be in flight. The Gateway does not independently verify your WordPress-side revocation; the action below only clears its local credential after your explicit attestation.') }}</p>
                             <p>{{ __('Gateway OAuth client ID') }}: <code class="small-code">{{ config('bridge.client.id') }}</code></p>
@@ -77,10 +71,7 @@
                                 <button class="button button-danger" type="submit">{{ __('Clear Gateway credential after WordPress-side revocation') }}</button>
                             </form>
                         </details>
-                    @endif
                 @endcan
-            @else
-            @endcan
         @endif
     @elseif (! $hasCredential)
         @if ($oauthFlowPending)

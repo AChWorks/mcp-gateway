@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Admin;
 use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Targets\SshManagedReverseEnrollmentService;
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Access\GatewayRole;
 use App\Domain\Targets\Target;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
@@ -22,10 +21,7 @@ final class SshManagedReverseRevocationController extends Controller
         AdministratorPasswordConfirmation $password,
         SshManagedReverseEnrollmentService $enroll,
     ): RedirectResponse {
-        Gate::authorize(GatewayPermission::SecurityManage->value);
-        Gate::authorize(GatewayPermission::TargetsDisconnect->value, $target);
-        abort_unless((string) $request->user()?->getRawOriginal('role') === GatewayRole::Owner->value
-            && $request->user()?->access_enabled, 403);
+        Gate::authorize(GatewayPermission::TargetsConfigure->value, $target);
         $fields = $request->validate([
             'confirm_target_id' => ['required', 'string', 'max:64'],
         ]);
@@ -39,20 +35,20 @@ final class SshManagedReverseRevocationController extends Controller
         $managed = SshManagedReverseEnrollment::query()
             ->where('target_record_id', $target->getKey())->first();
         abort_unless($managed instanceof SshManagedReverseEnrollment, 404);
-        // One durable local revocation transaction destroys the SSH vault
-        // credential and fences retained Jobs BEFORE host-file publication.
+        // One durable local route revocation fences retained Jobs before
+        // host-file publication, independently of the stored login.
         try {
             $enroll->revoke($managed);
         } catch (RuntimeException $exception) {
             if ($managed->fresh()?->state === 'revoked') {
                 return redirect()->route('admin.targets.show', ['target' => $target->target_id])
-                    ->withErrors(['target' => __('Gateway route and credential were revoked, but host key publication is not reconciled. Retry the same Owner revoke action or use Reverse SSH Settings → Reconcile. Do not claim complete host revocation yet.')]);
+                    ->withErrors(['target' => __('Gateway route was revoked, but host key publication is not reconciled. Retry the same Target revoke action or ask an Owner to reconcile in Reverse SSH Settings. Do not claim complete host revocation yet.')]);
             }
             throw $exception;
         }
 
         return redirect()->route('admin.targets.show', ['target' => $target->target_id])
-            ->with('status', __('Managed Reverse SSH access revoked and restricted key reader reconciled. Existing control sessions may persist until the Target-side systemd unit is stopped separately.'));
+            ->with('status', __('Managed Reverse SSH route revoked and restricted key reader reconciled. Target login credentials are unchanged. Existing control sessions may persist until the Target-side systemd unit is stopped separately.'));
 
     }
 }

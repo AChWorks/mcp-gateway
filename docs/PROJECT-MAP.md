@@ -33,7 +33,7 @@ This index helps contributors and operators find the **appropriate maintained re
 | Shared Admin accessibility and visual rules | [Admin UI quality](ADMIN-UI-QUALITY.md) |
 | Owner-managed users, groups, Target access and bulk selection/review | [Admin access workflows](ADMIN-ACCESS-WORKFLOWS.md) |
 | Recover WordPress connection/revocation uncertainty | [Target disconnect recovery](TARGET-DISCONNECT-RECOVERY.md) |
-| Owner-authorized local removal of an unreachable Target | [Offline Target removal](OFFLINE-TARGET-REMOVAL.md) |
+| Permission-authorized local removal of an unreachable Target | [Offline Target removal](OFFLINE-TARGET-REMOVAL.md) |
 | Historical **v1 Site→v2 Target** transition only (not usable for v3 clean installation) | [Legacy Target transition runbook](TARGET-TRANSITION-RUNBOOK.md) |
 
 ## Authority and maintenance

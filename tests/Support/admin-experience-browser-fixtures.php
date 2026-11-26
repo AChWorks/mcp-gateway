@@ -17,6 +17,7 @@ use App\Infrastructure\Connectors\Relay\ConnectionRelayOnboarding;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -205,17 +206,57 @@ Route::middleware(['web', 'auth'])->get('/__browser__/relay-unavailable-target',
             'connection_state' => TargetConnectionState::Disconnected,
         ]);
         DB::table('targets')->where('id', $target->getKey())->update([
-            'relay_record_id' => $relay->getKey(), 'relay_binding_revision' => 1,
+            'relay_record_id' => $relay->getKey(), 'transport_revision' => 1,
         ]);
         SshTargetConfig::query()->create([
             'target_record_id' => $target->getKey(),
             'host' => '203.0.113.5', 'port' => 22, 'username' => 'fixture',
             'auth_method' => 'password', 'pinned_host_key' => $relay->control_host_key,
-            'route_mode' => 'direct', 'binding_revision' => 0,
+            'binding_revision' => 0,
         ]);
     }
 
     return redirect()->route('admin.targets.edit', ['target' => 'ui-relay-unavailable']);
+});
+
+// Real WordPress route edit with a synthetic local grant; no remote request.
+Route::middleware(['web', 'auth'])->get('/__browser__/wordpress-route/{mode}', static function (string $mode) {
+    abort_unless(in_array($mode, ['native', 'js'], true)
+        && in_array(Auth::user()?->getRawOriginal('role'), ['owner', 'administrator'], true), 403);
+    $id = 'ui-wp-route-'.$mode;
+    $target = Target::query()->where('target_id', $id)->first();
+    if (! $target instanceof Target) {
+        $origin = 'https://'.$id.'.browser.test';
+        $resource = $origin.'/wp-json/wp-ai-bridge/v1/mcp';
+        $target = Target::query()->create([
+            'target_id' => $id, 'display_name' => 'WordPress route '.$mode,
+            'connector_type' => 'wp_ai_bridge',
+            'connection_state' => TargetConnectionState::Connected,
+        ]);
+        WpAiBridgeTargetConfig::query()->create([
+            'target_record_id' => $target->getKey(), 'base_url' => $origin,
+            'base_url_hash' => hash('sha256', $origin), 'mcp_resource_url' => $resource,
+            'oauth_issuer_url' => $origin, 'oauth_authorization_url' => $origin.'/authorize',
+            'oauth_token_url' => $origin.'/token', 'oauth_revocation_url' => $origin.'/revoke',
+        ]);
+        $client = 'https://gateway.browser.test/client';
+        $credential = TargetCredential::query()->create([
+            'target_record_id' => $target->getKey(), 'connector_type' => 'wp_ai_bridge',
+            'purpose' => 'wordpress_oauth',
+            'encrypted_payload' => app(WpAiBridgeTargetVault::class)->sealCredential(
+                $target, $client, $resource,
+                'synthetic-route-access', 'synthetic-route-refresh', now()->addHour(), ['mcp:use'],
+            ),
+        ]);
+        DB::table('wp_ai_bridge_credential_metadata')->insert([
+            'credential_id' => $credential->getKey(), 'client_id' => $client, 'resource_url' => $resource,
+            'binding_hash' => hash('sha256', $target->getKey()."\0".$target->target_id."\0".$client."\0".$resource),
+            'access_expires_at' => now()->addHour(), 'refresh_expires_at' => now()->addHours(2),
+            'refresh_due_at' => now()->addHour(), 'generation' => 1,
+        ]);
+    }
+
+    return redirect()->route('admin.targets.edit', ['target' => $target->target_id]);
 });
 
 // Seed the two real Owner-only revocation pages on this disposable browser DB.
@@ -280,12 +321,13 @@ Route::middleware(['web', 'auth'])->get('/__browser__/managed-reverse-pending', 
         $pin = implode(' ', array_slice(
             preg_split('/\s+/', trim(EC::createKey('Ed25519')->getPublicKey()->toString('OpenSSH'))), 0, 2,
         ));
+        DB::table('targets')->where('id', $target->getKey())->update([
+            'reverse_listener_port' => 43123, 'reverse_tunnel_identity' => 'managed-ui-only', 'transport_revision' => 1,
+        ]);
         SshTargetConfig::query()->create([
             'target_record_id' => $target->getKey(),
             'host' => '8.8.8.8', 'port' => 2222, 'username' => 'deploy.prod',
             'auth_method' => 'private_key', 'pinned_host_key' => $pin,
-            'route_mode' => 'reverse', 'reverse_listener_port' => 43123,
-            'reverse_tunnel_identity' => 'managed-ui-only',
             'binding_revision' => 0,
         ]);
         SshManagedReverseEnrollment::query()->create([

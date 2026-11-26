@@ -41,6 +41,7 @@ final readonly class SshCommandRuntime
         User $user, Target $target, string $command, int $timeoutSeconds = 10,
         ?string $expectedTargetBinding = null,
         ?Closure $beforeRemoteEffect = null,
+        ?string $expectedCredentialMaterial = null,
     ): array {
         if ($target->connector_type !== 'ssh_direct') {
             throw new SshTargetConnectionException('unsupported_connector');
@@ -62,7 +63,7 @@ final readonly class SshCommandRuntime
             throw new SshTargetConnectionException('timeout_unsupported');
         }
 
-        return $this->admission->run((string) $target->getKey(), function () use ($user, $target, $command, $timeoutSeconds, $expectedTargetBinding, $beforeRemoteEffect): array {
+        return $this->admission->run((string) $target->getKey(), function () use ($user, $target, $command, $timeoutSeconds, $expectedTargetBinding, $beforeRemoteEffect, $expectedCredentialMaterial): array {
             $fresh = Target::query()->whereKey($target->getKey())->first();
             $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
             if ($fresh instanceof Target && $fresh->operations_paused) {
@@ -78,8 +79,10 @@ final readonly class SshCommandRuntime
                 || ! $config instanceof SshTargetConfig || ! $credential instanceof TargetCredential) {
                 throw new SshTargetConnectionException('credential_unavailable');
             }
-            if ($expectedTargetBinding !== null
-                && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($fresh, $config))) {
+            if (($expectedTargetBinding !== null
+                && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($fresh, $config)))
+                || ($expectedCredentialMaterial !== null
+                    && ! hash_equals($expectedCredentialMaterial, SshTargetVault::materialFingerprint($credential)))) {
                 throw new SshTargetConnectionException('target_changed');
             }
             try {
@@ -89,7 +92,7 @@ final readonly class SshCommandRuntime
                 throw new SshTargetConnectionException('credential_unavailable');
             }
 
-            $route = $this->reverseRoutes->forTarget($fresh, $config);
+            $route = $this->reverseRoutes->forTarget($fresh);
             $relay = $this->relayRoutes->sshRouteForTarget($fresh);
             $started = microtime(true);
 
@@ -130,13 +133,13 @@ final readonly class SshCommandRuntime
                     // The NL operator might revoke this listener while the
                     // pinned end-host KEX/login is in progress. Recheck before
                     // sending even one effectful command.
-                    $this->reverseRoutes->forTarget($currentTarget, $currentConfig);
+                    $this->reverseRoutes->forTarget($currentTarget);
                     $this->relayRoutes->sshRouteForTarget($currentTarget);
                     if ($beforeRemoteEffect instanceof Closure && ! $beforeRemoteEffect()) {
                         throw new SshTargetConnectionException('authorization_revoked');
                     }
 
-                    return $this->executeOnce($ssh, $command, $timeoutSeconds, $peerIp, $config, $started);
+                    return $this->executeOnce($ssh, $command, $timeoutSeconds, $peerIp, $config, $started, $fresh->transportKind());
                 },
                 $route, $relay,
             );
@@ -146,7 +149,7 @@ final readonly class SshCommandRuntime
     /** @return array<string,mixed> */
     private function executeOnce(
         SSH2 $ssh, string $command, int $timeoutSeconds,
-        string $peerIp, SshTargetConfig $config, float $started,
+        string $peerIp, SshTargetConfig $config, float $started, string $routeMode,
     ): array {
         // The collector must be ready BEFORE we send any remote command.
         // It clears phpseclib's cumulative private stderr log per packet;
@@ -201,8 +204,8 @@ final readonly class SshCommandRuntime
 
         return [
             'status' => $status,
-            'connected_ip' => ($config->route_mode ?? 'direct') === 'reverse' || $peerIp === '' ? null : $peerIp,
-            'route_mode' => $config->route_mode ?? 'direct',
+            'connected_ip' => $routeMode !== 'direct' || $peerIp === '' ? null : $peerIp,
+            'route_mode' => $routeMode,
             'registered_host' => $config->host,
             'username' => $config->username,
             'port' => $config->port,

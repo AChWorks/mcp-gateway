@@ -39,16 +39,13 @@ final class OperationalSettings
         'ssh_job_preparing_grace_seconds' => ['minimum' => 30, 'maximum' => 600],
         'ssh_job_reconcile_grace_seconds' => ['minimum' => 60, 'maximum' => 3600],
         'ssh_job_max_script_kib' => ['minimum' => 16, 'maximum' => 512],
-        // Add new controls *after* existing ones: legacy saved browser tabs
-        // submit prefix allowlists, retaining every absent newer setting.
         'ssh_command_stdout_kib' => ['minimum' => 16, 'maximum' => 512],
         'ssh_command_stderr_kib' => ['minimum' => 8, 'maximum' => 512],
         'ssh_job_output_window_kib' => ['minimum' => 16, 'maximum' => 512],
         'ssh_file_read_window_kib' => ['minimum' => 16, 'maximum' => 512],
         'ssh_file_write_window_kib' => ['minimum' => 16, 'maximum' => 512],
         'ssh_file_list_name_kib' => ['minimum' => 16, 'maximum' => 512],
-        // Appended to keep legacy open-form prefixes stable. The Bridge whole
-        // JSON-RPC request limit and the DCR admission-rate quota are separate.
+        // The Bridge whole JSON-RPC request limit and DCR capacity are separate.
         'wp_ability_input_kib' => ['minimum' => 16, 'maximum' => 4096],
         'dcr_registration_capacity' => ['minimum' => 16, 'maximum' => 65536],
         // Batch admission is not a limit on registered/selected Target counts.
@@ -60,6 +57,10 @@ final class OperationalSettings
         'batch_worker_max_seconds' => ['minimum' => 1, 'maximum' => 86400],
     ];
 
+    // These two settings are stored in the existing JSON column. Other
+    // settings are typed database columns; both are active persisted data.
+    private const JSON_KEYS = ['wp_response_kib', 'wp_readonly_response_kib'];
+
     /** @var array<string, int>|null */
     private ?array $cachedOverrides = null;
 
@@ -70,34 +71,83 @@ final class OperationalSettings
     }
 
     /**
-     * Released form schemas are ordered prefixes. Preserve older browser tabs
-     * without admitting arbitrary missing fields or clearing new overrides.
+     * Any nonempty set of supported settings is valid. Omitted values
+     * remain unchanged; an explicit null resets one override.
      *
      * @param  list<string>  $names
      */
     public static function acceptsFormKeys(array $names): bool
     {
-        $all = array_keys(self::SETTING_RANGES);
-        sort($names);
-        foreach ([2, 4, 6, 8, 13, 14, 20, 22, count($all)] as $size) {
-            $prefix = array_slice($all, 0, $size);
-            sort($prefix);
-            if ($names === $prefix) {
-                return true;
-            }
-        }
+        return $names !== [] && array_diff($names, array_keys(self::SETTING_RANGES)) === [];
+    }
 
-        return false;
+    /** @return list<string> */
+    private static function columnKeys(): array
+    {
+        return array_values(array_diff(array_keys(self::SETTING_RANGES), self::JSON_KEYS));
+    }
+
+    /** @return array<string,int|float> */
+    public function defaults(): array
+    {
+        $defaults = [];
+        foreach (array_keys(self::SETTING_RANGES) as $key) {
+            $defaults[$key] = $this->defaultValue($key);
+        }
+        $defaults['wp_request_timeout_seconds'] = max(
+            $defaults['wp_connect_timeout_seconds'], $defaults['wp_request_timeout_seconds'],
+        );
+
+        return $defaults;
+    }
+
+    private function defaultValue(string $key): int|float
+    {
+        return match ($key) {
+            'wp_response_kib', 'wp_readonly_response_kib', 'ssh_transfer_max_kib' => $this->defaultBytes($key) / 1024,
+            'wp_connect_timeout_seconds' => max(1, (int) config('bridge.http.connect_timeout_seconds', 2)),
+            'wp_request_timeout_seconds' => max(1, (int) config('bridge.http.request_timeout_seconds', 5)),
+            'ssh_transfer_max_seconds' => min(3600, max(1, (int) config('ssh.file_transfer.max_seconds', 30))),
+            'ssh_command_timeout_seconds' => 15,
+            'ssh_command_max_kib' => 8,
+            'ssh_job_max_active_per_user' => 2,
+            'ssh_job_max_runtime_seconds' => 300,
+            'ssh_job_retention_hours' => 24,
+            'ssh_job_preparing_grace_seconds' => 120,
+            'ssh_job_reconcile_grace_seconds' => 600,
+            'ssh_job_max_script_kib', 'ssh_command_stdout_kib', 'ssh_job_output_window_kib',
+            'ssh_file_read_window_kib', 'ssh_file_write_window_kib', 'ssh_file_list_name_kib' => 16,
+            'ssh_command_stderr_kib' => 8,
+            'wp_ability_input_kib', 'dcr_registration_capacity' => 1024,
+            'batch_max_parallelism' => max(1, (int) config('batch.max_parallelism', 4)),
+            'batch_global_active' => max(1, (int) config('batch.global_active', 4)),
+            'batch_user_active' => max(1, (int) config('batch.user_active', 2)),
+            'batch_worker_max_children' => max(1, (int) config('batch.worker_max_children', 16)),
+            'batch_worker_max_seconds' => max(1, (int) config('batch.worker_max_seconds', 50)),
+            default => throw new RuntimeException('Operational setting has no default: '.$key),
+        };
+    }
+
+    // Keep source-config byte budgets as integers. KiB conversion belongs
+    // only to the form representation, never the runtime fallback.
+    private function defaultBytes(string $key): int
+    {
+        return match ($key) {
+            'wp_response_kib' => (int) config('bridge.http.max_response_bytes', 65536),
+            'wp_readonly_response_kib' => (int) config('bridge.http.readonly_tool_max_response_bytes', 262144),
+            'ssh_transfer_max_kib' => min(67108864, max(1, (int) config('ssh.file_transfer.max_bytes', 8388608))),
+            default => throw new RuntimeException('Operational setting has no byte default: '.$key),
+        };
     }
 
     public function wpAbilityInputBytes(): int
     {
-        return ($this->overrides()['wp_ability_input_kib'] ?? 1024) * 1024;
+        return ($this->overrides()['wp_ability_input_kib'] ?? (int) $this->defaultValue('wp_ability_input_kib')) * 1024;
     }
 
     public function dcrRegistrationCapacity(): int
     {
-        return $this->overrides()['dcr_registration_capacity'] ?? 1024;
+        return $this->overrides()['dcr_registration_capacity'] ?? (int) $this->defaultValue('dcr_registration_capacity');
     }
 
     public function responseLimitBytes(bool $readOnly): int
@@ -110,9 +160,7 @@ final class OperationalSettings
 
         // Preserve the exact legacy config/.env byte fallback, including
         // non-KiB-aligned values and the existing hard decoded body bound.
-        return $readOnly
-            ? (int) config('bridge.http.readonly_tool_max_response_bytes', 262144)
-            : (int) config('bridge.http.max_response_bytes', 65536);
+        return $this->defaultBytes($key);
     }
 
     /** @return array{connect:int,request:int} */
@@ -123,9 +171,9 @@ final class OperationalSettings
         // Existing env/config installations retain their exact normalized
         // fallback, including before the first operational-settings migration.
         $connect = $overrides['wp_connect_timeout_seconds']
-            ?? max(1, (int) config('bridge.http.connect_timeout_seconds', 2));
+            ?? (int) $this->defaultValue('wp_connect_timeout_seconds');
         $request = $overrides['wp_request_timeout_seconds']
-            ?? max(1, (int) config('bridge.http.request_timeout_seconds', 5));
+            ?? (int) $this->defaultValue('wp_request_timeout_seconds');
 
         return ['connect' => $connect, 'request' => max($connect, $request)];
     }
@@ -144,8 +192,8 @@ final class OperationalSettings
     public function sshTransferLimits(): array
     {
         $overrides = $this->overrides();
-        $configuredMax = min(67108864, max(1, (int) config('ssh.file_transfer.max_bytes', 8388608)));
-        $configuredSeconds = min(3600, max(1, (int) config('ssh.file_transfer.max_seconds', 30)));
+        $configuredMax = $this->defaultBytes('ssh_transfer_max_kib');
+        $configuredSeconds = (int) $this->defaultValue('ssh_transfer_max_seconds');
 
         return [
             'max_bytes' => isset($overrides['ssh_transfer_max_kib'])
@@ -160,8 +208,8 @@ final class OperationalSettings
         $overrides = $this->overrides();
 
         return [
-            'max_bytes' => ($overrides['ssh_command_max_kib'] ?? 8) * 1024,
-            'max_seconds' => $overrides['ssh_command_timeout_seconds'] ?? 15,
+            'max_bytes' => ($overrides['ssh_command_max_kib'] ?? (int) $this->defaultValue('ssh_command_max_kib')) * 1024,
+            'max_seconds' => $overrides['ssh_command_timeout_seconds'] ?? (int) $this->defaultValue('ssh_command_timeout_seconds'),
         ];
     }
 
@@ -171,14 +219,14 @@ final class OperationalSettings
         $overrides = $this->overrides();
 
         return [
-            'stdout_bytes' => ($overrides['ssh_command_stdout_kib'] ?? 16) * 1024,
-            'stderr_bytes' => ($overrides['ssh_command_stderr_kib'] ?? 8) * 1024,
+            'stdout_bytes' => ($overrides['ssh_command_stdout_kib'] ?? (int) $this->defaultValue('ssh_command_stdout_kib')) * 1024,
+            'stderr_bytes' => ($overrides['ssh_command_stderr_kib'] ?? (int) $this->defaultValue('ssh_command_stderr_kib')) * 1024,
         ];
     }
 
     public function sshJobOutputWindowBytes(): int
     {
-        return ($this->overrides()['ssh_job_output_window_kib'] ?? 16) * 1024;
+        return ($this->overrides()['ssh_job_output_window_kib'] ?? (int) $this->defaultValue('ssh_job_output_window_kib')) * 1024;
     }
 
     /** @return array{read_bytes:int,write_bytes:int,list_name_bytes:int} */
@@ -187,9 +235,9 @@ final class OperationalSettings
         $overrides = $this->overrides();
 
         return [
-            'read_bytes' => ($overrides['ssh_file_read_window_kib'] ?? 16) * 1024,
-            'write_bytes' => ($overrides['ssh_file_write_window_kib'] ?? 16) * 1024,
-            'list_name_bytes' => ($overrides['ssh_file_list_name_kib'] ?? 16) * 1024,
+            'read_bytes' => ($overrides['ssh_file_read_window_kib'] ?? (int) $this->defaultValue('ssh_file_read_window_kib')) * 1024,
+            'write_bytes' => ($overrides['ssh_file_write_window_kib'] ?? (int) $this->defaultValue('ssh_file_write_window_kib')) * 1024,
+            'list_name_bytes' => ($overrides['ssh_file_list_name_kib'] ?? (int) $this->defaultValue('ssh_file_list_name_kib')) * 1024,
         ];
     }
 
@@ -199,12 +247,12 @@ final class OperationalSettings
         $overrides = $this->overrides();
 
         return [
-            'max_active_per_user' => $overrides['ssh_job_max_active_per_user'] ?? 2,
-            'max_runtime_seconds' => $overrides['ssh_job_max_runtime_seconds'] ?? 300,
-            'retention_hours' => $overrides['ssh_job_retention_hours'] ?? 24,
-            'preparing_grace_seconds' => $overrides['ssh_job_preparing_grace_seconds'] ?? 120,
-            'reconcile_grace_seconds' => $overrides['ssh_job_reconcile_grace_seconds'] ?? 600,
-            'max_script_bytes' => ($overrides['ssh_job_max_script_kib'] ?? 16) * 1024,
+            'max_active_per_user' => $overrides['ssh_job_max_active_per_user'] ?? (int) $this->defaultValue('ssh_job_max_active_per_user'),
+            'max_runtime_seconds' => $overrides['ssh_job_max_runtime_seconds'] ?? (int) $this->defaultValue('ssh_job_max_runtime_seconds'),
+            'retention_hours' => $overrides['ssh_job_retention_hours'] ?? (int) $this->defaultValue('ssh_job_retention_hours'),
+            'preparing_grace_seconds' => $overrides['ssh_job_preparing_grace_seconds'] ?? (int) $this->defaultValue('ssh_job_preparing_grace_seconds'),
+            'reconcile_grace_seconds' => $overrides['ssh_job_reconcile_grace_seconds'] ?? (int) $this->defaultValue('ssh_job_reconcile_grace_seconds'),
+            'max_script_bytes' => ($overrides['ssh_job_max_script_kib'] ?? (int) $this->defaultValue('ssh_job_max_script_kib')) * 1024,
         ];
     }
 
@@ -214,11 +262,11 @@ final class OperationalSettings
         $overrides = $this->overrides();
 
         return [
-            'max_parallelism' => $overrides['batch_max_parallelism'] ?? max(1, (int) config('batch.max_parallelism', 4)),
-            'global_active' => $overrides['batch_global_active'] ?? max(1, (int) config('batch.global_active', 4)),
-            'user_active' => $overrides['batch_user_active'] ?? max(1, (int) config('batch.user_active', 2)),
-            'worker_max_children' => $overrides['batch_worker_max_children'] ?? max(1, (int) config('batch.worker_max_children', 16)),
-            'worker_max_seconds' => $overrides['batch_worker_max_seconds'] ?? max(1, (int) config('batch.worker_max_seconds', 50)),
+            'max_parallelism' => $overrides['batch_max_parallelism'] ?? (int) $this->defaultValue('batch_max_parallelism'),
+            'global_active' => $overrides['batch_global_active'] ?? (int) $this->defaultValue('batch_global_active'),
+            'user_active' => $overrides['batch_user_active'] ?? (int) $this->defaultValue('batch_user_active'),
+            'worker_max_children' => $overrides['batch_worker_max_children'] ?? (int) $this->defaultValue('batch_worker_max_children'),
+            'worker_max_seconds' => $overrides['batch_worker_max_seconds'] ?? (int) $this->defaultValue('batch_worker_max_seconds'),
         ];
     }
 
@@ -239,7 +287,7 @@ final class OperationalSettings
     }
 
     /**
-     * The form submits every supported key; blank resets an override.
+     * Apply a version-checked setting delta; null resets an override.
      *
      * @param  array<string, int|null>  $values
      */
@@ -251,51 +299,7 @@ final class OperationalSettings
                 'values' => 'The operational settings request has an unknown or missing field.',
             ]);
         }
-        $all = array_keys(self::SETTING_RANGES);
-        if (count($keys) !== count($all)) {
-            $previous = $this->state()['overrides'];
-            foreach ($all as $key) {
-                if (! array_key_exists($key, $values)) {
-                    $values[$key] = $previous[$key] ?? null;
-                }
-            }
-        }
-
-        $next = [];
-        foreach (self::SETTING_RANGES as $key => $range) {
-            $value = $values[$key];
-            if ($value === null) {
-                continue;
-            }
-            if ($value < $range['minimum'] || $value > $range['maximum']) {
-                throw ValidationException::withMessages([
-                    'values.'.$key => 'The operational setting is outside its supported range.',
-                ]);
-            }
-            $next[$key] = $value;
-        }
-
-        $connect = $next['wp_connect_timeout_seconds']
-            ?? max(1, (int) config('bridge.http.connect_timeout_seconds', 2));
-        $request = $next['wp_request_timeout_seconds']
-            ?? max(1, (int) config('bridge.http.request_timeout_seconds', 5));
-        // A previously supported .env configuration may have a connection
-        // timeout greater than the request timeout: the existing HTTP client
-        // normalized the whole deadline to the connect timeout. With *no*
-        // Owner network overrides, preserve that behavior even when changing
-        // only response budgets. A newly explicit override must instead be a
-        // valid pair, never silently clamped to an unexpected effective value.
-        $hasNetworkOverride = isset($next['wp_connect_timeout_seconds'])
-            || isset($next['wp_request_timeout_seconds']);
-        if ($hasNetworkOverride && $connect > $request) {
-            throw ValidationException::withMessages([
-                'values.wp_request_timeout_seconds' => 'The overall request timeout must be at least the connection timeout.',
-            ]);
-        }
-
-        DB::transaction(function () use ($actor, $expectedVersion, $next): void {
-            // One row serializes simultaneous edits from Owner browser tabs.
-            // The expected version rejects stale forms and lost updates.
+        $next = DB::transaction(function () use ($actor, $expectedVersion, $values): array {
             $record = DB::table('operational_settings')->where('id', 1)
                 ->lockForUpdate()->first();
             if ($record === null || (int) $record->version !== $expectedVersion) {
@@ -303,62 +307,53 @@ final class OperationalSettings
                     'version' => 'Operational settings changed. Reload the page before saving.',
                 ]);
             }
-            if (! property_exists($record, 'wp_connect_timeout_seconds')
-                || ! property_exists($record, 'wp_request_timeout_seconds')
-                || ! property_exists($record, 'ssh_command_timeout_seconds')
-                || ! property_exists($record, 'ssh_command_max_kib')
-                || ! property_exists($record, 'ssh_job_max_active_per_user')
-                || ! property_exists($record, 'ssh_job_reconcile_grace_seconds')
-                || ! property_exists($record, 'ssh_job_max_script_kib')
-                || ! property_exists($record, 'ssh_command_stdout_kib')
-                || ! property_exists($record, 'ssh_file_list_name_kib')
-                || ! property_exists($record, 'wp_ability_input_kib')
-                || ! property_exists($record, 'dcr_registration_capacity')
-                || ! property_exists($record, 'batch_max_parallelism')
-                || ! property_exists($record, 'batch_global_active')
-                || ! property_exists($record, 'batch_user_active')
-                || ! property_exists($record, 'batch_worker_max_children')
-                || ! property_exists($record, 'batch_worker_max_seconds')) {
-                throw new RuntimeException('Operational settings schema is missing required columns.');
+            foreach (self::columnKeys() as $key) {
+                if (! property_exists($record, $key)) {
+                    throw new RuntimeException('Operational settings schema is missing required column: '.$key);
+                }
             }
+
             $old = $this->combineOverrides($record);
+            $next = [];
+            foreach (self::SETTING_RANGES as $key => $range) {
+                $value = array_key_exists($key, $values) ? $values[$key] : ($old[$key] ?? null);
+                if ($value === null) {
+                    continue;
+                }
+                if ($value < $range['minimum'] || $value > $range['maximum']) {
+                    throw ValidationException::withMessages([
+                        'values.'.$key => 'The operational setting is outside its supported range.',
+                    ]);
+                }
+                $next[$key] = $value;
+            }
+
+            $connect = $next['wp_connect_timeout_seconds']
+                ?? (int) $this->defaultValue('wp_connect_timeout_seconds');
+            $request = $next['wp_request_timeout_seconds']
+                ?? (int) $this->defaultValue('wp_request_timeout_seconds');
+            // Explicit deadline overrides must form a valid effective pair.
+            // With no override, the HTTP runtime normalizes the config defaults.
+            $hasNetworkOverride = isset($next['wp_connect_timeout_seconds'])
+                || isset($next['wp_request_timeout_seconds']);
+            if ($hasNetworkOverride && $connect > $request) {
+                throw ValidationException::withMessages([
+                    'values.wp_request_timeout_seconds' => 'The overall request timeout must be at least the connection timeout.',
+                ]);
+            }
+
             if ($old === $next) {
-                return;
+                return $next;
             }
             $revision = (int) $record->version + 1;
             $now = now();
+            $columns = [];
+            foreach (self::columnKeys() as $key) {
+                $columns[$key] = $next[$key] ?? null;
+            }
             DB::table('operational_settings')->where('id', 1)->update([
-                // Older released Gateways only understand the two response
-                // keys in this JSON. New timeout columns allow safe rollback
-                // without making older versions reject the settings row.
-                'overrides' => json_encode(array_intersect_key($next, array_flip([
-                    'wp_response_kib', 'wp_readonly_response_kib',
-                ])), JSON_THROW_ON_ERROR),
-                'wp_connect_timeout_seconds' => $next['wp_connect_timeout_seconds'] ?? null,
-                'wp_request_timeout_seconds' => $next['wp_request_timeout_seconds'] ?? null,
-                'ssh_transfer_max_kib' => $next['ssh_transfer_max_kib'] ?? null,
-                'ssh_transfer_max_seconds' => $next['ssh_transfer_max_seconds'] ?? null,
-                'ssh_command_timeout_seconds' => $next['ssh_command_timeout_seconds'] ?? null,
-                'ssh_command_max_kib' => $next['ssh_command_max_kib'] ?? null,
-                'ssh_job_max_active_per_user' => $next['ssh_job_max_active_per_user'] ?? null,
-                'ssh_job_max_runtime_seconds' => $next['ssh_job_max_runtime_seconds'] ?? null,
-                'ssh_job_retention_hours' => $next['ssh_job_retention_hours'] ?? null,
-                'ssh_job_preparing_grace_seconds' => $next['ssh_job_preparing_grace_seconds'] ?? null,
-                'ssh_job_reconcile_grace_seconds' => $next['ssh_job_reconcile_grace_seconds'] ?? null,
-                'ssh_job_max_script_kib' => $next['ssh_job_max_script_kib'] ?? null,
-                'ssh_command_stdout_kib' => $next['ssh_command_stdout_kib'] ?? null,
-                'ssh_command_stderr_kib' => $next['ssh_command_stderr_kib'] ?? null,
-                'ssh_job_output_window_kib' => $next['ssh_job_output_window_kib'] ?? null,
-                'ssh_file_read_window_kib' => $next['ssh_file_read_window_kib'] ?? null,
-                'ssh_file_write_window_kib' => $next['ssh_file_write_window_kib'] ?? null,
-                'ssh_file_list_name_kib' => $next['ssh_file_list_name_kib'] ?? null,
-                'wp_ability_input_kib' => $next['wp_ability_input_kib'] ?? null,
-                'dcr_registration_capacity' => $next['dcr_registration_capacity'] ?? null,
-                'batch_max_parallelism' => $next['batch_max_parallelism'] ?? null,
-                'batch_global_active' => $next['batch_global_active'] ?? null,
-                'batch_user_active' => $next['batch_user_active'] ?? null,
-                'batch_worker_max_children' => $next['batch_worker_max_children'] ?? null,
-                'batch_worker_max_seconds' => $next['batch_worker_max_seconds'] ?? null,
+                'overrides' => json_encode(array_intersect_key($next, array_flip(self::JSON_KEYS)), JSON_THROW_ON_ERROR),
+                ...$columns,
                 'version' => $revision,
                 'changed_by' => $actor->getKey(),
                 'updated_at' => $now,
@@ -379,6 +374,8 @@ final class OperationalSettings
                     'created_at' => $now,
                 ]);
             }
+
+            return $next;
         });
         // Same-request callers (e.g. test harness) must observe the write;
         // other FPM/CLI requests have their own scoped instance.
@@ -417,18 +414,7 @@ final class OperationalSettings
     private function combineOverrides(object $record): array
     {
         $overrides = $this->decodeOverrides((string) $record->overrides);
-        foreach (['wp_connect_timeout_seconds', 'wp_request_timeout_seconds',
-            'ssh_transfer_max_kib', 'ssh_transfer_max_seconds',
-            'ssh_command_timeout_seconds', 'ssh_command_max_kib',
-            'ssh_job_max_active_per_user', 'ssh_job_max_runtime_seconds',
-            'ssh_job_retention_hours', 'ssh_job_preparing_grace_seconds',
-            'ssh_job_reconcile_grace_seconds', 'ssh_job_max_script_kib',
-            'ssh_command_stdout_kib', 'ssh_command_stderr_kib',
-            'ssh_job_output_window_kib', 'ssh_file_read_window_kib',
-            'ssh_file_write_window_kib', 'ssh_file_list_name_kib',
-            'wp_ability_input_kib', 'dcr_registration_capacity',
-            'batch_max_parallelism', 'batch_global_active', 'batch_user_active',
-            'batch_worker_max_children', 'batch_worker_max_seconds'] as $key) {
+        foreach (self::columnKeys() as $key) {
             $value = $record->{$key} ?? null;
             if ($value === null) {
                 continue;
@@ -460,7 +446,7 @@ final class OperationalSettings
         }
         $result = [];
         foreach ($values as $key => $value) {
-            if (! is_string($key) || ! in_array($key, ['wp_response_kib', 'wp_readonly_response_kib'], true)
+            if (! is_string($key) || ! in_array($key, self::JSON_KEYS, true)
                 || ! is_int($value)
                 || $value < self::SETTING_RANGES[$key]['minimum']
                 || $value > self::SETTING_RANGES[$key]['maximum']) {

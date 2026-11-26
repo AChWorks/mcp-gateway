@@ -40,7 +40,7 @@ trait StreamsSshFiles
         $this->validateSha256($expectedSha256);
 
         return $this->operate($user, $target, GatewayPermission::SshFileRead,
-            function (SFTP $sftp, string $ip, SshTargetConfig $config) use (
+            function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $_assertWriteAuthority, string $routeMode) use (
                 $path, $sink, $maxBytes, $deadline, $expectedSha256, $expectedSize, $expectedMtime,
             ): array {
                 $sftp->disableStatCache();
@@ -94,7 +94,7 @@ trait StreamsSshFiles
                 }
 
                 return [
-                    ...$this->context($ip, $config, $path),
+                    ...$this->context($ip, $config, $path, $routeMode),
                     'status' => 'completed',
                     'complete' => true,
                     'bytes_read' => $received,
@@ -125,6 +125,7 @@ trait StreamsSshFiles
         string $expectedSha256, int $maxBytes, int $maxSeconds, string $privateStagingDir,
         bool $overwrite = false, ?int $expectedSize = null, ?int $expectedMtime = null,
         ?string $expectedTargetBinding = null, ?int $overallDeadlineNs = null,
+        ?string $expectedCredentialMaterial = null,
     ): array {
         $this->validatePath($path);
         $this->validatePath($privateStagingDir);
@@ -146,7 +147,7 @@ trait StreamsSshFiles
         }
 
         return $this->operate($user, $target, GatewayPermission::SshFileWrite,
-            function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $assertWriteAuthority) use (
+            function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $assertWriteAuthority, string $routeMode) use (
                 $path, $source, $expectedBytes, $expectedSha256, $deadline, $privateStagingDir,
                 $overwrite, $expectedSize, $expectedMtime,
             ): array {
@@ -350,7 +351,7 @@ trait StreamsSshFiles
                     }
 
                     return [
-                        ...$this->context($ip, $config, $path),
+                        ...$this->context($ip, $config, $path, $routeMode),
                         'status' => 'outcome_unknown',
                         'complete' => false,
                         'possible_remote_effect' => true,
@@ -359,7 +360,7 @@ trait StreamsSshFiles
                 }
 
                 return [
-                    ...$this->context($ip, $config, $path),
+                    ...$this->context($ip, $config, $path, $routeMode),
                     'status' => 'completed',
                     'complete' => true,
                     'bytes_written' => $expectedBytes,
@@ -370,7 +371,7 @@ trait StreamsSshFiles
                     'overwrote' => $overwrite,
                     'published_mode' => sprintf('%04o', $publishedMode),
                 ];
-            }, $deadline, expectedTargetBinding: $expectedTargetBinding);
+            }, $deadline, expectedTargetBinding: $expectedTargetBinding, expectedCredentialMaterial: $expectedCredentialMaterial);
     }
 
     private function validateTransferLimit(int $maxBytes): void

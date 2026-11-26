@@ -69,7 +69,7 @@ final readonly class WpAiBridgeTargetReconfiguration
         // Public HTTPS metadata discovery deliberately happens without a DB
         // lock; the same strict SSRF, DNS and origin checks as registration.
         try {
-            $discovered = $this->discovery->discover($url, $this->relays->httpRouteForTarget($target));
+            $discovered = $this->discovery->discover($url, fn () => $this->relays->httpRouteForTarget($target));
         } catch (OutboundRequestException $exception) {
             throw new TargetConnectorFailure(
                 __('The selected Connection Relay is unavailable; no WordPress origin change was saved.'),

@@ -36,6 +36,7 @@ final readonly class SshManagedReverseEnrollmentService
         private ActivityRecorder $activity,
         private SshManagedReverseAuthorizedKeys $authorizedKeys,
         private SshManagedReverseHostReadiness $readiness,
+        private TargetTransportBinding $transportBindings,
     ) {}
 
     private function requireLocalReady(): void
@@ -95,6 +96,7 @@ final readonly class SshManagedReverseEnrollmentService
                 'connection_state' => TargetConnectionState::Pending,
             ]);
             $identity = 'managed-'.bin2hex(random_bytes(12));
+            $this->transportBindings->changeReverseLocked($target, $port, $identity);
             $config = SshTargetConfig::query()->create([
                 'target_record_id' => $target->getKey(),
                 'host' => $endpoint->host,
@@ -102,9 +104,6 @@ final readonly class SshManagedReverseEnrollmentService
                 'username' => $endpoint->username,
                 'auth_method' => 'private_key',
                 'pinned_host_key' => $pin->canonicalLine(),
-                'route_mode' => 'reverse',
-                'reverse_listener_port' => $port,
-                'reverse_tunnel_identity' => $identity,
                 'binding_revision' => 0,
             ]);
             TargetCredential::query()->create([
@@ -152,7 +151,8 @@ final readonly class SshManagedReverseEnrollmentService
             $id = DB::transaction(function () use ($enrollmentId, $token, $controlKey): string {
                 $gateway = SshManagedReverseGateway::query()->whereKey(1)->lockForUpdate()->first();
                 $enrollment = SshManagedReverseEnrollment::query()->whereKey($enrollmentId)->lockForUpdate()->first();
-                if (! $gateway?->enabled || ! $enrollment || $enrollment->state !== 'pending'
+                if (! $gateway?->enabled || $gateway->publication_pending
+                    || ! $enrollment || $enrollment->state !== 'pending'
                     || $enrollment->token_expires_at === null
                     || CarbonImmutable::parse($enrollment->token_expires_at)->isPast()
                     || ! is_string($enrollment->token_hash)
@@ -180,9 +180,13 @@ final readonly class SshManagedReverseEnrollmentService
             // "claimed" is durable BEFORE publication. A failed or unknown
             // file/DB finalization remains explicitly reconcilable; the token
             // is never replayable and route admission still denies "claimed".
-            $this->authorizedKeys->sync();
+            $this->authorizedKeys->publishClaim($id);
             $enrollment = SshManagedReverseEnrollment::query()->findOrFail($id);
             $gateway = SshManagedReverseGateway::query()->findOrFail(1);
+            if (! $gateway->enabled || $gateway->publication_pending || $enrollment->state !== 'active'
+                || $enrollment->publication_pending) {
+                throw new RuntimeException('Managed Reverse SSH authority changed during claim publication.');
+            }
 
             return [
                 'control_host' => $gateway->control_host,
@@ -191,7 +195,7 @@ final readonly class SshManagedReverseEnrollmentService
                 'control_host_key' => $gateway->control_host_key,
                 'listener_port' => $enrollment->listener_port,
                 'target_port' => $enrollment->target->sshConfig->port,
-                'target_username' => $enrollment->target->sshConfig->username,
+                'target_username' => $enrollment->login_public_key !== '' ? $enrollment->target->sshConfig->username : '',
                 'login_public_key' => $enrollment->login_public_key,
             ];
         });
@@ -217,27 +221,17 @@ final readonly class SshManagedReverseEnrollmentService
                 if (! $gateway?->enabled || $gateway->publication_pending || ! $this->authorizedKeys->matchesGateway($gateway)) {
                     throw new RuntimeException('Managed Reverse SSH host capability is disabled or mismatched.');
                 }
+                $target = Target::query()->whereKey($original->target_record_id)->lockForUpdate()->firstOrFail();
                 $current = SshManagedReverseEnrollment::query()
+                    ->where('target_record_id', $target->getKey())
                     ->whereKey($original->getKey())->lockForUpdate()->firstOrFail();
-                $target = Target::query()->whereKey($current->target_record_id)->lockForUpdate()->firstOrFail();
                 $config = SshTargetConfig::query()
                     ->where('target_record_id', $target->getKey())->lockForUpdate()->firstOrFail();
-                if ($current->state === 'revoked'
-                    || $target->getRawOriginal('connection_state') !== TargetConnectionState::Pending->value
-                    || $config->route_mode !== 'reverse') {
-                    throw new InvalidArgumentException('Only an unverified Pending Setup managed enrollment can be reissued.');
+                if ($current->state === 'revoked' || ! $target->usesReverseRoute()) {
+                    throw new InvalidArgumentException('Only a selected, non-revoked managed Reverse route can be reissued.');
                 }
-                // The vault ciphertext is bound to the exact route epoch,
-                // port and tunnel identity. Reissue must re-seal the SAME
-                // approved Target login key with the new binding atomically
-                // with the config update, or real post-reissue SSH Verify
-                // fails even though the new control tunnel is up.
-                $credential = TargetCredential::query()
-                    ->where('target_record_id', $target->getKey())
-                    ->where('connector_type', 'ssh_direct')
-                    ->where('purpose', SshTargetVault::PURPOSE)
-                    ->lockForUpdate()->firstOrFail();
-                $loginMaterial = $this->vault->open($target, $config, $credential);
+                // Rotating the control path never opens or rewrites the
+                // downstream login credential.
                 $newPort = $this->allocatePort();
                 DB::table('ssh_reverse_managed_retired_ports')->insert([
                     'listener_port' => $current->listener_port,
@@ -245,10 +239,8 @@ final readonly class SshManagedReverseEnrollmentService
                     'retired_at' => now(),
                 ]);
                 $identity = 'managed-'.bin2hex(random_bytes(12));
+                $this->transportBindings->changeReverseLocked($target, $newPort, $identity);
                 DB::table('ssh_direct_target_configs')->where('id', $config->getKey())->update([
-                    'reverse_listener_port' => $newPort,
-                    'reverse_tunnel_identity' => $identity,
-                    'binding_revision' => ((int) $config->binding_revision) + 1,
                     'verification_attempt_id' => null,
                     'observed_peer_ip' => null,
                     'observed_at' => null,
@@ -258,13 +250,6 @@ final readonly class SshManagedReverseEnrollmentService
                 // Target ID. The Target installer namespaces state, Unix
                 // tunnel identity and systemd unit by this immutable ID:
                 // reusing it would replay a stored old claim response.
-                $newConfig = SshTargetConfig::query()->whereKey($config->getKey())->firstOrFail();
-                $credential->forceFill([
-                    'encrypted_payload' => $this->vault->seal(
-                        $target, $newConfig, $loginMaterial['secret'], $loginMaterial['passphrase'],
-                    ),
-                ])->save();
-                unset($loginMaterial);
                 $current->forceFill([
                     'id' => strtolower((string) Str::ulid()),
                     'listener_port' => $newPort,
@@ -278,11 +263,7 @@ final readonly class SshManagedReverseEnrollmentService
                     'state' => 'pending',
                     'publication_pending' => true,
                 ])->save();
-                $target->forceFill([
-                    'connection_state' => TargetConnectionState::Pending,
-                    'connected_at' => null,
-                    'last_error_code' => null,
-                ])->save();
+                $target->forceFill(['last_tested_at' => null])->save();
                 $this->activity->recordRequired(
                     CorrelationId::current(), 'ssh-managed-reverse-reissue', 'success', $target,
                 );
@@ -291,7 +272,7 @@ final readonly class SshManagedReverseEnrollmentService
             }, 3);
             // Do not expose the new one-use command until the old control
             // authorization has been reconciled with the host key reader.
-            $this->authorizedKeys->sync();
+            $this->authorizedKeys->reconcileClosures();
 
             return ['enrollment' => $enrollment->fresh(), 'token' => $token];
         });
@@ -299,35 +280,22 @@ final readonly class SshManagedReverseEnrollmentService
 
     public function revoke(SshManagedReverseEnrollment $enrollment): void
     {
-        $committed = false;
-        try {
-            $this->authorizedKeys->withPolicyLock(function () use ($enrollment, &$committed): void {
-                $this->revokeLocal($enrollment);
-                $committed = true;
-                $this->authorizedKeys->sync();
-            });
-        } finally {
-            if (! $committed) {
-                // Failure to acquire the publication lock must NEVER
-                // prevent local revocation, credential destruction and Job
-                // fencing. A later Owner reconciliation removes host keys.
-                $this->revokeLocal($enrollment);
-            }
-        }
+        // Local revoke, like global Disable, closes application authority
+        // before attempting any filesystem lock or external publication.
+        $this->revokeLocal($enrollment);
+        $this->authorizedKeys->reconcileClosures();
     }
 
     private function revokeLocal(SshManagedReverseEnrollment $enrollment): void
     {
         DB::transaction(function () use ($enrollment): void {
             SshManagedReverseGateway::query()->whereKey(1)->lockForUpdate()->first();
-            $current = SshManagedReverseEnrollment::query()
+            $target = Target::query()->whereKey($enrollment->target_record_id)->lockForUpdate()->firstOrFail();
+            $current = SshManagedReverseEnrollment::query()->where('target_record_id', $target->getKey())
                 ->whereKey($enrollment->getKey())->lockForUpdate()->firstOrFail();
-            $target = Target::query()->whereKey($current->target_record_id)->lockForUpdate()->firstOrFail();
             $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())
                 ->lockForUpdate()->firstOrFail();
-            $credentials = TargetCredential::query()->where('target_record_id', $target->getKey())
-                ->where('connector_type', 'ssh_direct');
-            $needsFencing = $current->state !== 'revoked' || $credentials->exists();
+            $needsFencing = $current->state !== 'revoked';
             $current->forceFill([
                 'state' => 'revoked',
                 'publication_pending' => true,
@@ -336,19 +304,16 @@ final readonly class SshManagedReverseEnrollmentService
                 'token_expires_at' => null,
             ])->save();
             if ($needsFencing) {
+                $this->transportBindings->changeReverseLocked($target, $target->reverse_listener_port, $target->reverse_tunnel_identity, forceFence: true);
                 DB::table('ssh_direct_target_configs')->where('id', $config->getKey())->update([
-                    'binding_revision' => ((int) $config->binding_revision) + 1,
                     'verification_attempt_id' => null,
                     'observed_peer_ip' => null,
                     'observed_at' => null,
                     'updated_at' => now(),
                 ]);
-                $credentials->delete();
-                $target->forceFill([
-                    'connection_state' => TargetConnectionState::Disconnected,
-                    'connected_at' => null,
-                    'last_error_code' => 'reverse_route_not_approved',
-                ])->save();
+                // Only the transport is revoked. An explicit credential
+                // disconnect remains a separate Target operation.
+                $target->forceFill(['last_tested_at' => null])->save();
                 $this->activity->recordRequired(
                     CorrelationId::current(), 'ssh-managed-reverse-revoke', 'success', $target,
                 );
@@ -365,7 +330,7 @@ final readonly class SshManagedReverseEnrollmentService
             throw new RuntimeException('Existing operator Reverse SSH route policy is invalid.');
         }
         $ports = array_fill_keys(
-            SshTargetConfig::query()->where('route_mode', 'reverse')->pluck('reverse_listener_port')->all(),
+            Target::query()->whereNotNull('reverse_listener_port')->pluck('reverse_listener_port')->all(),
             true,
         );
         foreach ($legacy ?? [] as $entry) {

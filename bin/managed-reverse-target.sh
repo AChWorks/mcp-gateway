@@ -9,7 +9,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 notice() { printf '%s\n' "$*" >&2; }
 usage() {
     cat >&2 <<'HELP'
-Usage: bash managed-reverse-target.sh --gateway https://gateway.example --enrollment ULID --token HEX64 --host-key-b64 BASE64 --target-user USER [--target-port N]
+Usage: bash managed-reverse-target.sh --gateway https://gateway.example --enrollment ULID --token HEX64 --host-key-b64 BASE64 [--target-user USER] [--target-port N]
 Requires explicit root privileges; supports Debian/Ubuntu and RHEL-family with systemd.
 HELP
     exit 2
@@ -32,8 +32,8 @@ done
 [[ "$token" =~ ^[a-f0-9]{64}$ ]] || die "Invalid one-use enrollment authorization."
 [[ "$host_key_b64" =~ ^[A-Za-z0-9+/=]+$ ]] || die "Invalid verified Target host key encoding."
 [[ -z "$port_override" || "$port_override" =~ ^[1-9][0-9]{0,4}$ ]] || die "Invalid SSH port override."
-[[ "$expected_user" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.+-]{0,127}$ ]] ||
-    die "The Owner-enrolled SSH login username is required."
+[[ -z "$expected_user" || "$expected_user" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.+-]{0,127}$ ]] ||
+    die "Invalid enrolled SSH login username."
 [[ -r /etc/os-release ]] || die "Unsupported host: /etc/os-release missing."
 # shellcheck source=/dev/null
 . /etc/os-release
@@ -107,15 +107,17 @@ if ! printf '%s\n' "$scan" | awk '{print $2" "$3}' | grep -Fxq "$owner_pin"; the
 fi
 # Validate the exact Owner-selected OS login before consuming the one-use
 # claim. An absent account or unsafe SSH home must not burn an enrollment.
-getent passwd "$expected_user" >/dev/null ||
-    die "The Owner-enrolled SSH login account does not exist."
-expected_home="$(getent passwd "$expected_user" | awk -F: '{print $6}')"
-[[ "$expected_home" = /* && -d "$expected_home" && ! -L "$expected_home" ]] ||
-    die "The Owner-enrolled SSH login account has an unsafe home."
-[[ ! -L "$expected_home/.ssh" && ! -L "$expected_home/.ssh/authorized_keys" ]] ||
-    die "Symlinked Target login SSH key paths are unsafe."
-[[ ! -e "$expected_home/.ssh/authorized_keys" || -f "$expected_home/.ssh/authorized_keys" ]] ||
-    die "Owner-enrolled SSH login authorized_keys is not a regular file."
+if [[ -n "$expected_user" ]]; then
+    getent passwd "$expected_user" >/dev/null ||
+        die "The Owner-enrolled SSH login account does not exist."
+    expected_home="$(getent passwd "$expected_user" | awk -F: '{print $6}')"
+    [[ "$expected_home" = /* && -d "$expected_home" && ! -L "$expected_home" ]] ||
+        die "The Owner-enrolled SSH login account has an unsafe home."
+    [[ ! -L "$expected_home/.ssh" && ! -L "$expected_home/.ssh/authorized_keys" ]] ||
+        die "Symlinked Target login SSH key paths are unsafe."
+    [[ ! -e "$expected_home/.ssh/authorized_keys" || -f "$expected_home/.ssh/authorized_keys" ]] ||
+        die "Owner-enrolled SSH login authorized_keys is not a regular file."
+fi
 # Local data written after preflight; all managed paths are ownable and
 # reconciled on repeat execution, never adopt an unrelated service/unit.
 if [[ -e "$state_file" ]]; then
@@ -213,11 +215,15 @@ for key in names:
     assert key in data, key
 assert re.fullmatch(r"[A-Za-z0-9.:-]{1,253}", data["control_host"])
 assert re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", data["control_user"])
-assert re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.+-]{0,127}", data["target_username"])
+assert isinstance(data["target_username"], str) and isinstance(data["login_public_key"], str)
+if data["login_public_key"]:
+    assert re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.+-]{0,127}", data["target_username"])
+    assert re.fullmatch(r"(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp\d+) [A-Za-z0-9+/=]+", data["login_public_key"])
+else:
+    assert data["target_username"] == ""
 for key in ("control_port", "listener_port", "target_port"):
     assert type(data[key]) is int and 1 <= data[key] <= 65535
-for key in ("control_host_key", "login_public_key"):
-    assert re.fullmatch(r"(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp\d+) [A-Za-z0-9+/=]+", data[key])
+assert re.fullmatch(r"(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp\d+) [A-Za-z0-9+/=]+", data["control_host_key"])
 with open(output, "x", encoding="utf-8") as dest:
     for key in names:
         dest.write(str(data[key]) + "\n")
@@ -228,33 +234,35 @@ control_host="${params_data[0]}" control_port="${params_data[1]}"
 control_user="${params_data[2]}" control_host_key="${params_data[3]}"
 listener_port="${params_data[4]}" registered_port="${params_data[5]}"
 target_user="${params_data[6]}" login_public_key="${params_data[7]}"
-[[ "$target_user" == "$expected_user" ]] ||
-    die "Gateway returned a different SSH login identity than the Owner-selected account."
 [[ "$registered_port" -eq "$local_port" ]] || die "Selected Target SSH port mismatches registered enrollment; use --target-port $registered_port."
-getent passwd "$target_user" >/dev/null || die "The explicitly selected Target login account does not exist: $target_user."
-target_home="$(getent passwd "$target_user" | awk -F: '{print $6}')"
-[[ "$target_home" = /* && -d "$target_home" && ! -L "$target_home" ]] || die "Target login home is missing/unsafe."
-login_ssh="$target_home/.ssh"
-login_keys="$login_ssh/authorized_keys"
-[[ ! -L "$login_ssh" && ! -L "$login_keys" ]] || die "Refusing symlinked Target authorized_keys path."
-[[ ! -e "$login_keys" || -f "$login_keys" ]] || die "Unexpected authorized_keys type."
-# Never create/chmod/append files in an OS login home as root: the login
-# user controls the directory and could swap a symlink between root checks.
-# Use the explicitly chosen login user's own filesystem permissions instead.
-runuser -u "$target_user" -- install -d -m 0700 "$login_ssh" ||
-    die "Target login user cannot protect its SSH directory."
-runuser -u "$target_user" -- touch "$login_keys" ||
-    die "Target login user cannot create its authorized_keys file."
-runuser -u "$target_user" -- chmod 0600 "$login_keys" ||
-    die "Target login user cannot protect authorized_keys."
-runuser -u "$target_user" -- sh -c '
-    key="$1"; keys="$2"
-    if ! grep -Fxq -- "$key" "$keys"; then
-        umask 077
-        printf "%s\n" "$key" >> "$keys"
-    fi
-' _ "$login_public_key" "$login_keys" ||
-    die "Target login user cannot append the approved public key."
+if [[ -n "$login_public_key" ]]; then
+    [[ "$target_user" == "$expected_user" ]] ||
+        die "Gateway returned a different SSH login identity than the Owner-selected account."
+    getent passwd "$target_user" >/dev/null || die "The explicitly selected Target login account does not exist: $target_user."
+    target_home="$(getent passwd "$target_user" | awk -F: '{print $6}')"
+    [[ "$target_home" = /* && -d "$target_home" && ! -L "$target_home" ]] || die "Target login home is missing/unsafe."
+    login_ssh="$target_home/.ssh"
+    login_keys="$login_ssh/authorized_keys"
+    [[ ! -L "$login_ssh" && ! -L "$login_keys" ]] || die "Refusing symlinked Target authorized_keys path."
+    [[ ! -e "$login_keys" || -f "$login_keys" ]] || die "Unexpected authorized_keys type."
+    # Never create/chmod/append files in an OS login home as root: the login
+    # user controls the directory and could swap a symlink between root checks.
+    # Use the explicitly chosen login user's own filesystem permissions instead.
+    runuser -u "$target_user" -- install -d -m 0700 "$login_ssh" ||
+        die "Target login user cannot protect its SSH directory."
+    runuser -u "$target_user" -- touch "$login_keys" ||
+        die "Target login user cannot create its authorized_keys file."
+    runuser -u "$target_user" -- chmod 0600 "$login_keys" ||
+        die "Target login user cannot protect authorized_keys."
+    runuser -u "$target_user" -- sh -c '
+        key="$1"; keys="$2"
+        if ! grep -Fxq -- "$key" "$keys"; then
+            umask 077
+            printf "%s\n" "$key" >> "$keys"
+        fi
+    ' _ "$login_public_key" "$login_keys" ||
+        die "Target login user cannot append the approved public key."
+fi
 # Never write a user-owned known_hosts file as root: a compromised service
 # user must not be able to turn an update into a privileged symlink write.
 known="$keys_dir/known_hosts"

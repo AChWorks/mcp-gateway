@@ -6,12 +6,9 @@ use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Targets\SshManagedReverseEnrollmentService;
 use App\Application\Targets\SshManagedReverseInstallCommand;
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Access\GatewayRole;
 use App\Domain\Targets\Target;
-use App\Domain\Targets\TargetConnectionState;
 use App\Http\Controllers\Controller;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
-use App\Models\User;
 use App\Support\TargetFormInput;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -25,7 +22,7 @@ final class SshManagedReverseTargetController extends Controller
 {
     public function create(Request $request): RedirectResponse
     {
-        $this->requireOwner($request);
+        Gate::authorize(GatewayPermission::TargetsCreate->value);
 
         // Bookmarked legacy route has one canonical Target-owned enrollment form.
         return redirect()->route('admin.targets.create', [
@@ -39,7 +36,7 @@ final class SshManagedReverseTargetController extends Controller
         SshManagedReverseEnrollmentService $enroll,
         SshManagedReverseInstallCommand $installer,
     ): View|RedirectResponse {
-        $this->requireOwner($request);
+        Gate::authorize(GatewayPermission::TargetsCreate->value);
 
         try {
             return $this->createPending($request, $password, $enroll, $installer);
@@ -71,6 +68,7 @@ final class SshManagedReverseTargetController extends Controller
             ]);
         }
         $fields = $request->validate([
+            'connection_relay_id' => ['prohibited'],
             'target_id' => ['required', 'string', 'max:64',
                 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
             'display_name' => ['required', 'string', 'max:160'],
@@ -125,22 +123,21 @@ final class SshManagedReverseTargetController extends Controller
         Request $request, Target $target, AdministratorPasswordConfirmation $password,
         SshManagedReverseEnrollmentService $enroll, SshManagedReverseInstallCommand $installer,
     ): View {
-        $this->requireOwner($request);
-        Gate::authorize(GatewayPermission::TargetsUpdate->value, $target);
+        Gate::authorize(GatewayPermission::TargetsConfigure->value, $target);
         $fields = $request->validate([
             'confirm_target_id' => ['required', 'string', 'max:64'],
         ]);
         if (! hash_equals($target->target_id, $fields['confirm_target_id'])) {
             throw ValidationException::withMessages([
-                'confirm_target_id' => __('Type the exact Target ID to rotate an unverified enrollment.'),
+                'confirm_target_id' => __('Type the exact Target ID to rotate the managed network route.'),
             ]);
         }
         $password->confirm($request);
         $managed = SshManagedReverseEnrollment::query()
             ->where('target_record_id', $target->getKey())->firstOrFail();
-        if ($managed->state === 'revoked' || $target->getRawOriginal('connection_state') !== TargetConnectionState::Pending->value) {
+        if ($managed->state === 'revoked' || ! $target->usesReverseRoute()) {
             throw ValidationException::withMessages([
-                'target' => __('Only an unverified Pending Setup can be reissued. Revoke or inspect this Target first.'),
+                'target' => __('Only a selected, non-revoked managed Reverse route can be reissued.'),
             ]);
         }
         $installer->scriptDigest();
@@ -159,16 +156,5 @@ final class SshManagedReverseTargetController extends Controller
             'installerSha' => $installer->scriptDigest(),
             'expires' => $enrollment->token_expires_at,
         ])->with('notices', [])->with('suppressCache', true);
-    }
-
-    private function requireOwner(Request $request): User
-    {
-        Gate::authorize(GatewayPermission::TargetsCreate->value);
-        Gate::authorize(GatewayPermission::SecurityManage->value);
-        $user = $request->user();
-        abort_unless($user instanceof User && (string) $user->getRawOriginal('role') === GatewayRole::Owner->value
-            && $user->access_enabled, 403);
-
-        return $user;
     }
 }

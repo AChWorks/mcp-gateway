@@ -10,6 +10,7 @@ use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetConfig;
 use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetVault;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Http\Api\ApiHttpTransport;
 use App\Infrastructure\Http\Api\OpenApiOperationCatalog;
 use App\Infrastructure\Http\OutboundRequestException;
@@ -40,6 +41,7 @@ final readonly class ArvanApiOperations
         private ApiHttpTransport $transport,
         private OpenApiOperationCatalog $catalog,
         private ArvanApiTargetVault $vault,
+        private ConnectionRelayRoutes $relays,
     ) {}
 
     /** @return array<string, mixed> */
@@ -61,7 +63,7 @@ final readonly class ArvanApiOperations
         if ($config?->spec_url === null) {
             return $this->failed($operation, $target, 'catalog_unavailable', [
                 'source_error_code' => 'openapi_spec_url_missing',
-                'source_error_message' => 'Target has no Owner-configured OpenAPI description URL.',
+                'source_error_message' => 'Target has no configured OpenAPI description URL.',
                 'failure_origin' => 'gateway_admission', 'failure_stage' => 'admission',
                 'request_not_sent' => true, 'retry_safe' => true,
             ]);
@@ -69,7 +71,7 @@ final readonly class ArvanApiOperations
 
         try {
             // Public documentation retrieval never receives the API key.
-            $response = $this->http->getApiDocument($config->spec_url);
+            $response = $this->http->getApiDocument($config->spec_url, relay: $this->relays->httpRouteForTarget($target));
             if ($response->status < 200 || $response->status >= 300) {
                 return $this->failed($operation, $target, 'catalog_unavailable', [
                     'http_status' => $response->status, 'failure_origin' => 'downstream_http',
@@ -169,6 +171,7 @@ final readonly class ArvanApiOperations
                 $config->base_url, $method, $path, $query, $bodyJson,
                 ['Authorization' => 'Apikey '.$key, 'Accept' => 'application/json'],
                 $bodyText, $contentType, $formFields, $formFiles, $accept,
+                relay: $this->relays->httpRouteForTarget($target),
             );
         } catch (OutboundRequestException $exception) {
             $unknown = $permission !== GatewayPermission::ArvanApiRead && ! $exception->preDispatch;

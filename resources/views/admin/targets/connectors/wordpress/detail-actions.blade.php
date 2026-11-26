@@ -1,9 +1,8 @@
 @if ($refreshPending)
-    <p class="muted" role="status">{{ __('WordPress token refresh could not be confirmed. Credential use, reconnection and disconnection are blocked until the full remote authorization has been invalidated.') }}</p>
-    @can('security.manage')
+    <p class="muted" role="status">{{ __('WordPress token refresh could not be confirmed. Credential use, ordinary reconnection and disconnection are blocked until the full remote authorization has been invalidated. Changing the network route does not clear the pending revocation.') }}</p>
         @can('targets.disconnect', $target)
             <section class="panel panel-danger" aria-labelledby="refresh-recovery-title">
-                <h3 id="refresh-recovery-title">{{ __('Manual WordPress refresh recovery (Owner only)') }}</h3>
+                <h3 id="refresh-recovery-title">{{ __('Manual WordPress refresh recovery') }}</h3>
                 <p id="reconcile-refresh-help">{{ __('Before proceeding, sign in as a WordPress administrator on the exact origin above. In WP AI Bridge → OAuth Clients, REMOVE this Gateway client ID from the approved list and SAVE. This changes the shared additional-client approval revision: all other non-ChatGPT OAuth clients on that WordPress site are also invalidated and must reconnect. Keep Gateway unapproved until local recovery finishes. A WordPress logout or revocation of the old refresh token alone is NOT enough.') }}</p>
                 <p>{{ __('Verify the updated WordPress approval list and preserve operator evidence. Wait until every in-flight refresh is finished (at least 75 seconds). Gateway cannot independently verify WordPress revocation: this is your explicit security attestation. If you cannot verify the change or accept the effect on other clients, leave the Target blocked and do not submit.') }}</p>
                 <p>{{ __('Exact Gateway client ID') }}: <code>{{ config('bridge.client.id') }}</code></p>
@@ -28,7 +27,6 @@
                 </form>
             </section>
         @endcan
-    @endcan
 @elseif ($revocationPending)
     <p class="muted">{{ __('Credential revocation is pending. Use the guided recovery options above. Other authenticated WordPress operations remain blocked until a safe outcome is confirmed.') }}</p>
 @elseif (! $hasCredential)

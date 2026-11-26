@@ -123,7 +123,7 @@ final class OperationalSettingsAdminTest extends TestCase
         self::assertSame(1024, (new OperationalSettings)->dcrRegistrationCapacity());
     }
 
-    public function test_capacity_settings_reject_out_of_range_and_incomplete_new_forms(): void
+    public function test_capacity_settings_reject_out_of_range_and_unknown_keys(): void
     {
         $this->actingAs($this->account('owner'));
         $values = array_fill_keys(array_keys(OperationalSettings::allowed()), '');
@@ -137,7 +137,7 @@ final class OperationalSettingsAdminTest extends TestCase
             'version' => '0', 'values' => $values, 'current_password' => 'CorrectHorse!234',
         ])->assertSessionHasErrors('values.dcr_registration_capacity');
         $values['dcr_registration_capacity'] = '';
-        unset($values['wp_ability_input_kib']);
+        $values['unregistered_setting'] = '1';
         $this->put('/admin/operations', [
             'version' => '0', 'values' => $values, 'current_password' => 'CorrectHorse!234',
         ])->assertSessionHasErrors('values');
@@ -308,6 +308,54 @@ final class OperationalSettingsAdminTest extends TestCase
         self::assertSame($larger, $client->postJson('https://wp.example.test/wp-json/wp-ai-bridge/v1/mcp', [], [], 512 * 1024)->body);
     }
 
+    public function test_admin_defaults_are_derived_from_runtime_without_rounding_configured_byte_budgets(): void
+    {
+        config()->set('bridge.http.max_response_bytes', 65537);
+        config()->set('ssh.file_transfer.max_bytes', 8193);
+        config()->set('bridge.http.connect_timeout_seconds', 7);
+        config()->set('bridge.http.request_timeout_seconds', 4);
+        $settings = new OperationalSettings;
+        $defaults = $settings->defaults();
+        self::assertSame(array_keys(OperationalSettings::allowed()), array_keys($defaults));
+        self::assertSame($settings->responseLimitBytes(false), (int) ($defaults['wp_response_kib'] * 1024));
+        self::assertSame($settings->sshTransferLimits()['max_bytes'], (int) ($defaults['ssh_transfer_max_kib'] * 1024));
+        self::assertSame($settings->httpTimeoutsSeconds()['request'], $defaults['wp_request_timeout_seconds']);
+        self::assertSame($settings->sshJobLimits()['max_active_per_user'], $defaults['ssh_job_max_active_per_user']);
+        self::assertSame($settings->batchLimits()['global_active'], $defaults['batch_global_active']);
+    }
+
+    public function test_runtime_configured_byte_defaults_never_round_trip_through_floats(): void
+    {
+        config()->set('bridge.http.max_response_bytes', PHP_INT_MAX);
+        config()->set('bridge.http.readonly_tool_max_response_bytes', PHP_INT_MAX - 1);
+        config()->set('ssh.file_transfer.max_bytes', PHP_INT_MAX);
+        $settings = new OperationalSettings;
+        self::assertSame(PHP_INT_MAX, $settings->responseLimitBytes(false));
+        self::assertSame(PHP_INT_MAX - 1, $settings->responseLimitBytes(true));
+        self::assertSame(67108864, $settings->sshTransferLimits()['max_bytes']);
+    }
+
+    public function test_setting_delta_uses_current_key_catalog_without_version_specific_prefixes(): void
+    {
+        $this->actingAs($this->account('owner'));
+        $this->put('/admin/operations', [
+            'version' => '0', 'values' => ['batch_global_active' => '8', 'ssh_job_max_active_per_user' => '12'],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        $this->put('/admin/operations', [
+            'version' => '1', 'values' => ['batch_global_active' => null, 'wp_response_kib' => '192'],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        self::assertSame([
+            'wp_response_kib' => 192, 'ssh_job_max_active_per_user' => 12,
+        ], (new OperationalSettings)->state()['overrides']);
+        $this->put('/admin/operations', [
+            'version' => '1', 'values' => ['ssh_job_max_active_per_user' => '4'],
+            'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasErrors('version');
+        self::assertSame(2, (int) DB::table('operational_settings')->value('version'));
+    }
+
     public function test_invalid_and_stale_edits_fail_without_new_audit_or_loss_of_override(): void
     {
         $owner = $this->account('owner');
@@ -443,10 +491,10 @@ final class OperationalSettingsAdminTest extends TestCase
             'values' => [
                 'wp_response_kib' => '',
                 'wp_readonly_response_kib' => '',
-                'wp_connect_timeout_seconds' => '3',
+                'wp_connect_timeout_seconds' => '15',
             ],
             'current_password' => 'CorrectHorse!234',
-        ])->assertSessionHasErrors('values');
+        ])->assertSessionHasErrors('values.wp_request_timeout_seconds');
         $this->put('/admin/operations', [
             'version' => '0',
             'values' => [

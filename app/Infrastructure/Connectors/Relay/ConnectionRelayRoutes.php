@@ -6,6 +6,7 @@ use App\Application\Targets\SshTargetConnectionException;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Http\OutboundRequestException;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Resolves a persisted, enabled, Target-scoped Relay route.
@@ -14,6 +15,14 @@ use Illuminate\Support\Collection;
  */
 final readonly class ConnectionRelayRoutes
 {
+    /** @return array<string,list<string>> */
+    public static function selectionRules(): array
+    {
+        return [
+            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
+        ];
+    }
+
     /** @return Collection<int,ConnectionRelay> */
     public function selectable(): Collection
     {
@@ -23,18 +32,7 @@ final readonly class ConnectionRelayRoutes
 
     public function selected(?string $relayId): ?ConnectionRelay
     {
-        if ($relayId === null || $relayId === '') {
-            return null;
-        }
-        if (preg_match('/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D', $relayId) !== 1) {
-            throw new ConnectionRelayUnavailable;
-        }
-        $relay = ConnectionRelay::query()->where('relay_id', $relayId)->first();
-        if (! $relay instanceof ConnectionRelay || ! $relay->enabled) {
-            throw new ConnectionRelayUnavailable;
-        }
-
-        return $relay;
+        return $this->resolveSelection($relayId, false);
     }
 
     /**
@@ -42,7 +40,12 @@ final readonly class ConnectionRelayRoutes
      * binding. This lock serializes new enrollment/rebinding against Disable's
      * Relay-then-Targets lock order. It is not an outbound connectivity probe.
      */
-    public function selectedForBinding(?string $relayId): ?ConnectionRelay
+    public function selectedForBinding(?string $relayId, bool $allowDisabled = false): ?ConnectionRelay
+    {
+        return $this->resolveSelection($relayId, true, $allowDisabled);
+    }
+
+    private function resolveSelection(?string $relayId, bool $lock, bool $allowDisabled = false): ?ConnectionRelay
     {
         if ($relayId === null || $relayId === '') {
             return null;
@@ -50,8 +53,9 @@ final readonly class ConnectionRelayRoutes
         if (preg_match('/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D', $relayId) !== 1) {
             throw new ConnectionRelayUnavailable;
         }
-        $relay = ConnectionRelay::query()->where('relay_id', $relayId)->lockForUpdate()->first();
-        if (! $relay instanceof ConnectionRelay || ! $relay->enabled) {
+        $query = ConnectionRelay::query()->where('relay_id', $relayId);
+        $relay = ($lock ? $query->lockForUpdate() : $query)->first();
+        if (! $relay instanceof ConnectionRelay || (! $allowDisabled && ! $relay->enabled)) {
             throw new ConnectionRelayUnavailable;
         }
 
@@ -65,42 +69,29 @@ final readonly class ConnectionRelayRoutes
         return $relay === null ? null : LocalSocks5Route::fromApprovedBinding($relay->relay_id, $relay->local_socks_port);
     }
 
+    /** All Target-bound HTTP uses the admitted snapshot's persisted route epoch. */
     public function httpRouteForTarget(Target $target): ?LocalSocks5Route
     {
-        try {
-            return $this->routeForTarget($target);
-        } catch (ConnectionRelayUnavailable) {
-            throw new OutboundRequestException(
-                'network_failure', 'The selected Connection Relay is unavailable.',
-                ['failure_stage' => 'connection_setup'], true,
-            );
-        }
+        return $this->httpRouteAtEpoch((string) $target->getKey(), (int) $target->transport_revision);
     }
 
-    public function httpRouteForRecord(string $targetRecordId): ?LocalSocks5Route
+    public function httpRouteForCurrentTarget(string $targetRecordId): ?LocalSocks5Route
     {
-        $target = Target::query()->find($targetRecordId);
-        if (! $target instanceof Target) {
-            throw new OutboundRequestException('network_failure', 'The selected Target no longer exists.', [], true);
-        }
-
-        return $this->httpRouteForTarget($target);
+        return $this->httpRouteAtEpoch($targetRecordId, null);
     }
 
     public function httpRouteAtEpoch(
-        string $targetRecordId, int $expectedEpoch, ?LocalSocks5Route $expected = null,
+        string $targetRecordId, ?int $expectedEpoch, ?LocalSocks5Route $expected = null,
         bool $enforceExpected = false,
     ): ?LocalSocks5Route {
-        $target = Target::query()->find($targetRecordId);
-        if (! $target instanceof Target || $expectedEpoch < 0
-            || (int) ($target->getAttribute('relay_binding_revision') ?? 0) !== $expectedEpoch) {
+        try {
+            $actual = $this->routeAtEpoch($targetRecordId, $expectedEpoch);
+        } catch (ConnectionRelayUnavailable $exception) {
             throw new OutboundRequestException(
-                'network_failure', 'Target route binding changed before HTTP dispatch.',
+                'network_failure', $exception->getMessage(),
                 ['failure_stage' => 'connection_setup'], true,
             );
         }
-
-        $actual = $this->httpRouteForTarget($target);
         if ($enforceExpected && (
             ($actual === null) !== ($expected === null)
             || ($actual !== null && $expected !== null && ($actual->relayId !== $expected->relayId
@@ -118,23 +109,36 @@ final readonly class ConnectionRelayRoutes
     public function sshRouteForTarget(Target $target): ?LocalSocks5Route
     {
         try {
-            return $this->routeForTarget($target);
+            return $this->routeAtEpoch((string) $target->getKey(), (int) $target->transport_revision, allowReverse: true);
         } catch (ConnectionRelayUnavailable) {
             throw new SshTargetConnectionException('relay_unavailable');
         }
     }
 
-    public function routeForTarget(Target $target): ?LocalSocks5Route
+    private function routeAtEpoch(string $targetRecordId, ?int $expectedEpoch, bool $allowReverse = false): ?LocalSocks5Route
     {
-        $id = $target->getAttribute('relay_record_id');
-        if ($id === null || $id === '') {
+        // One database snapshot of both records. Never combine an old Target
+        // binding with a Relay endpoint modified after Disable.
+        $binding = DB::table('targets as target')
+            ->leftJoin('connection_relays as relay', 'relay.id', '=', 'target.relay_record_id')
+            ->where('target.id', $targetRecordId)
+            ->first(['target.relay_record_id', 'target.transport_revision', 'target.reverse_listener_port',
+                'relay.relay_id', 'relay.local_socks_port', 'relay.enabled']);
+
+        if ($binding === null || ($expectedEpoch !== null
+            && ($expectedEpoch < 0 || (int) $binding->transport_revision !== $expectedEpoch))) {
+            throw new ConnectionRelayUnavailable('Target route binding changed before dispatch.');
+        }
+        if ($binding->reverse_listener_port !== null && (! $allowReverse || $binding->relay_record_id !== null)) {
+            throw new ConnectionRelayUnavailable('The selected fixed Reverse listener is incompatible with this transport.');
+        }
+        if ($binding->relay_record_id === null) {
             return null;
         }
-        $relay = ConnectionRelay::query()->find($id);
-        if (! $relay instanceof ConnectionRelay || ! $relay->enabled) {
-            throw new ConnectionRelayUnavailable;
+        if ($binding->relay_id === null || ! $binding->enabled) {
+            throw new ConnectionRelayUnavailable('The selected Connection Relay is unavailable.');
         }
 
-        return LocalSocks5Route::fromApprovedBinding($relay->relay_id, $relay->local_socks_port);
+        return LocalSocks5Route::fromApprovedBinding((string) $binding->relay_id, (int) $binding->local_socks_port);
     }
 }

@@ -1537,6 +1537,12 @@ async function connectionRelays(browser) {
         assert.equal(await page.locator('[data-relay-owner-group]').isVisible(), true);
         assert.equal(await form.locator('[name="current_password"]:enabled').count(), 1);
 
+        await page.locator('#connector_type').selectOption('arvancloud');
+        assert.equal(await relayChoice.isEnabled(), true);
+        await relayChoice.selectOption('ui-iran');
+        assert.equal(await relayChoice.inputValue(), 'ui-iran');
+        assert.equal(await form.locator('[name="current_password"]:enabled').count(), 1);
+
         // Validation retry goes through real Laravel with cookies and CSRF;
         // neither a hidden password nor a remote connection is submitted.
         const token = await form.locator('input[name="_token"]').inputValue();
@@ -1572,6 +1578,47 @@ async function connectionRelays(browser) {
             await nonOwner.page.goto(base + '/admin/targets/create?connector_type=ssh_direct');
             assert.equal(await nonOwner.page.locator('#connection_relay_id').count(), 0);
         } finally { await nonOwner.context.close(); }
+
+        const delegated = await create(browser);
+        try {
+            await enter(delegated.page, 'administrator');
+            for (const connector of ['wp_ai_bridge', 'ssh_direct', 'arvancloud']) {
+                const response = await delegated.page.goto(base + '/admin/targets/create?connector_type=' + connector);
+                assert.equal(response.status(), 200);
+                const selector = delegated.page.locator('#connection_relay_id');
+                assert.equal(await selector.isEnabled(), true);
+                assert.equal(await selector.locator('option[value="ui-iran"]').count(), 1);
+                await selector.selectOption('ui-iran');
+                assert.equal(await selector.inputValue(), 'ui-iran');
+                assert.equal(await delegated.page.locator('#target-create-form [name="current_password"]:enabled').count(), 1);
+            }
+        } finally { await delegated.context.close(); }
+
+        for (const js of [true, false]) {
+            const wp = await create(browser, {javaScriptEnabled:js, width:390});
+            try {
+                await enter(wp.page, 'administrator');
+                const mode = js ? 'js' : 'native';
+                await wp.page.goto(base + '/__browser__/wordpress-route/' + mode);
+                const routeForm = wp.page.locator('form[action$="/relay-route"]');
+                assert.equal(await routeForm.count(), 1);
+                assert.equal(await wp.page.getByText(/preserves Target credentials and authorization/).count(), 1);
+                await routeForm.locator('#target-edit-connection-relay').selectOption('ui-iran');
+                await routeForm.locator('[name="current_password"]').fill('isolated-browser-password');
+                if (js) await routeForm.locator('[data-admin-owner-approval-input]').check();
+                await Promise.all([
+                    wp.page.waitForNavigation({waitUntil:'domcontentloaded'}),
+                    routeForm.getByRole('button', {name:'Save connection route'}).click(),
+                ]);
+                assert.equal(await wp.page.locator('#target-edit-connection-relay').inputValue(), 'ui-iran');
+                assert.equal(await wp.page.getByText(/Target connection route changed/).count(), 1);
+                await wp.page.goto(base + '/admin/targets/ui-wp-route-' + mode);
+                assert.equal(await wp.page.getByRole('button', {name:'Authorize WordPress', exact:true}).count(), 0);
+                assert.equal(await wp.page.getByRole('button', {name:'Disconnect WordPress', exact:true}).count(), 1);
+                assert.deepEqual(wp.errors, []);
+                assert.deepEqual(wp.external, []);
+            } finally { await wp.context.close(); }
+        }
 
         const native = await create(browser, {javaScriptEnabled:false, width:390});
         try {

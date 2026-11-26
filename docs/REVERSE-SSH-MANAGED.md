@@ -77,7 +77,7 @@ required only once, not per added Target. When settings are saved, the Admin pag
 
 Targets > Add Target > SSH > Managed Reverse SSH collects stable ID, real
 Target host/SSH port/login and the independently verified Target SSHD public
-host key. After Owner password verification it creates a Pending Target,
+host key. After verification of the authorized Target creator’s current Gateway password it creates a Pending Target,
 reserves a unique Gateway loopback port and generates a 10-minute, one-use
 enrollment token. The only command is displayed once and contains a sensitive
 short-lived token, never a private key. Do not paste it in shared logs/chat.
@@ -121,14 +121,10 @@ point-in-time proof, not a heartbeat.
   authorized a control key. Neither claim nor file publication is a
   verified Target login or a Connected state.
 - The existing Target detail screen offers **Reissue one-use install
-  command** for unverified `Pending Setup` enrollments, guarded by
-  Owner password and an exact Target-ID confirmation. This preserves the
+  command** for a selected, non-revoked managed path, guarded by
+  current actor password and an exact Target-ID confirmation. This preserves the
   Target's original identity, independently pinned real SSH host key,
-  login identity and approved private key. The encrypted Target login
-  credential is opened under the original trusted binding and re-sealed
-  atomically under the new route revision/port/identity, without changing
-  the approved secret. This preserves real post-reissue Verify while
-  fencing older retained Jobs. The new enrollment rotates
+  login identity and approved private key. The existing encrypted Target login credential is left unchanged, as is its authorization. The shared transport revision advances and fences older retained Jobs. After the initial login provisioning has been verified or explicitly retired, reissue is transport-only: the installer does not write the old login public key or require a login account name. The new enrollment rotates
   its **enrollment ULID** (the Target-side state directory, Unix control
   identity and systemd unit namespace), short-lived token, unique loopback
   port, control binding and Job binding revision. An existing Target-side
@@ -143,23 +139,37 @@ point-in-time proof, not a heartbeat.
 - Key-reader publication and DB intent are deliberately **not** one
   transaction: a one-use claim commits `claimed + publication_pending`
   before a public-key file is atomically published. Only after the
-  reader bytes are confirmed and a new DB finalization commits does
-  the enrollment become `active`. A failure/crash leaves a durable
+  reader bytes are confirmed against the exact provider revision and a new
+  DB finalization commits does the enrollment become `active` and
+  advance its Target transport revision. A failure/crash leaves a durable
   pending receipt and blocks the managed route until Owner
   reconciliation. The Owner can safely retry **Reconcile restricted
-  public keys**. Activation is never inferred solely from a written file.
-- Owner revocation atomically commits `revoked`, credential deletion,
-  a monotonic binding revision for retained Job fencing and the
-  Disconnected Target state **before** external key-file publication.
+  public keys**. A new one-use claim can activate only its own enrollment,
+  not another failed claim or a pending global Enable. Activation is never
+  inferred solely from a written file.
+- Scoped route revocation atomically commits `revoked` and advances the shared transport revision for retained Job fencing **before** external key-file publication. Existing Target login credentials and authorization remain unchanged. An explicit Target Disconnect is a separate operation.
   The host key-removal stage has a separate durable pending receipt;
-  failures leave a visible/retriable Owner action. Do not describe
-  revocation as fully completed while host policy is still pending.
+  failures leave a visible/retriable action. Scoped revoke/reissue may
+  reconcile key removals, but cannot finalize another enrollment's claim
+  or an unconfirmed global Enable. While global Enable remains pending,
+  a scoped revoke can publish the closed reader policy and confirm its
+  removal without clearing the global pending receipt. Only the
+  Owner-authorized global publication can restore that authority.
+  Do not describe revocation as fully completed while its own host
+  removal receipt is still pending.
   Local delete/forget remains blocked until the host reader is reconciled.
-- Existing PHP processes coordinate policy publication with claim, reissue,
-  revoke and Gateway feature state using a PHP-owned file lock. No PHP
-  request gains OS root access. Disabling Gateway routing remains
-  possible even if the host reader is damaged; the resulting application
-  route then fails closed and host reconciliation is still required.
+- PHP processes serialize host publication, claim, reissue and Enable
+  with a PHP-owned file lock. No PHP request gains OS root access. Global
+  Disable and scoped revoke first commit local closure under database
+  locks, even when the host reader or publication lock is damaged. A
+  superseded publication receipt cannot finalize a different provider
+  revision, even if its key bytes are identical. Global Disable advances
+  the transport revision of each currently bound managed Target; Enable
+  advances the revision of each newly available route only when publication
+  is confirmed. This fences work and verification from both before and
+  during the disabled/pending interval without changing login credentials
+  or manual/Direct/Relay paths. An identical reconciled save does not
+  advance either revision.
 - The Target installer refuses pre-planted non-root-owned or
   group/world-writable root state directories, malicious lock paths and
   unsafe control-key ownership/mode **before** token consumption. It
@@ -170,22 +180,12 @@ point-in-time proof, not a heartbeat.
 - Removing a public control key prevents **new** control authentication
   but does **not** forcibly terminate already established SSH sessions or
   retroactively stop detached commands. Stop the exact Target
-  systemd unit and remove its login public key separately with explicit
-  Target authorization.
+  systemd unit separately with explicit Target authorization. Remove any actual remote login authorization only when separately intended.
 - Disable the feature in Owner Admin first, then use the verified host
   bootstrap `--disable` with the exact originally approved arguments
   to stop only the owned control SSHD service. This preserves other SSHD
   services, host firewall rules and system accounts.
-- Database migration rollback is deliberately fail-closed: all enrollments
-  must be revoked without pending publication, Gateway routing disabled
-  without pending configuration publication, and the restricted SSHD
-  `authorized_keys` reader independently verified empty and reconciled
-  with the approved host identity. An unavailable reader is not proof of
-  revocation. Superseded Target services and retired listener history also
-  require explicit reconciliation; rollback must not silently erase a port
-  quarantine while an old reverse forward may survive. A fresh unconfigured
-  installation may roll back normally. Reconcile interrupted revocation
-  before local Target deletion or schema rollback.
+- Use the verified pre-update database and matching application key for v3 rollback. Never erase a port quarantine while an older reverse forward may survive. An unavailable reader is not proof of revocation. Reconcile interrupted control-key publication before deleting a Target or changing away from its managed path.
 
 ## Acceptance gates
 
@@ -196,7 +196,7 @@ single-command installer, real local TLS and one-use HTTP enrollment against
 Laravel/SQLite, separately restricted control and Target SSHD identities,
 a persistent Target systemd service, real Gateway pinned login/Command/SFTP,
 a managed retained SSH Job with verified binding, a second one-command setup after an already claimed but unverified enrollment (new OS account/unit/state while the old files still exist), safe repeat invocation,
-explicit stopped-control-host health diagnosis, and systemd reconnection.
+explicit stopped-control-host health diagnosis, systemd reconnection, and real Owner disable/re-enable with control-key publication, stale operation/verification fences and fresh pinned Command/SFTP.
 It also uses a real existing `deploy.prod` Unix account in CI to cover
 the dotted-username contract and rejects unsafe root-state ownership and
 lock-file symlinks before claim. A separate disposable Chromium browser

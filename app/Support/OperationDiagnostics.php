@@ -372,7 +372,7 @@ final class OperationDiagnostics
             'reverse_listener_conflict' => __('The approved reverse listener is already owned by another registered SSH Target.'),
             'reverse_listener_unavailable' => __('The approved NL loopback listener was not reachable; no direct fallback or SSH authentication was attempted.'),
             'relay_unavailable' => __('The selected Connection Relay could not establish the approved SOCKS5 route. The Gateway did not fall back to Direct.'),
-            'relay_disabled' => __('The Owner disabled the selected Connection Relay. The Target requires a new route authorization and independent connection verification.'),
+            'relay_disabled' => __('The selected Connection Relay is disabled. Stored Target authorization is not revoked.'),
             'relay_reverse_conflict' => __('Shared Connection Relay and Reverse SSH cannot be selected for the same SSH Target.'),
             'invalid_input' => __('Some input fields or tool arguments are invalid.'),
             'forbidden', 'target_not_found' => __('This operation or Target is not available to the current user.'),

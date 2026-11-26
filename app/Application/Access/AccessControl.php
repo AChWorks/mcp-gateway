@@ -70,9 +70,7 @@ final readonly class AccessControl
 
         $eligible = [];
         foreach ($permissions as $permission) {
-            if ($role->allows($permission) && $this->permissionMatchesTarget($permission, $target)
-                && (! str_starts_with($permission->value, 'ssh.')
-                    || $role === GatewayRole::Owner || $this->scopeMode($user) === TargetScopeMode::Selected)) {
+            if ($role->allows($permission) && $this->permissionMatchesTarget($permission, $target)) {
                 $eligible[$permission->value] = true;
             }
         }
@@ -325,12 +323,6 @@ final readonly class AccessControl
 
         if ($role === GatewayRole::Owner) {
             return true;
-        }
-
-        // Remote shell/file capability must never escape explicitly selected Targets.
-        if (str_starts_with($permission->value, 'ssh.')
-            && $this->scopeMode($user) !== TargetScopeMode::Selected) {
-            return false;
         }
 
         return ! DB::table('user_permission_denials')

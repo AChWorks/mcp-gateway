@@ -8,9 +8,11 @@ use App\Application\Operations\OperationalSettings;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
+use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Models\User;
 use App\Support\CorrelationId;
 use Illuminate\Support\Facades\DB;
@@ -74,6 +76,14 @@ final readonly class SshJobCoordinator
 
         $original = $this->originalIdentity($target);
         $binding = $original['target_binding_hash'];
+        // Freeze login material across all *new* launch phases separately
+        // from the retained endpoint/route identity used by reconciliation.
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())
+            ->where('connector_type', 'ssh_direct')->where('purpose', SshTargetVault::PURPOSE)->first();
+        if (! $credential instanceof TargetCredential) {
+            throw new SshTargetConnectionException('credential_unavailable');
+        }
+        $material = SshTargetVault::materialFingerprint($credential);
         $original['original_user_id'] = $user->getKey();
         // HMAC avoids retaining a guessable hash of sensitive script contents.
         $digest = hash_hmac('sha256', $script, (string) config('app.key'));
@@ -147,7 +157,7 @@ final readonly class SshJobCoordinator
 
         $id = (string) $row->id;
         $directory = $this->directory($id);
-        $mode = $this->probe($user, $target, $binding);
+        $mode = $this->probe($user, $target, $binding, $material);
         if ($mode === null) {
             if ($this->transition($id, 'preparing', 'unsupported') === false) {
                 return $this->summary(DB::table('ssh_command_jobs')->where('id', $id)->first());
@@ -168,7 +178,7 @@ final readonly class SshJobCoordinator
             'umask 077; mkdir -m 700 -- '.escapeshellarg($directory).
             ' && test "$(stat -c %a -- '.escapeshellarg($directory).')" = 700'.
             ' && test "$(stat -c %u -- '.escapeshellarg($directory).')" = "$(id -u)"',
-            8, $binding);
+            8, $binding, $material);
         if (! $this->successful($prepared)) {
             $this->record($target, 'ssh-job-start', 'unknown', 'outcome_unknown');
 
@@ -221,7 +231,7 @@ final readonly class SshJobCoordinator
             if ($scriptBytes <= self::MAX_INLINE_SCRIPT_BYTES) {
                 // Preserve the existing 16 KiB safe path for ordinary Jobs.
                 $scriptFile = $this->files->write($user, $target, $directory.'/script.sh',
-                    base64_encode($script), expectedTargetBinding: $binding);
+                    base64_encode($script), expectedTargetBinding: $binding, expectedCredentialMaterial: $material);
             } else {
                 // Reuse verified whole-file SFTP streaming within the already
                 // private 0700 Job directory. Never put a large script into
@@ -237,7 +247,7 @@ final readonly class SshJobCoordinator
                         $user, $target, $directory.'/script.sh', $source,
                         $scriptBytes, hash('sha256', $script),
                         $policy['max_script_bytes'], 40, $directory,
-                        expectedTargetBinding: $binding,
+                        expectedTargetBinding: $binding, expectedCredentialMaterial: $material,
                     );
                 } finally {
                     fclose($source);
@@ -251,7 +261,7 @@ final readonly class SshJobCoordinator
                         ? $scriptFile['__diagnostic_context'] : []);
             }
             $wrapperFile = $this->files->write($user, $target, $directory.'/wrapper.sh',
-                base64_encode($wrapper), expectedTargetBinding: $binding);
+                base64_encode($wrapper), expectedTargetBinding: $binding, expectedCredentialMaterial: $material);
             if (($wrapperFile['status'] ?? '') !== 'completed') {
                 throw new SshTargetConnectionException('outcome_unknown',
                     is_array($wrapperFile['__diagnostic_context'] ?? null)
@@ -281,7 +291,7 @@ final readonly class SshJobCoordinator
             return $this->summary(DB::table('ssh_command_jobs')->where('id', $id)->first());
         }
 
-        $result = $this->safeCommand($user, $target, $launch, 8, $binding);
+        $result = $this->safeCommand($user, $target, $launch, 8, $binding, $material);
         if ($this->successful($result)) {
             $this->transition($id, 'launch_unknown', 'running');
             $this->record($target, 'ssh-job-start', 'success', null);
@@ -1137,7 +1147,7 @@ final readonly class SshJobCoordinator
         ];
     }
 
-    private function probe(User $user, Target $target, string $expectedTargetBinding): ?string
+    private function probe(User $user, Target $target, string $expectedTargetBinding, string $expectedCredentialMaterial): ?string
     {
         $command = 'command -v mkfifo >/dev/null && command -v head >/dev/null'
             .' && command -v wc >/dev/null && command -v rm >/dev/null'
@@ -1147,7 +1157,7 @@ final readonly class SshJobCoordinator
             .' && command -v systemd-run >/dev/null'
             .' && '.$this->managerEnvironment('user').'systemctl --user show-environment >/dev/null 2>&1'
             .' && printf user; fi';
-        $result = $this->safeCommand($user, $target, $command, 5, $expectedTargetBinding);
+        $result = $this->safeCommand($user, $target, $command, 5, $expectedTargetBinding, $expectedCredentialMaterial);
         if (! $this->successful($result)) {
             return null;
         }
@@ -1171,9 +1181,11 @@ final readonly class SshJobCoordinator
     /** @return array<string,mixed>|null */
     private function safeCommand(
         User $user, Target $target, string $command, int $seconds, ?string $expectedTargetBinding = null,
+        ?string $expectedCredentialMaterial = null,
     ): ?array {
         try {
-            return $this->commands->run($user, $target, $command, $seconds, $expectedTargetBinding);
+            return $this->commands->run($user, $target, $command, $seconds, $expectedTargetBinding,
+                expectedCredentialMaterial: $expectedCredentialMaterial);
         } catch (Throwable) {
             return null;
         }

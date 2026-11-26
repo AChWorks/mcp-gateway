@@ -124,7 +124,7 @@
                                 <span class="targets-mobile-label" aria-hidden="true">{{ __('Actions') }}</span>
                                 <div class="target-actions">
                                     <a class="button button-secondary target-action-button" href="{{ route('admin.targets.show', ['target' => $target->target_id]) }}">{{ __('Inspect') }}</a>
-                                    @if (auth()->user()?->role === \App\Domain\Access\GatewayRole::Owner)
+                                    @can('targets.operations.manage', $target)
                                         <details class="target-action-confirm">
                                             <summary class="button button-secondary target-action-button">{{ $target->operations_paused ? __('Resume') : __('Pause') }}</summary>
                                             <div class="target-action-confirm-body">
@@ -140,7 +140,7 @@
                                                 </form>
                                             </div>
                                         </details>
-                                    @endif
+                                    @endcan
                                 </div>
                             </td>
                         </tr>

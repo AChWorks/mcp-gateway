@@ -31,7 +31,9 @@ final class GatewayV3FreshSchemaTest extends TestCase
         self::assertTrue(Schema::hasColumn('oauth_dcr_clients', 'auto_retirement_eligible'));
         self::assertTrue(Schema::hasColumn('operational_settings', 'wp_ability_input_kib'));
         self::assertTrue(Schema::hasColumn('operational_settings', 'dcr_registration_capacity'));
-        self::assertSame(2, DB::table('migrations')->count());
+        $expectedMigrations = array_keys(app('migrator')->getMigrationFiles(database_path('migrations')));
+        self::assertNotEmpty($expectedMigrations);
+        self::assertSame($expectedMigrations, DB::table('migrations')->orderBy('migration')->pluck('migration')->all());
         self::assertSame(45, count(Schema::getTables()) - 1);
     }
 

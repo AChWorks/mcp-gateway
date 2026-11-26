@@ -2,12 +2,13 @@
 
 namespace App\Infrastructure\Http\Api;
 
+use App\Infrastructure\Connectors\Relay\LocalSocks5Route;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\SafeHttpResponse;
 
 /**
- * Connector-neutral fixed-endpoint JSON REST transport. Never accepts a
+ * Connector-neutral fixed-endpoint REST transport. Never accepts a
  * client-supplied destination, redirect or authentication header.
  */
 final readonly class ApiHttpTransport
@@ -24,7 +25,7 @@ final readonly class ApiHttpTransport
         string $registeredBase, string $method, string $relativePath, array $query = [],
         ?string $jsonBody = null, array $trustedHeaders = [],
         ?string $bodyText = null, ?string $contentType = null,
-        array $formFields = [], array $formFiles = [], ?string $accept = null,
+        array $formFields = [], array $formFiles = [], ?string $accept = null, ?LocalSocks5Route $relay = null,
     ): SafeHttpResponse {
         if ($relativePath === '' || ! str_starts_with($relativePath, '/')
             || str_starts_with($relativePath, '//')
@@ -80,6 +81,11 @@ final readonly class ApiHttpTransport
             $trustedHeaders['Accept'] = $accept;
         }
 
+        $encodedFields = null;
+        $multipartParts = null;
+        $rawBody = $bodyText ?? $jsonBody;
+        $rawType = null;
+
         if ($formFields !== [] || $formFiles !== []) {
             if ($contentType !== null && ! in_array(strtolower($contentType), [
                 'multipart/form-data', 'application/x-www-form-urlencoded',
@@ -129,29 +135,30 @@ final readonly class ApiHttpTransport
                     'headers' => ['Content-Type' => $file['content_type'] ?? 'application/octet-stream'],
                 ];
             }
-            $multipart = $formFiles !== [] || strtolower($contentType ?? '') === 'multipart/form-data';
-            if ($multipart) {
-                return $this->http->requestApi($method, $url, $trustedHeaders, $query, multipartParts: $parts);
+            if ($formFiles !== [] || strtolower($contentType ?? '') === 'multipart/form-data') {
+                $multipartParts = $parts;
+            } else {
+                $encodedFields = $fields;
             }
-
-            return $this->http->requestApi($method, $url, $trustedHeaders, $query, formFields: $fields);
-        }
-
-        if ($bodyText !== null) {
-            if ($contentType === null) {
+        } elseif ($rawBody !== null) {
+            if ($bodyText !== null && $contentType === null) {
                 throw new OutboundRequestException('invalid_input', 'Raw API request body requires a content type.', [], true);
             }
-
-            return $this->http->requestApi($method, $url, $trustedHeaders, $query, $bodyText, $contentType);
-        }
-        if ($jsonBody !== null && $contentType !== null && strtolower($contentType) !== 'application/json') {
-            return $this->http->requestApi($method, $url, $trustedHeaders, $query, $jsonBody, $contentType);
-        }
-        if ($jsonBody === null && $contentType !== null) {
+            $rawType = $contentType ?? 'application/json';
+            if ($jsonBody !== null && strtolower($rawType) === 'application/json') {
+                $rawType = 'application/json';
+            }
+        } elseif ($contentType !== null) {
             throw new OutboundRequestException('invalid_input', 'Content type requires a request body.', [], true);
         }
 
-        return $this->http->requestJson($method, $url, $trustedHeaders, $jsonBody, $query);
+        // Body encoding changes only the payload. Every format has one
+        // dispatch boundary with the same trusted destination and route.
+        return $this->http->requestApi(
+            $method, $url, $trustedHeaders, $query,
+            rawBody: $rawBody, contentType: $rawType,
+            formFields: $encodedFields, multipartParts: $multipartParts, relay: $relay,
+        );
     }
 
     private function validMediaType(mixed $type): bool

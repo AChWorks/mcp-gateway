@@ -48,7 +48,7 @@ final class SshReverseRouteRollbackTest extends TestCase
         self::assertTrue($service->update($target, $this->input($target, 'direct', '8.8.4.4')));
 
         $config = SshTargetConfig::query()->sole();
-        self::assertSame('direct', $config->route_mode);
+        self::assertSame('direct', $target->fresh()->transportKind());
         self::assertSame(1, $config->binding_revision);
         self::assertNotSame($original, TargetCredential::query()->sole()->encrypted_payload);
         self::assertSame(0, DB::table('ssh_command_jobs')->count());
@@ -61,7 +61,7 @@ final class SshReverseRouteRollbackTest extends TestCase
         $this->approveRoute();
         $target = $this->register('rollback-route', 'reverse');
         self::assertSame(0, SshTargetConfig::query()->sole()->binding_revision);
-        self::assertSame('reverse', SshTargetConfig::query()->sole()->route_mode);
+        self::assertSame('reverse', $target->fresh()->transportKind());
 
         $this->assertRefusedWithoutMutation($target);
     }
@@ -97,12 +97,15 @@ final class SshReverseRouteRollbackTest extends TestCase
         $this->approveRoute();
 
         self::assertTrue($service->update($target, $this->input($target, 'reverse', '8.8.8.8')));
-        self::assertSame(1, SshTargetConfig::query()->sole()->binding_revision);
+        self::assertSame(1, $target->fresh()->transport_revision);
+        $target->refresh();
         self::assertTrue($service->update($target, $this->input($target, 'direct', '8.8.8.8')));
 
         $config = SshTargetConfig::query()->sole();
-        self::assertSame('direct', $config->route_mode);
-        self::assertSame(2, $config->binding_revision);
+        self::assertSame('direct', $target->fresh()->transportKind());
+        $target->refresh();
+        self::assertSame(2, $target->transport_revision);
+        self::assertSame(0, $config->binding_revision);
         self::assertNotSame($originalJobBinding, SshTargetBinding::hash($target, $config));
         self::assertSame(0, DB::table('ssh_command_jobs')->count());
 
@@ -124,9 +127,10 @@ final class SshReverseRouteRollbackTest extends TestCase
         }
         self::assertTrue($refused, 'Gateway v3 baseline rollback must always refuse before dropping binding columns.');
 
-        foreach (['route_mode', 'reverse_listener_port', 'reverse_tunnel_identity', 'binding_revision'] as $column) {
-            self::assertTrue(Schema::hasColumn('ssh_direct_target_configs', $column), $column);
+        foreach (['transport_revision', 'reverse_listener_port', 'reverse_tunnel_identity'] as $column) {
+            self::assertTrue(Schema::hasColumn('targets', $column), $column);
         }
+        self::assertTrue(Schema::hasColumn('ssh_direct_target_configs', 'binding_revision'));
         self::assertSame($configBefore, SshTargetConfig::query()->sole()->getAttributes());
         self::assertSame($cipherBefore, TargetCredential::query()->sole()->encrypted_payload);
         self::assertSame(self::SECRET, $this->secret($target),

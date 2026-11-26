@@ -70,8 +70,7 @@ final class UserController extends Controller
             $this->deniedPermissions($validated),
             $request->boolean('ssh_permissions_reviewed')
                 && $request->boolean('confirm_ssh_permission_changes')
-                && $this->isOwner($request)
-                && $validated['target_scope_mode'] === TargetScopeMode::Selected->value,
+                && $this->isOwner($request),
         );
 
         return redirect()
@@ -112,10 +111,6 @@ final class UserController extends Controller
         }
         $this->guardCreatorScopeSelection($validated);
         $this->guardSshUserChanges($request, $validated, $user, $access);
-        $revokesSshByScope = $user->getAttribute('target_scope_mode') === TargetScopeMode::Selected
-            && $validated['target_scope_mode'] === TargetScopeMode::All->value
-            && $validated['role'] !== GatewayRole::Owner->value
-            && $user->getAttribute('role') !== GatewayRole::Owner;
 
         try {
             $access->update(
@@ -124,10 +119,14 @@ final class UserController extends Controller
                 $this->deniedPermissions($validated),
                 $request->boolean('ssh_permissions_reviewed')
                     && $request->boolean('confirm_ssh_permission_changes')
-                    && $this->isOwner($request)
-                    && $validated['target_scope_mode'] === TargetScopeMode::Selected->value,
+                    && $this->isOwner($request),
             );
         } catch (DomainException $exception) {
+            if ($exception->getMessage() === 'ssh_scope_review_required') {
+                throw ValidationException::withMessages([
+                    'confirm_ssh_permission_changes' => __('Expanding to All Targets while SSH is granted requires explicit Owner confirmation. Review the SSH permissions or deny them before saving.'),
+                ]);
+            }
             if ($exception->getMessage() === 'last_owner') {
                 // Explicit withInput() bypasses Laravel's exception-handler
                 // dontFlash filter. Keep only non-secret User draft controls:
@@ -149,9 +148,7 @@ final class UserController extends Controller
 
         return redirect()
             ->route('admin.users.edit', ['user' => $user->id])
-            ->with('status', $revokesSshByScope
-                ? __('User access updated. All Target scope disables all non-Owner SSH command and SFTP grants.')
-                : __('User access updated.'));
+            ->with('status', __('User access updated.'));
     }
 
     /** @return array<string,mixed> */
@@ -273,33 +270,25 @@ final class UserController extends Controller
         $requested = array_values(array_intersect($this->deniedPermissions($validated), $available));
         $prior = $managedUser instanceof User && $access instanceof UserAccessManager
             ? $access->globalDenials($managedUser) : $available;
-        $prior = array_values(array_intersect($prior, $available));
-        sort($requested);
-        sort($prior);
-        // Grant attempts on an All-scope account must be rejected explicitly:
-        // SSH authority can only be granted on individually selected Targets.
-        $attemptedGrant = array_diff($available, $requested) !== [];
-        // Changing an existing Selected-scope user to All intentionally
-        // revokes every SSH grant in UserAccessManager. Allow that exact
-        // unchanged-checkbox transition so a routine scope edit is usable,
-        // but do not accept NEW SSH grants on an All-scope account.
-        $revokeByScope = $managedUser instanceof User
-            && $managedUser->getAttribute('target_scope_mode') === TargetScopeMode::Selected
-            && $validated['target_scope_mode'] === TargetScopeMode::All->value
-            && $requested === $prior;
-        if ($attemptedGrant && $validated['target_scope_mode'] !== TargetScopeMode::Selected->value
-            && ! $revokeByScope) {
-            throw ValidationException::withMessages([
-                'target_scope_mode' => __('SSH can only be granted with Selected Target scope. Uncheck no new SSH denials while using All Target scope.'),
-            ]);
+        // A permission newly available after a role change starts denied.
+        if ($managedUser instanceof User) {
+            $previousRole = $managedUser->getAttribute('role');
+            foreach ($available as $permission) {
+                if ($previousRole === GatewayRole::Owner || ! $previousRole->allows(GatewayPermission::from($permission))) {
+                    $prior[] = $permission;
+                }
+            }
         }
+        $grants = array_diff($available, $requested);
+        $addsGrant = array_intersect($grants, $prior) !== [];
+        $expandsScope = $managedUser instanceof User
+            && $managedUser->getAttribute('target_scope_mode') === TargetScopeMode::Selected
+            && $validated['target_scope_mode'] === TargetScopeMode::All->value;
 
-        if (($requested !== $prior || $attemptedGrant && (
-            $managedUser === null || $managedUser->getAttribute('role')->value !== $role->value
-        ))
+        if (($addsGrant || ($expandsScope && $grants !== []))
             && (! $request->boolean('confirm_ssh_permission_changes') || ! $this->isOwner($request))) {
             throw ValidationException::withMessages([
-                'confirm_ssh_permission_changes' => __('Review each SSH permission and confirm the changes as Owner before saving. Unchecking a denial may grant remote shell/file access.'),
+                'confirm_ssh_permission_changes' => __('Review SSH permissions and confirm the grant as Owner before saving. All Targets includes current and future SSH Targets unless explicitly denied.'),
             ]);
         }
     }

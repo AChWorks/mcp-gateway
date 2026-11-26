@@ -5,7 +5,7 @@
     $sshHelp = match ($sshPermissionContext) {
         'group' => __('Live SSH controls. Checked boxes DENY the capability for assigned users on matching Targets. Removing a denial never grants a capability that the user role/global policy lacks.'),
         'target' => __('Live SSH controls for this exact Target. Checked boxes DENY the capability. Unchecking only removes this Target-level restriction; global role/grants, groups and Target reachability still apply.'),
-        default => __('SSH is available within Administrator and Operator roles, but starts DENIED for new users. A checked box blocks the tool; an unchecked box can enable it only after an Owner-confirmed Save on explicitly Selected Targets. Existing account choices are loaded from saved global Denies. SSH commands may read/write files and use permitted sudo/root even when SFTP is denied.'),
+        default => __('SSH is available within Administrator and Operator roles, but starts DENIED for new users. A checked box blocks the tool; an unchecked box can enable it only after an Owner-confirmed Save for the configured Target scope. Existing account choices are loaded from saved global Denies. SSH commands may read/write files and use permitted sudo/root even when SFTP is denied.'),
     };
     $sshStatus = match ($sshPermissionContext) {
         'group' => __('Active · deny-only'),
@@ -161,7 +161,7 @@
     <details class="permission-category-collapsible" data-user-role-unavailable
         @if ($selectedUserRole === \App\Domain\Access\GatewayRole::Owner) hidden @endif>
         <summary>{{ __('Already unavailable in this Role') }} (<span data-role-unavailable-count>{{ $roleUnavailableCount }}</span>)</summary>
-        <p class="field-help">{{ __('These capabilities are excluded by the selected Role. They cannot be enabled or denied here. Choosing another Role may change which restrictions are editable.') }}</p>
+        <p class="field-help">{{ __('These capabilities are excluded by the selected Role. Existing denials are retained but inactive until the Role permits that capability. Choosing another Role changes which restrictions are editable.') }}</p>
         <ul class="permission-reserved-list">
             @foreach ($visiblePermissions as $permission)
                 <li data-user-role-unavailable-item data-allowed-roles="{{ $rolesAllowingRestriction($permission) }}"

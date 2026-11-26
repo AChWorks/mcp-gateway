@@ -23,7 +23,7 @@ final readonly class SshTargetRegistration
         private SshTargetVault $vault,
         private ActivityRecorder $activity,
         private SshReverseRoutePolicy $reverseRoutes,
-        private ConnectionRelayTargetBinding $relayBindings,
+        private TargetTransportBinding $relayBindings,
     ) {}
 
     public function register(
@@ -65,6 +65,9 @@ final readonly class SshTargetRegistration
                     'connection_state' => TargetConnectionState::Disconnected,
                 ]);
                 $this->relayBindings->onRegistration($target, $connectionRelayId);
+                if ($approvedRoute !== null) {
+                    $this->relayBindings->changeReverseLocked($target, $approvedRoute->listenerPort, $approvedRoute->tunnelIdentity);
+                }
                 $config = SshTargetConfig::query()->create([
                     'target_record_id' => $target->getKey(),
                     'host' => $endpoint->host,
@@ -72,9 +75,6 @@ final readonly class SshTargetRegistration
                     'username' => $endpoint->username,
                     'auth_method' => $authMethod,
                     'pinned_host_key' => $pin->canonicalLine(),
-                    'route_mode' => $approvedRoute === null ? 'direct' : 'reverse',
-                    'reverse_listener_port' => $approvedRoute?->listenerPort,
-                    'reverse_tunnel_identity' => $approvedRoute?->tunnelIdentity,
                     'binding_revision' => 0,
                 ]);
                 TargetCredential::query()->create([

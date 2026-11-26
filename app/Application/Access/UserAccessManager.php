@@ -28,15 +28,9 @@ final readonly class UserAccessManager
             ? TargetScopeMode::All
             : TargetScopeMode::from((string) $attributes['target_scope_mode']);
 
-        // The absent confirmation path (including non-UI/API callers) remains
-        // fail-closed. Only explicitly authorized Selected-scope account
-        // creation can omit an SSH denial.
-        $canGrantSsh = $allowSshPermissionChanges
-            && $scope === TargetScopeMode::Selected;
-        $defaults = array_filter(
-            $this->defaultConnectorDenials($role),
-            static fn (string $permission): bool => ! $canGrantSsh || ! str_starts_with($permission, 'ssh.'),
-        );
+        // Default-deny new SSH accounts unless the actor explicitly reviewed
+        // and confirmed grants. Scope independently determines reachability.
+        $defaults = $allowSshPermissionChanges ? [] : $this->defaultSshDenials($role);
 
         $user = DB::transaction(function () use ($attributes, $role, $scope, $deniedPermissions, $defaults): User {
             $user = User::query()->create([
@@ -85,6 +79,7 @@ final readonly class UserAccessManager
 
             $lockedUser = User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
             $currentRole = $this->role($lockedUser);
+            $currentScope = $lockedUser->getAttribute('target_scope_mode');
             $removesRecoverableOwner = $currentRole === GatewayRole::Owner
                 && (bool) $lockedUser->access_enabled
                 && ($role !== GatewayRole::Owner || ! $enabled);
@@ -133,28 +128,29 @@ final readonly class UserAccessManager
             if (! $role->allows(GatewayPermission::WordpressContentPublishCreate) || $role === GatewayRole::Owner || ! $enabled) {
                 DB::table('wordpress_publish_group_grants')->where('user_id', $lockedUser->getKey())->delete();
             }
-            // Editing ordinary user fields must not erase migration-seeded connector
-            // denials merely because the form omitted newly introduced permissions.
-            $this->replaceGlobalDenials($lockedUser, $role, [
+            // Keep previously denied SSH rights unless an explicit Owner review
+            // permits removing them. New role eligibility starts denied; changing
+            // between two SSH-eligible roles does not silently revoke live grants.
+            $priorSsh = $this->existingSshDenials($lockedUser);
+            $defaultSsh = $this->defaultSshDenials($role);
+            $newlyEligibleSsh = array_values(array_filter(
+                $defaultSsh,
+                static fn (string $permission): bool => $currentRole === GatewayRole::Owner
+                    || ! $currentRole->allows(GatewayPermission::from($permission)),
+            ));
+            $nextDenials = array_values(array_unique([
                 ...$deniedPermissions,
-                // Historic, inactive permission keys remain intact in storage.
-                // A confirmed Owner on Selected scope is the only path that
-                // can alter live SSH denials.
-                ...array_filter($this->existingSshDenials($lockedUser),
-                    static fn (string $permission): bool => ! $allowSshPermissionChanges
-                        || ! str_starts_with($permission, 'ssh.')),
-                ...($currentRole !== $role ? array_filter(
-                    $this->defaultConnectorDenials($role),
-                    static fn (string $permission): bool => ! $allowSshPermissionChanges
-                        || ! str_starts_with($permission, 'ssh.'),
-                ) : []),
-                // Changing away from Selected always revokes dormant SSH grants;
-                // returning to Selected later requires a new explicit Owner grant.
-                ...($scope !== TargetScopeMode::Selected
-                    ? array_filter($this->defaultConnectorDenials($role),
-                        static fn (string $permission): bool => str_starts_with($permission, 'ssh.'))
-                    : []),
-            ]);
+                ...($allowSshPermissionChanges ? [] : $priorSsh),
+                ...($allowSshPermissionChanges ? [] : $newlyEligibleSsh),
+            ]));
+            // Expanding reachability from Selected to All must be an explicit
+            // grant decision whenever a remote command/file right would survive.
+            if ($role !== GatewayRole::Owner && $currentRole !== GatewayRole::Owner
+                && $currentScope === TargetScopeMode::Selected && $scope === TargetScopeMode::All
+                && array_diff($defaultSsh, $nextDenials) !== [] && ! $allowSshPermissionChanges) {
+                throw new DomainException('ssh_scope_review_required');
+            }
+            $this->replaceGlobalDenials($lockedUser, $role, $nextDenials);
             $this->normalizeOwnerState($lockedUser, $role);
             $this->recordRequired('user-access-update:'.$lockedUser->id);
         });
@@ -457,7 +453,7 @@ final readonly class UserAccessManager
     }
 
     /** @return list<string> */
-    private function defaultConnectorDenials(GatewayRole $role): array
+    private function defaultSshDenials(GatewayRole $role): array
     {
         if ($role === GatewayRole::Owner) {
             return [];
@@ -465,8 +461,8 @@ final readonly class UserAccessManager
 
         return array_values(array_map(
             static fn (GatewayPermission $permission): string => $permission->value,
-            array_filter($role->permissions(),
-                static fn (GatewayPermission $permission): bool => str_starts_with($permission->value, 'ssh.')),
+            array_filter(GatewayPermission::sshCapabilities(),
+                static fn (GatewayPermission $permission): bool => $role->allows($permission)),
         ));
     }
 
@@ -487,13 +483,13 @@ final readonly class UserAccessManager
         GatewayRole $role,
         array $deniedPermissions,
     ): void {
-        // Only replace active permissions; never erase inactive historical
-        // denials merely because an editor omits unsupported permission keys.
+        // Only replace permissions editable under the selected role. Dormant
+        // known and unknown denials remain stored across a role downgrade.
         DB::table('user_permission_denials')
             ->where('user_id', $user->getKey())
             ->whereIn('permission', array_map(
                 static fn (GatewayPermission $permission): string => $permission->value,
-                GatewayPermission::cases(),
+                $role->permissions(),
             ))->delete();
 
         $permissions = $this->normalizedDenials($role, $deniedPermissions);
@@ -519,21 +515,18 @@ final readonly class UserAccessManager
     private function normalizedDenials(
         GatewayRole $role,
         array $values,
-        bool $targetOnly = false,
     ): array {
         if ($role === GatewayRole::Owner) {
             return [];
         }
 
         $rolePermissions = $role->permissions();
-        $targetPermissions = $targetOnly ? $this->targetPermissions() : null;
         $result = [];
 
         foreach (array_unique($values) as $value) {
             $permission = GatewayPermission::tryFrom($value);
             if ($permission === null
-                || in_array($permission, $rolePermissions, true) === false
-                || ($targetPermissions !== null && in_array($permission, $targetPermissions, true) === false)) {
+                || in_array($permission, $rolePermissions, true) === false) {
                 continue;
             }
 

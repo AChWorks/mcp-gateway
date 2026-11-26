@@ -5,7 +5,7 @@
     <input type="hidden" name="configuration_revision" value="{{ $configurationRevision }}">
     @error('configuration_revision')<p class="form-error" role="alert" id="ssh-configuration-revision-error">{{ $message }}</p>@enderror
     @error('configuration')<p class="form-error" role="alert" id="ssh-configuration-error">{{ $message }}</p>@enderror
-    <p class="field-help" id="ssh-configuration-help">{{ __('Changing the SSH port, host, username, host key or login secret clears the old connection verification. Verify the new host and login afterward. Leave secret fields empty to retain the current encrypted login credential when the method is unchanged.') }}</p>
+    <p class="field-help" id="ssh-configuration-help">{{ __('Changing the SSH port, host, username, host key or login secret clears the old connection verification. Verify the new host and login afterward. Leave secret fields empty to retain the current encrypted login credential only when the login method, verified host key and username are unchanged.') }}</p>
     <div class="target-field-grid">
         <div class="field">
             <label for="ssh_edit_host">{{ __('SSH host or IP address') }}</label>
@@ -28,26 +28,26 @@
     </div>
     <div class="target-subsection">
         <h3>{{ __('SSH connection route') }}</h3>
-        <p class="field-help">{{ __('Changing the route clears old login verification and rebinds encrypted credentials. Reverse SSH requires a separately provisioned, restricted OpenSSH forward from the remote Target to an Gateway host loopback listener, plus an exact Gateway operator approval. An old retained Job cannot be moved to the new route.') }}</p>
+        <p class="field-help">{{ __('Changing only the route preserves the stored login and clears network-path verification. Reverse SSH requires a separately provisioned, restricted OpenSSH forward from the remote Target to an Gateway host loopback listener, plus an exact Gateway operator approval. An old retained Job cannot be moved to the new route.') }}</p>
         <div class="field">
             <label for="ssh_edit_route_mode">{{ __('Connection route') }}</label>
             <select id="ssh_edit_route_mode" name="ssh_route_mode">
-                <option value="direct" @selected(old('ssh_route_mode', $sshConfig->route_mode ?? 'direct') === 'direct')>{{ __('Direct SSH (default)') }}</option>
-                <option value="reverse" @selected(old('ssh_route_mode', $sshConfig->route_mode ?? 'direct') === 'reverse')>{{ __('Owner-approved Reverse SSH') }}</option>
+                <option value="direct" @selected(old('ssh_route_mode', $target->usesReverseRoute() ? 'reverse' : 'direct') === 'direct')>{{ __('Direct SSH (default)') }}</option>
+                <option value="reverse" @selected(old('ssh_route_mode', $target->usesReverseRoute() ? 'reverse' : 'direct') === 'reverse')>{{ __('Owner-approved Reverse SSH') }}</option>
             </select>
             @error('ssh_route_mode')<p class="form-error" role="alert">{{ $message }}</p>@enderror
         </div>
-        <div class="target-field-grid" data-ssh-reverse-route @if(old('ssh_route_mode', $sshConfig->route_mode ?? 'direct') !== 'reverse') hidden @endif>
+        <div class="target-field-grid" data-ssh-reverse-route @if(old('ssh_route_mode', $target->usesReverseRoute() ? 'reverse' : 'direct') !== 'reverse') hidden @endif>
             <div class="field">
                 <label for="ssh_edit_reverse_port">{{ __('Approved Gateway host loopback listener port') }}</label>
                 <input id="ssh_edit_reverse_port" name="ssh_reverse_port" type="number" min="1024" max="65535"
-                    value="{{ old('ssh_reverse_port', $sshConfig->reverse_listener_port) }}">
+                    value="{{ old('ssh_reverse_port', $target->reverse_listener_port) }}">
                 @error('ssh_reverse_port')<p class="form-error" role="alert">{{ $message }}</p>@enderror
             </div>
             <div class="field">
                 <label for="ssh_edit_tunnel_identity">{{ __('Gateway-approved tunnel identity') }}</label>
                 <input id="ssh_edit_tunnel_identity" name="ssh_tunnel_identity" type="text" maxlength="80"
-                    autocomplete="off" spellcheck="false" value="{{ old('ssh_tunnel_identity', $sshConfig->reverse_tunnel_identity) }}">
+                    autocomplete="off" spellcheck="false" value="{{ old('ssh_tunnel_identity', $target->reverse_tunnel_identity) }}">
                 @error('ssh_tunnel_identity')<p class="form-error" role="alert">{{ $message }}</p>@enderror
             </div>
         </div>
@@ -99,7 +99,7 @@
         </div>
     </div>
     <div class="field">
-        <label for="ssh_config_owner_password">{{ __('Current Owner password') }}</label>
+        <label for="ssh_config_owner_password">{{ __('Your current Gateway password') }}</label>
         <input id="ssh_config_owner_password" type="password" name="current_password" data-admin-requires-intent required maxlength="255"
             autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="ssh_config_owner_password-error" @enderror>
         @error('current_password')<p class="form-error" role="alert" id="ssh_config_owner_password-error">{{ $message }}</p>@enderror

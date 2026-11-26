@@ -32,6 +32,8 @@ target_unit=""
 control_user=""
 prior_unit=""
 prior_user=""
+verified_unit=""
+verified_user=""
 php_pid=""
 tls_pid=""
 export MANAGED_REVERSE_E2E_DIR="$tmp"
@@ -47,7 +49,7 @@ cleanup() {
     [[ -z "$php_pid" ]] || { kill "$php_pid" >/dev/null 2>&1 || true; wait "$php_pid" 2>/dev/null || true; }
     [[ -z "$tls_pid" ]] || { kill "$tls_pid" >/dev/null 2>&1 || true; wait "$tls_pid" 2>/dev/null || true; }
     local owned_unit
-    for owned_unit in "$target_unit" "$prior_unit"; do
+    for owned_unit in "$target_unit" "$prior_unit" "$verified_unit"; do
         if [[ -n "$owned_unit" && "$owned_unit" =~ ^mcp-gateway-reverse-[0-9a-hjkmnp-tv-z]{26}\.service$ ]]; then
             sudo systemctl disable --now "$owned_unit" >/dev/null 2>&1 || true
             sudo rm -f -- "/etc/systemd/system/$owned_unit"
@@ -60,7 +62,7 @@ cleanup() {
         [[ "$pid" =~ ^[0-9]+$ ]] && sudo kill "$pid" 2>/dev/null || true
     fi
     local owned_account
-    for owned_account in "$control_user" "$prior_user"; do
+    for owned_account in "$control_user" "$prior_user" "$verified_user"; do
         if [[ -n "$owned_account" && "$owned_account" =~ ^mcp-r-[a-z0-9]{12}$ ]]; then
             sudo userdel "$owned_account" >/dev/null 2>&1 || true
         fi
@@ -330,6 +332,7 @@ for i in {1..30}; do
 done
 [[ "$job_runtime_ready" == true ]] || die "Dedicated Target login systemd --user manager did not start."
 php tests/Support/managed-reverse-e2e.php job
+php tests/Support/managed-reverse-e2e.php authority-aba
 echo "PASS: local pinned host readiness, degraded stopped SSHD state, reconnection and real managed retained Job."
 # A second paste must not duplicate the Target OS user/service/key.
 sudo env CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/one-command.sh" \
@@ -353,6 +356,52 @@ for i in {1..40}; do
 done
 php tests/Support/managed-reverse-e2e.php verify
 echo "PASS: exact Target re-run, bounded disconnect, reconnect and pinned Gateway Verify."
+
+# Rotate only the control path AFTER successful real login verification.
+# The installed login account's authorized_keys must not even be rewritten.
+verified_unit="$target_unit"
+verified_user="$control_user"
+verified_id="$enrollment"
+login_keys="/home/deploy.prod/.ssh/authorized_keys"
+login_digest="$(sudo sha256sum "$login_keys")"
+login_stat="$(sudo stat -c '%i:%s:%y:%z:%a:%u:%g' "$login_keys")"
+php tests/Support/managed-reverse-e2e.php reissue
+enrollment="$(cat "$tmp/enrollment-id")"
+[[ "$enrollment" != "$verified_id" && "$enrollment" != "$prior_id" && "$enrollment" =~ ^[0-9a-hjkmnp-tv-z]{26}$ ]] ||
+    die "Verified reissue did not rotate its enrollment identity."
+target_unit="mcp-gateway-reverse-$enrollment.service"
+control_user="mcp-r-$(printf '%s' "$enrollment" | cut -c15-26)"
+sudo env CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/one-command.sh" \
+    > "$tmp/transport-only.log" 2>&1 || {
+        sed -E 's/[a-f0-9]{64}/[REDACTED]/g' "$tmp/transport-only.log" >&2
+        die "Verified transport-only single command failed."
+    }
+sudo systemctl is-active --quiet "$target_unit" ||
+    die "Transport-only reissue did not start the new tunnel."
+[[ "$(sudo sha256sum "$login_keys")" == "$login_digest" ]] ||
+    die "Transport-only reissue changed the SSH login authorized_keys content."
+[[ "$(sudo stat -c '%i:%s:%y:%z:%a:%u:%g' "$login_keys")" == "$login_stat" ]] ||
+    die "Transport-only reissue touched the SSH login authorized_keys file."
+sudo systemctl disable --now "$verified_unit" >/dev/null ||
+    die "Could not stop the exact superseded verified fixture service."
+listener="$(php -r '
+require "vendor/autoload.php";
+$app=require "bootstrap/app.php";
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+echo App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment::query()->sole()->listener_port;
+')"
+[[ "$listener" =~ ^[0-9]{4,5}$ ]] || die "Missing reissued managed listener port."
+ready=false
+for i in {1..40}; do
+    if ss -H -lnt | grep -Fq "127.0.0.1:$listener"; then
+        ready=true
+        break
+    fi
+    sleep 0.5
+done
+[[ "$ready" == true ]] || die "Transport-only reissue listener did not become ready."
+php tests/Support/managed-reverse-e2e.php verify
+echo "PASS: verified transport-only reinstall used unchanged login key, real pinned SSH and SFTP."
 
 php tests/Support/managed-reverse-e2e.php revoke
 # Route authorization is removed. Existing tunnel session is intentionally

@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Application\Access\UserAccessManager;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
 use App\Models\User;
@@ -52,7 +53,7 @@ final class CreateAdministrator extends Command
             ? GatewayRole::Administrator
             : GatewayRole::Owner;
 
-        User::query()->create([
+        app(UserAccessManager::class)->create([
             'name' => $name,
             'email' => $email,
             'password' => $password,
@@ -62,7 +63,7 @@ final class CreateAdministrator extends Command
             // First Owner retains expected bootstrap AI authority; later CLI
             // administrators are not automatically allowed to attach clients.
             'ai_access_enabled' => $role === GatewayRole::Owner,
-        ]);
+        ], []);
 
         $this->info($role === GatewayRole::Owner
             ? 'Owner administrator created.'

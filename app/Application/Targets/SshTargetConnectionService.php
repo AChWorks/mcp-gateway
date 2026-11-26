@@ -55,7 +55,7 @@ final readonly class SshTargetConnectionService
             ): string {
                 $attemptId = $this->verification->begin($target, $config, $credential);
                 $material = $this->vault->open($target, $config, $credential);
-                $route = $this->reverseRoutes->forTarget($target, $config);
+                $route = $this->reverseRoutes->forTarget($target);
                 $relay = $this->relayRoutes->sshRouteForTarget($target);
 
                 return $this->transport->authenticate(
@@ -84,7 +84,7 @@ final readonly class SshTargetConnectionService
         // Do not report a successful login over a listener revoked during
         // KEX/login. The end-host pin alone does not grant route ownership.
         try {
-            $this->reverseRoutes->forTarget($target, $config);
+            $this->reverseRoutes->forTarget($target);
             $this->relayRoutes->sshRouteForTarget($target);
         } catch (SshTargetConnectionException $exception) {
             $this->verification->failed($target, $config, $credential, $attemptId, $exception->reason);
@@ -107,13 +107,12 @@ final readonly class SshTargetConnectionService
         }
         DB::transaction(function () use ($target): void {
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
-            if (SshManagedReverseEnrollment::query()
-                ->where('target_record_id', $locked->getKey())
-                ->where('state', '!=', 'revoked')->exists()) {
-                throw new SshTargetConnectionException('reverse_route_not_approved');
-            }
             TargetCredential::query()->where('target_record_id', $locked->getKey())
                 ->where('connector_type', 'ssh_direct')->delete();
+            // A pending bootstrap must not re-install a retired login key.
+            SshManagedReverseEnrollment::query()->where('target_record_id', $locked->getKey())
+                ->where('login_public_key', '!=', '')->update(['login_public_key' => '']);
+
             SshTargetConfig::query()->where('target_record_id', $locked->getKey())
                 ->update(['verification_attempt_id' => null, 'observed_peer_ip' => null, 'observed_at' => null]);
             $locked->forceFill([

@@ -20,7 +20,11 @@ final readonly class TargetReview
                 TargetConnectionState::Error->value,
                 TargetConnectionState::ReconnectRequired->value,
                 TargetConnectionState::Reassigning->value,
-            ]);
+            ])->orWhereExists(static function ($relay): void {
+                $relay->selectRaw('1')->from('connection_relays')
+                    ->whereColumn('connection_relays.id', 'targets.relay_record_id')
+                    ->where('connection_relays.enabled', false);
+            });
 
             // Runtime eligibility has one owner. A connector may add its own
             // persisted recovery evidence without a Dashboard type switch.

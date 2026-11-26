@@ -4,7 +4,6 @@ namespace App\Application\Admin;
 
 use App\Application\Targets\TargetConnectorRegistry;
 use App\Domain\Targets\Target;
-use App\Support\TargetRecoveryPresentation;
 use Illuminate\Contracts\Container\Container;
 
 /** UI companions do not register or make a connector executable. */
@@ -27,7 +26,7 @@ final class TargetConnectorAdmin
 
     public function forType(string $type): ?TargetConnectorAdminPresenter
     {
-        if (! in_array($type, $this->connectors->types(), true) || ! isset(self::PRESENTERS[$type])) {
+        if (! TargetConnectorRegistry::supports($type) || ! isset(self::PRESENTERS[$type])) {
             return null;
         }
 
@@ -37,6 +36,30 @@ final class TargetConnectorAdmin
     public function label(string $type): string
     {
         return $this->forType($type)?->definition()->label ?? __('Unsupported connector');
+    }
+
+    /**
+     * @param  array<string,mixed>  $details
+     * @return array<string,mixed>
+     */
+    public function recovery(Target $target, array $details = []): array
+    {
+        $presenter = $this->forType($target->connector_type);
+        if ($presenter !== null) {
+            return $presenter->recovery($target, $details);
+        }
+
+        return [
+            'title' => __('Connector unavailable'),
+            'description' => __('This stored connector is not implemented. Its authentication, reachability and recovery requirements have not been evaluated.'),
+            'reachability' => __('No supported connector evidence is available.'),
+            'authorization' => __('Not evaluated: the connector implementation is unavailable.'),
+            'operation' => __('Connector operations are unavailable.'),
+            'history' => $target->last_error_code === null ? null
+                : __('Recorded diagnostic: :code', ['code' => $target->last_error_code]),
+            'tone' => 'caution',
+            'canFinish' => false, 'canCancel' => false, 'needsExternalProof' => false,
+        ];
     }
 
     /** @return array<string, string> */
@@ -67,7 +90,7 @@ final class TargetConnectorAdmin
             $presentation[$target->target_id] = [
                 'definition' => $this->forType($type)?->definition(),
                 'label' => $this->label($type),
-                'recovery' => TargetRecoveryPresentation::describe($target),
+                'recovery' => $this->recovery($target),
             ];
         }
         foreach ($groups as $type => $items) {

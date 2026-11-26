@@ -16,6 +16,11 @@ final class TargetConnectorRegistryTest extends TestCase
         $registry = app(TargetConnectorRegistry::class);
 
         self::assertSame(['wp_ai_bridge', 'ssh_direct', 'arvancloud'], $registry->types());
+        foreach ($registry->types() as $type) {
+            self::assertTrue(TargetConnectorRegistry::supports($type));
+            self::assertSame($type, $registry->forType($type)->type());
+        }
+        self::assertFalse(TargetConnectorRegistry::supports('ai_server_agent'));
         self::assertInstanceOf(WpAiBridgeTargetAdapter::class, $registry->forType('wp_ai_bridge'));
         self::assertInstanceOf(SshDirectTargetAdapter::class, $registry->forType('ssh_direct'));
         self::assertInstanceOf(ArvanApiTargetAdapter::class, $registry->forType('arvancloud'));

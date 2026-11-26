@@ -4,11 +4,10 @@ namespace Tests\Feature\Admin;
 
 use App\Application\Access\UserAccessManager;
 use App\Application\Targets\ConnectionRelayAdministration;
-use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\SshTargetRegistration;
-use App\Application\Targets\TargetConnectorFailure;
+use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
@@ -307,7 +306,7 @@ SH
             'relay_revision' => 1, 'enable' => '0', 'current_password' => self::PASSWORD,
         ])->assertSessionHasNoErrors();
         $this->delete($url, [...$form, 'relay_revision' => 2])->assertSessionHasErrors('relay');
-        $bindings = app(ConnectionRelayTargetBinding::class);
+        $bindings = app(TargetTransportBinding::class);
         $target->refresh();
         self::assertTrue($bindings->change($target, $bindings->revision($target), null));
 
@@ -358,13 +357,13 @@ SH
         // Start just below saturation with a valid credential, so Disable
         // reaches the maximum normally rather than failing credential resealing.
         $target->setRawAttributes([
-            ...$target->getAttributes(), 'relay_binding_revision' => 4294967294,
+            ...$target->getAttributes(), 'transport_revision' => 4294967294,
         ], true);
         $credential->forceFill(['encrypted_payload' => $vault->seal(
             $target, $config, $material['secret'], $material['passphrase'],
         )])->save();
         DB::table('targets')->where('id', $target->getKey())
-            ->update(['relay_binding_revision' => 4294967294]);
+            ->update(['transport_revision' => 4294967294]);
         $target->refresh();
         $beforeDisableHash = SshTargetBinding::hash($target, $config);
 
@@ -375,7 +374,7 @@ SH
         ])->assertSessionHasNoErrors();
 
         $target->refresh();
-        self::assertSame(4294967295, $target->relay_binding_revision);
+        self::assertSame(4294967295, $target->transport_revision);
         self::assertNotSame($beforeDisableHash, SshTargetBinding::hash($target, $config));
         self::assertSame('ssh-secret', $vault->open($target, $config, $credential->fresh())['secret']);
         self::assertFalse($relay->fresh()->enabled);
@@ -387,8 +386,8 @@ SH
 
         self::assertFalse($relay->fresh()->enabled);
         self::assertSame(2, $relay->fresh()->lifecycle_revision);
-        self::assertSame(4294967295, $target->fresh()->relay_binding_revision);
-        self::assertSame('relay_disabled', $target->fresh()->last_error_code);
+        self::assertSame(4294967295, $target->fresh()->transport_revision);
+        self::assertNull($target->fresh()->last_error_code);
         self::assertNull(app(ConnectionRelayRoutes::class)->selectable()->first());
     }
 
@@ -519,48 +518,76 @@ SH
         );
         $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->sole();
         $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
-        self::assertSame(1, $target->relay_binding_revision);
+        self::assertSame(1, $target->transport_revision);
         self::assertSame((string) $relay->getKey(), $target->getAttribute('relay_record_id'));
         self::assertSame('ssh-secret', app(SshTargetVault::class)->open($target, $config, $credential)['secret']);
         self::assertSame(46081, app(ConnectionRelayRoutes::class)->sshRouteForTarget($target)?->loopbackPort);
 
+        $ciphertext = $credential->encrypted_payload;
         $oldHash = SshTargetBinding::hash($target, $config);
-        $bindings = app(ConnectionRelayTargetBinding::class);
+        $bindings = app(TargetTransportBinding::class);
         self::assertTrue($bindings->change($target, $bindings->revision($target), null));
         $target->refresh();
-        self::assertSame(2, $target->relay_binding_revision);
+        self::assertSame(2, $target->transport_revision);
         self::assertNull($target->getAttribute('relay_record_id'));
         self::assertNotSame($oldHash, SshTargetBinding::hash($target, $config));
         self::assertSame('ssh-secret', app(SshTargetVault::class)->open($target, $config, $credential->fresh())['secret']);
 
         self::assertTrue($bindings->change($target, $bindings->revision($target), 'iran-1'));
         $target->refresh();
-        self::assertSame(3, $target->relay_binding_revision);
+        self::assertSame(3, $target->transport_revision);
         self::assertNotSame($oldHash, SshTargetBinding::hash($target, $config));
         self::assertSame('ssh-secret', app(SshTargetVault::class)->open($target, $config, $credential->fresh())['secret']);
 
         $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
-        try {
-            $bindings->change($target, $bindings->revision($target), null);
-            self::fail('Connected Target changed routes without disconnecting.');
-        } catch (TargetConnectorFailure) {
-            self::assertNotNull($target->fresh()->getAttribute('relay_record_id'));
-        }
-
-        $target->forceFill(['connection_state' => TargetConnectionState::Disconnected])->save();
-        app(ConnectionRelayAdministration::class)->disable($relay, 1);
+        self::assertTrue($bindings->change($target, $bindings->revision($target), null));
         $target->refresh();
-        self::assertSame(4, $target->relay_binding_revision);
-        self::assertSame('error', $target->connection_state->value);
-        self::assertSame('relay_disabled', $target->last_error_code);
+        self::assertSame(TargetConnectionState::Connected, $target->connection_state);
+        self::assertNull($target->relay_record_id);
+        self::assertTrue($bindings->change($target, $bindings->revision($target), 'iran-1'));
+        $target->refresh();
+        app(ConnectionRelayAdministration::class)->setEnabled($relay, 1, false);
+        $target->refresh();
+        self::assertSame(6, $target->transport_revision);
+        self::assertSame('connected', $target->connection_state->value);
+        self::assertNull($target->last_error_code);
         self::assertNotSame($oldHash, SshTargetBinding::hash($target, $config));
         self::assertSame('ssh-secret', app(SshTargetVault::class)->open($target, $config, $credential->fresh())['secret']);
 
+        self::assertSame($ciphertext, $credential->fresh()->encrypted_payload);
         try {
             app(ConnectionRelayRoutes::class)->sshRouteForTarget($target);
             self::fail('Disabled Relay was used or silently switched to Direct.');
         } catch (SshTargetConnectionException $exception) {
             self::assertSame('relay_unavailable', $exception->reason);
+        }
+    }
+
+    public function test_stale_ssh_and_http_snapshots_cannot_use_an_old_enabled_relay(): void
+    {
+        $this->readyRelay();
+        $target = app(SshTargetRegistration::class)->register(
+            'relay-stale-target', 'Stale route', '1.1.1.1', 22,
+            'deploy', $this->publicKey(), 'password', 'fixture-secret', null,
+            connectionRelayId: 'iran-1',
+        );
+        $routes = app(ConnectionRelayRoutes::class);
+        $bindings = app(TargetTransportBinding::class);
+        self::assertTrue($bindings->change($target, $bindings->revision($target), null));
+        self::assertNull($routes->sshRouteForTarget($target->fresh()));
+        self::assertNull($routes->httpRouteForTarget($target->fresh()));
+
+        try {
+            $routes->sshRouteForTarget($target);
+            self::fail('SSH used a retired binding.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('relay_unavailable', $exception->reason);
+        }
+        try {
+            $routes->httpRouteForTarget($target);
+            self::fail('HTTP used a retired binding.');
+        } catch (OutboundRequestException $exception) {
+            self::assertTrue($exception->preDispatch);
         }
     }
 
@@ -576,7 +603,7 @@ SH
         $original = $routes->httpRouteAtEpoch((string) $target->getKey(), 1);
         self::assertSame(46081, $original?->loopbackPort);
 
-        app(ConnectionRelayAdministration::class)->disable($relay, 1);
+        app(ConnectionRelayAdministration::class)->setEnabled($relay, 1, false);
         try {
             $routes->httpRouteAtEpoch((string) $target->getKey(), 1, $original, true);
             self::fail('An outdated route revision reached the transport.');
@@ -584,6 +611,28 @@ SH
             self::assertTrue($exception->preDispatch);
             self::assertSame('network_failure', $exception->reason);
         }
+    }
+
+    public function test_unreadable_ssh_credential_does_not_block_transport_changes(): void
+    {
+        $relay = $this->readyRelay();
+        $target = app(SshTargetRegistration::class)->register(
+            'relay-invalid-credential', 'Relay with damaged fixture credential', '1.1.1.1', 22,
+            'deploy', $this->publicKey(), 'password', 'fixture-secret', null,
+            connectionRelayId: 'iran-1',
+        );
+        DB::table('target_credentials')->where('target_record_id', $target->getKey())
+            ->update(['encrypted_payload' => 'invalid-fixture-envelope']);
+        self::assertTrue(app(ConnectionRelayAdministration::class)->setEnabled($relay, 1, false));
+        self::assertFalse($relay->fresh()->enabled);
+        self::assertSame(2, $target->fresh()->transport_revision);
+        self::assertNull($target->fresh()->last_error_code);
+        $bindings = app(TargetTransportBinding::class);
+        $target->refresh();
+        self::assertTrue($bindings->change($target, $bindings->revision($target), null));
+        $this->assertDatabaseHas('target_credentials', [
+            'target_record_id' => $target->getKey(), 'encrypted_payload' => 'invalid-fixture-envelope',
+        ]);
     }
 
     public function test_double_disable_does_not_reseal_credentials_or_advance_job_epoch(): void
@@ -594,13 +643,13 @@ SH
             'deploy', $this->publicKey(), 'password', 'ssh-secret', null,
             connectionRelayId: 'iran-1',
         );
-        $first = app(ConnectionRelayAdministration::class)->disable($relay, 1);
+        $first = app(ConnectionRelayAdministration::class)->setEnabled($relay, 1, false);
         self::assertTrue($first);
-        $epoch = $target->fresh()->relay_binding_revision;
+        $epoch = $target->fresh()->transport_revision;
         $encrypted = TargetCredential::query()->where('target_record_id', $target->getKey())
             ->sole()->encrypted_payload;
-        self::assertFalse(app(ConnectionRelayAdministration::class)->disable($relay, 2));
-        self::assertSame($epoch, $target->fresh()->relay_binding_revision);
+        self::assertFalse(app(ConnectionRelayAdministration::class)->setEnabled($relay, 2, false));
+        self::assertSame($epoch, $target->fresh()->transport_revision);
         self::assertSame($encrypted, TargetCredential::query()
             ->where('target_record_id', $target->getKey())->sole()->encrypted_payload);
     }
@@ -626,8 +675,9 @@ SH
             'message-reverse', 'Reverse', '1.1.1.1', 22, 'deploy',
             $this->publicKey(), 'password', 'ssh-secret', null,
         );
-        DB::table('ssh_direct_target_configs')->where('target_record_id', $reverse->getKey())
-            ->update(['route_mode' => 'reverse', 'reverse_listener_port' => 42050, 'reverse_tunnel_identity' => 'fixture-only']);
+        DB::table('targets')->where('id', $reverse->getKey())
+            ->update(['reverse_listener_port' => 42050, 'reverse_tunnel_identity' => 'fixture-only']);
+        $reverse->refresh();
 
         $adapter = app(SshDirectTargetAdapter::class);
         foreach ([$direct, $relay, $reverse] as $target) {
@@ -654,7 +704,7 @@ SH
             'relay-config-ssh', 'Relayed SSH', '1.1.1.1', 22,
             'deploy', $this->publicKey(), 'password', 'ssh-secret', null,
         );
-        $revision = app(ConnectionRelayTargetBinding::class)->revision($target);
+        $revision = app(TargetTransportBinding::class)->revision($target);
         $url = '/admin/targets/relay-config-ssh/relay-route';
 
         $this->put($url, [
@@ -672,7 +722,7 @@ SH
             'route_revision' => $revision, 'connection_relay_id' => '',
             'current_password' => self::PASSWORD,
         ])->assertSessionHasErrors('route_revision');
-        self::assertSame(1, $target->fresh()->relay_binding_revision);
+        self::assertSame(1, $target->fresh()->transport_revision);
     }
 
     private function readyRelay(): ConnectionRelay

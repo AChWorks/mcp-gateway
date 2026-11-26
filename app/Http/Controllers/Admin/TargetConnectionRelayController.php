@@ -3,12 +3,12 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AdministratorPasswordConfirmation;
-use App\Application\Targets\ConnectionRelayTargetBinding;
 use App\Application\Targets\TargetConnectorFailure;
+use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Access\GatewayRole;
 use App\Domain\Targets\Target;
 use App\Http\Controllers\Controller;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -19,16 +19,13 @@ final class TargetConnectionRelayController extends Controller
 {
     public function update(
         Request $request, Target $target, AdministratorPasswordConfirmation $password,
-        ConnectionRelayTargetBinding $bindings,
+        TargetTransportBinding $bindings,
     ): RedirectResponse {
-        Gate::authorize(GatewayPermission::TargetsUpdate->value, $target);
-        Gate::authorize(GatewayPermission::SecurityManage->value);
-        abort_unless($request->user()?->getRawOriginal('role') === GatewayRole::Owner->value, 403);
+        Gate::authorize(GatewayPermission::TargetsConfigure->value, $target);
 
         $fields = $request->validate([
             'route_revision' => ['required', 'string', 'size:64', 'regex:/^[a-f0-9]{64}$/D'],
-            'connection_relay_id' => ['nullable', 'string', 'max:64',
-                'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
+            ...ConnectionRelayRoutes::selectionRules(),
         ]);
         $password->confirm($request);
         try {
@@ -47,7 +44,7 @@ final class TargetConnectionRelayController extends Controller
 
         return redirect()->route('admin.targets.edit', ['target' => $target->target_id])
             ->with('status', $changed
-                ? __('Target connection route changed. The old route is fenced; reconnect and independently verify the remote Target before running operations.')
+                ? __('Target connection route changed. Stored authorization is preserved; new operations use the selected route.')
                 : __('No Target connection route change was necessary.'));
     }
 }

@@ -1,7 +1,5 @@
 @php
-    // Mirrors the two independent gates in TargetConfigurationController.
-    $canConfigureArvan = \Illuminate\Support\Facades\Gate::allows('targets.update', $target)
-        && \Illuminate\Support\Facades\Gate::allows('security.manage');
+    $canConfigureArvan = \Illuminate\Support\Facades\Gate::allows('targets.configure', $target);
 @endphp
 @if ($arvanConfig !== null)
     @if ($arvanHasCredential)
@@ -12,7 +10,7 @@
             @if ($canConfigureArvan)
                 <a href="{{ route('admin.targets.edit', ['target' => $target->target_id, 'section' => 'api-connection']).'#target-connection-settings' }}">{{ __('Open advanced connection settings to add a key') }}</a>
             @else
-                {{ __('Ask a Gateway Owner to add a Machine User API key in advanced connection settings. You cannot replace this credential yourself.') }}
+                {{ __('Ask an authorized Target configuration editor to add a Machine User API key in advanced connection settings. You cannot replace this credential yourself.') }}
             @endif
         </div>
     @endif
@@ -23,7 +21,7 @@
             @if ($canConfigureArvan)
                 <a href="{{ route('admin.targets.edit', ['target' => $target->target_id, 'section' => 'api-connection']).'#target-connection-settings' }}">{{ __('Set a GET probe in advanced connection settings') }}</a>
             @else
-                {{ __('Ask a Gateway Owner to configure a read-only GET probe for this Target. You cannot change its API connection settings.') }}
+                {{ __('Ask an authorized Target configuration editor to configure a read-only GET probe for this Target. You cannot change its API connection settings.') }}
             @endif
         </div>
     @endif
@@ -63,7 +61,7 @@
                     @if ($canConfigureArvan)
                         {{ __('To use this Target again, enter a new key in its connection settings.') }}
                     @else
-                        {{ __('A Gateway Owner must add a new key before this Target can be used again. Contact an Owner after deleting the local key.') }}
+                        {{ __('An authorized Target configuration editor must add a new key before this Target can be used again. Contact an authorized configuration editor after deleting the local key.') }}
                     @endif
                 </p>
                 <form method="post" action="{{ route('admin.targets.disconnect', ['target' => $target->target_id]) }}">

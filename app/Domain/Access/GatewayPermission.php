@@ -9,6 +9,8 @@ enum GatewayPermission: string
     case TargetsView = 'targets.view';
     case TargetsCreate = 'targets.create';
     case TargetsUpdate = 'targets.update';
+    case TargetsConfigure = 'targets.configure';
+    case TargetsOperationsManage = 'targets.operations.manage';
     case TargetsRemove = 'targets.remove';
     case TargetsConnect = 'targets.connect';
     case TargetsReconnect = 'targets.reconnect';
@@ -41,6 +43,8 @@ enum GatewayPermission: string
             self::TargetsView => 'View Targets',
             self::TargetsCreate => 'Add Targets',
             self::TargetsUpdate => 'Edit Target details',
+            self::TargetsConfigure => 'Configure Target connections',
+            self::TargetsOperationsManage => 'Pause or resume Target operations',
             self::TargetsRemove => 'Remove Targets',
             self::TargetsConnect => 'Connect Targets',
             self::TargetsReconnect => 'Reconnect Targets',
@@ -73,8 +77,10 @@ enum GatewayPermission: string
             self::DashboardView => 'Open the admin dashboard. Target counts and health still follow targets.view and the effective Target scope; recent activity also requires activity.view.',
             self::GatewayConnectionView => 'View the Gateway MCP endpoint and OAuth/client metadata. This is Gateway-wide and does not grant access to any Target.',
             self::TargetsView => 'List and open Targets inside the user\'s effective Target scope. It never makes an out-of-scope Target visible.',
-            self::TargetsCreate => 'Register a new Target endpoint at Gateway scope; this permission alone grants no Target access. Registration records the creating user. Selected scope can include an explicitly enabled self-created Target access option or an Owner-approved Target or group assignment. Neither path bypasses role, permission or deny restrictions.',
-            self::TargetsUpdate => 'Edit the display name of an in-scope Target. Editing SSH endpoint, credentials, host-key pin or WordPress URL separately requires Owner security authority and current-password confirmation; Target ID and connector type remain stable.',
+            self::TargetsCreate => 'Register any supported Target and use an existing approved Relay or Reverse route at Gateway scope; this permission alone grants no Target access. Registration records the creating user. Selected scope can include an explicitly enabled self-created Target access option or an Owner-approved Target or group assignment. Neither path bypasses role, permission or deny restrictions.',
+            self::TargetsUpdate => 'Edit the display name and AI guidance of an in-scope Target.',
+            self::TargetsConfigure => 'Change the connection endpoint, credentials, trust binding or available route for an in-scope Target; reissue pending Managed Reverse setup. Requires your current Gateway password. Target ID and connector type remain stable.',
+            self::TargetsOperationsManage => 'Pause or resume new Gateway operations on an in-scope Target for all users. Stored credentials and already-dispatched work are preserved.',
             self::TargetsRemove => 'Remove any Target inside the user\'s effective Target scope when this permission is allowed for that Target. Creation ownership is not considered; it is not limited to Targets the user created.',
             self::TargetsConnect => 'Start the supported connection workflow for an in-scope Target. WordPress currently uses OAuth; future connectors may use different authentication.',
             self::TargetsReconnect => 'Replace/re-authorize the stored connection for any in-scope Target when this permission is allowed for that Target.',
@@ -97,7 +103,7 @@ enum GatewayPermission: string
             self::ActivityView => 'Open the activity feed. Non-owner results are constrained to Targets visible through targets.view and the effective Target scope; owners retain unrestricted recovery visibility.',
             self::UsersView => 'View local Gateway user accounts. This is Gateway-wide and does not itself allow changing access.',
             self::UsersManage => 'Create and edit Gateway users, per-Target access rules, Target groups, and group membership. This is Gateway-wide access administration.',
-            self::SecurityManage => 'Manage approved AI client applications and revoke individual grants through the Owner-only security administration pages.',
+            self::SecurityManage => 'Manage Gateway-wide security, approved AI clients and grants, operational settings, and Relay/Reverse SSH infrastructure.',
         };
     }
 
@@ -143,6 +149,8 @@ enum GatewayPermission: string
 
             self::TargetsView,
             self::TargetsUpdate,
+            self::TargetsConfigure,
+            self::TargetsOperationsManage,
             self::TargetsRemove,
             self::TargetsConnect,
             self::TargetsReconnect,

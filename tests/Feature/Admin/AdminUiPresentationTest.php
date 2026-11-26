@@ -99,7 +99,7 @@ final class AdminUiPresentationTest extends TestCase
         self::assertStringNotContainsString('Registered SSH/connector details and diagnostic history', $targetSource);
         self::assertStringContainsString('<summary><h2 id="target-remove-title" class="admin-disclosure-heading">', $targetSource);
         self::assertStringContainsString('<summary><h3 class="admin-disclosure-heading">', $sshSource);
-        self::assertStringContainsString('Retry pending Managed Reverse setup (advanced)', $sshSource);
+        self::assertStringContainsString('Reissue Managed Reverse route (advanced)', $sshSource);
         self::assertStringContainsString('Revoke managed Reverse SSH (destructive)', $sshSource);
         self::assertStringContainsString("old('managed_reverse_action') === 'reissue'", $sshSource);
         self::assertStringContainsString("old('managed_reverse_action') === 'revoke'", $sshSource);
@@ -365,7 +365,7 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(1, (int) $xpath->evaluate('count(//section[@aria-label="Target identity"]//form/div[contains(@class,"target-field-grid")]/div[contains(@class,"target-span-all")]/textarea[@id="ai_guidance"])'));
     }
 
-    public function test_arvan_enrollment_is_explained_to_owner_and_not_offered_to_roles_that_cannot_save_it(): void
+    public function test_enrollment_options_follow_create_permission_and_connector_capabilities(): void
     {
         $this->actingAs($this->owner())
             ->get('/admin/targets/create?connector_type=arvancloud')
@@ -382,8 +382,19 @@ final class AdminUiPresentationTest extends TestCase
         $this->actingAs($administrator)
             ->get('/admin/targets/create')
             ->assertOk()
-            ->assertDontSee('value="arvancloud"', false)
-            ->assertSee('ArvanCloud API key enrollment requires a Gateway Owner');
+            ->assertSee('value="arvancloud"', false)
+            ->assertSee('Managed Reverse SSH')
+            ->assertSee('Manual Reverse SSH');
+        $arvan = $this->get('/admin/targets/create?connector_type=arvancloud')->assertOk()->getContent();
+        self::assertMatchesRegularExpression('/<div[^>]*data-target-relay\s*>/', $arvan);
+        $dom = new \DOMDocument;
+        $dom->loadHTML($arvan, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+        $xpath = new \DOMXPath($dom);
+        self::assertSame(1, (int) $xpath->evaluate('count(//select[@id="connector_type"]/option[@data-enrollment-password-required][@value="arvancloud"])'));
+        self::assertSame(1, (int) $xpath->evaluate('count(//form[@id="target-create-form"]//input[@name="current_password"][not(@disabled)][not(ancestor::fieldset[@disabled])])'));
+        DB::table('user_permission_denials')->insert(['user_id' => $administrator->id, 'permission' => 'targets.create']);
+        $this->get('/admin/targets/create')->assertForbidden();
+        $this->post('/admin/targets', ['connector_type' => 'arvancloud'])->assertForbidden();
     }
 
     public function test_endpoint_preflight_is_in_shared_enrollment_actions_for_both_connectors(): void

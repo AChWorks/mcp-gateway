@@ -16,6 +16,7 @@ use App\Application\Targets\TargetEnrollmentPreflight;
 use App\Application\Targets\TargetPreflightResult;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Models\User;
@@ -46,7 +47,6 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
     public function registrationRules(): array
     {
         return [
-            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
             'ssh_host' => ['required', 'string', 'max:253'],
             'ssh_port' => ['required', 'integer', 'min:1', 'max:65535'],
             'ssh_username' => ['required', 'string', 'max:128'],
@@ -57,9 +57,21 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
             'ssh_passphrase' => ['nullable', 'string', 'max:4096'],
             'ssh_trust_confirmed' => ['required', 'in:yes'],
             'ssh_route_mode' => ['nullable', Rule::in(['direct', 'reverse'])],
+            ...$this->enrollmentRelayRules(),
             'ssh_reverse_port' => ['required_if:ssh_route_mode,reverse', 'nullable', 'integer', 'min:1024', 'max:65535'],
             'ssh_tunnel_identity' => ['required_if:ssh_route_mode,reverse', 'nullable', 'string', 'max:80',
                 'regex:/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/D'],
+        ];
+    }
+
+    /** @return array<string,list<string>> */
+    private function enrollmentRelayRules(): array
+    {
+        return [
+            'connection_relay_id' => [
+                ...ConnectionRelayRoutes::selectionRules()['connection_relay_id'],
+                'prohibited_if:ssh_route_mode,reverse',
+            ],
         ];
     }
 
@@ -67,7 +79,7 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
     {
         // ssh_host_key is the server's PUBLIC pin; no login secrets are flashed.
         return [
-            'connection_relay_id', 'ssh_host', 'ssh_port', 'ssh_username', 'ssh_host_key',
+            'ssh_host', 'ssh_port', 'ssh_username', 'ssh_host_key',
             'ssh_auth_method', 'ssh_trust_confirmed', 'ssh_route_mode',
             'ssh_reverse_port', 'ssh_tunnel_identity',
         ];
@@ -76,11 +88,11 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
     public function preflightRules(): array
     {
         return [
-            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
             'ssh_host' => ['required', 'string', 'max:253'],
             'ssh_port' => ['required', 'integer', 'min:1', 'max:65535'],
             'target_id' => ['nullable', 'string', 'max:64'],
             'ssh_route_mode' => ['nullable', Rule::in(['direct', 'reverse'])],
+            ...$this->enrollmentRelayRules(),
             'ssh_reverse_port' => ['nullable', 'integer', 'min:1024', 'max:65535'],
             'ssh_tunnel_identity' => ['nullable', 'string', 'max:80'],
         ];
@@ -248,6 +260,11 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
         }
     }
 
+    public function registrationRequiresPassword(array $input): bool
+    {
+        return ($input['ssh_route_mode'] ?? 'direct') === 'reverse';
+    }
+
     public function registrationStatus(): string
     {
         return __('SSH Target registered with encrypted credentials and an out-of-band host-key pin. Authentication has NOT yet been verified.');
@@ -362,9 +379,7 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
 
     private function verifiedConnectionMessage(Target $target, bool $initial): string
     {
-        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
-        $tunneled = $target->getAttribute('relay_record_id') !== null
-            || ($config instanceof SshTargetConfig && $config->route_mode === 'reverse');
+        $tunneled = $target->transportKind() !== 'direct';
 
         return $tunneled
             ? __('SSH end-host pinned key and login verified through the selected tunnel. The observed TCP peer is local; the remote Target IP was not independently observed. No command was run.')

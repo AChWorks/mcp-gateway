@@ -3,14 +3,13 @@
 namespace App\Application\Admin;
 
 use App\Domain\Access\GatewayPermission;
-use App\Domain\Access\GatewayRole;
 use App\Models\User;
 use Illuminate\Support\Facades\Gate;
 
 /** Shared navigation metadata; the existing Gates remain the authorization authority. */
 final class AdminNavigation
 {
-    /** @var list<array{id:string,label:string,items:list<array{destination:string,activePattern:string,label:string,icon:string,permission:?GatewayPermission}>}> */
+    /** @var list<array{id:string,label:string,items:list<array{destination:string,activePattern:string,label:string,icon:string,permission:GatewayPermission}>}> */
     private const SECTIONS = [
         ['id' => 'workspace', 'label' => 'Workspace', 'items' => [
             ['destination' => 'admin.dashboard', 'activePattern' => 'admin.dashboard', 'label' => 'Dashboard', 'icon' => 'dashboard', 'permission' => GatewayPermission::DashboardView],
@@ -23,13 +22,12 @@ final class AdminNavigation
             ['destination' => 'admin.oauth-clients.index', 'activePattern' => 'admin.oauth-clients.*', 'label' => 'AI clients', 'icon' => 'clients', 'permission' => GatewayPermission::SecurityManage],
         ]],
         ['id' => 'connectivity', 'label' => 'Connectivity', 'items' => [
-            ['destination' => 'admin.reverse-ssh.index', 'activePattern' => 'admin.reverse-ssh.index', 'label' => 'Reverse SSH', 'icon' => 'settings', 'permission' => null],
-            ['destination' => 'admin.connection-relays.index', 'activePattern' => 'admin.connection-relays.*', 'label' => 'Connection Relays', 'icon' => 'connection', 'permission' => null],
+            ['destination' => 'admin.reverse-ssh.index', 'activePattern' => 'admin.reverse-ssh.index', 'label' => 'Reverse SSH', 'icon' => 'settings', 'permission' => GatewayPermission::SecurityManage],
+            ['destination' => 'admin.connection-relays.index', 'activePattern' => 'admin.connection-relays.*', 'label' => 'Connection Relays', 'icon' => 'connection', 'permission' => GatewayPermission::SecurityManage],
         ]],
         ['id' => 'system', 'label' => 'System', 'items' => [
             ['destination' => 'admin.connection', 'activePattern' => 'admin.connection', 'label' => 'Connection information', 'icon' => 'connection', 'permission' => GatewayPermission::GatewayConnectionView],
-            // Operations has always been Owner-only, independently of menu permissions.
-            ['destination' => 'admin.operations.index', 'activePattern' => 'admin.operations.*', 'label' => 'Operational settings', 'icon' => 'settings', 'permission' => null],
+            ['destination' => 'admin.operations.index', 'activePattern' => 'admin.operations.*', 'label' => 'Operational settings', 'icon' => 'settings', 'permission' => GatewayPermission::SecurityManage],
         ]],
     ];
 
@@ -88,10 +86,8 @@ final class AdminNavigation
         return false;
     }
 
-    private function allowed(User $user, ?GatewayPermission $permission): bool
+    private function allowed(User $user, GatewayPermission $permission): bool
     {
-        return $permission === null
-            ? $user->getAttribute('role') === GatewayRole::Owner
-            : Gate::forUser($user)->allows($permission->value);
+        return Gate::forUser($user)->allows($permission->value);
     }
 }

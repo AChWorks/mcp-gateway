@@ -2,6 +2,7 @@
 
 namespace App\Domain\Targets;
 
+use App\Application\Targets\TargetConnectorRegistry;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Support\Database\MicrosecondImmutableDateTimeCast;
 use DomainException;
@@ -13,18 +14,6 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 final class Target extends Model
 {
     use HasUlids;
-
-    /**
-     * Supported built-in Target identities. Unimplemented connector types
-     * are rejected on creation and cannot be promoted into active routing.
-     *
-     * @var list<string>
-     */
-    public const KNOWN_CONNECTOR_TYPES = [
-        'wp_ai_bridge',
-        'ssh_direct',
-        'arvancloud',
-    ];
 
     public const AI_GUIDANCE_MAX_LENGTH = 800;
 
@@ -49,7 +38,8 @@ final class Target extends Model
         return [
             'connection_state' => TargetConnectionState::class,
             'operations_paused' => 'boolean',
-            'relay_binding_revision' => 'integer',
+            'transport_revision' => 'integer',
+            'reverse_listener_port' => 'integer',
             'last_tested_at' => MicrosecondImmutableDateTimeCast::class,
             'connected_at' => 'immutable_datetime',
             'last_success_at' => MicrosecondImmutableDateTimeCast::class,
@@ -63,7 +53,8 @@ final class Target extends Model
             // Connector/Target identity may not be silently rebound by normal model updates.
             if ($target->exists && ($target->isDirty('id') || $target->isDirty('target_id')
                 || $target->isDirty('connector_type') || $target->isDirty('relay_record_id')
-                || $target->isDirty('relay_binding_revision')
+                || $target->isDirty('transport_revision') || $target->isDirty('reverse_listener_port')
+                || $target->isDirty('reverse_tunnel_identity')
                 || $target->isDirty('created_by_user_id'))) {
                 throw new DomainException('Target identity and connector type are immutable; register a new Target.');
             }
@@ -80,10 +71,20 @@ final class Target extends Model
                 throw new DomainException('Target AI guidance must be bounded plain text.');
             }
 
-            if (! in_array((string) $target->getAttribute('connector_type'), self::KNOWN_CONNECTOR_TYPES, true)) {
+            if (! TargetConnectorRegistry::supports((string) $target->getAttribute('connector_type'))) {
                 throw new DomainException('Unsupported built-in Target connector type.');
             }
         });
+    }
+
+    public function usesReverseRoute(): bool
+    {
+        return $this->getAttribute('reverse_listener_port') !== null;
+    }
+
+    public function transportKind(): string
+    {
+        return $this->usesReverseRoute() ? 'reverse' : ($this->getAttribute('relay_record_id') !== null ? 'relay' : 'direct');
     }
 
     /** @return HasOne<SshTargetConfig, $this> */

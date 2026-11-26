@@ -125,16 +125,26 @@ $pdo = new PDO(sprintf("mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4",
     getenv("V3_RELEASE_TEST_DB_USERNAME"), getenv("V3_RELEASE_TEST_DB_PASSWORD"),
     [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 $count = $pdo->query("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()")->fetchColumn();
-$migrations = $pdo->query("SELECT COUNT(*) FROM migrations")->fetchColumn();
+$expectedMigrations = array_map(
+    static fn (string $path): string => basename($path, ".php"),
+    glob($root."/database/migrations/*_*.php") ?: []
+);
+sort($expectedMigrations, SORT_STRING);
+$migrations = $pdo->query("SELECT migration FROM migrations ORDER BY migration")->fetchAll(PDO::FETCH_COLUMN);
+if ($expectedMigrations === [] || $migrations !== $expectedMigrations) {
+    throw new RuntimeException(sprintf("Installed migrations differ from the packaged manifest: missing=%s unexpected=%s",
+        implode(",", array_diff($expectedMigrations, $migrations)),
+        implode(",", array_diff($migrations, $expectedMigrations))));
+}
 $ownerQuery = $pdo->prepare("SELECT COUNT(*) FROM users WHERE role = ? AND access_enabled = 1 AND ai_access_enabled = 1");
 $ownerQuery->execute(["owner"]);
 $owner = $ownerQuery->fetchColumn();
 $legacyQuery = $pdo->prepare("SHOW TABLES LIKE ?");
 $legacyQuery->execute(["sites"]);
 $historic = $legacyQuery->fetchAll();
-if ((int) $count !== 46 || (int) $migrations !== 2 || (int) $owner !== 1 || $historic !== []) {
-    throw new RuntimeException(sprintf("Invalid installed schema/users: tables=%d migrations=%d owners=%d",
-        $count, $migrations, $owner));
+if ((int) $count !== 46 || (int) $owner !== 1 || $historic !== []) {
+    throw new RuntimeException(sprintf("Invalid installed schema/users: tables=%d owners=%d", $count, $owner));
 }
-echo "PASS: packaged v3 fresh installation, 46 tables, 2 migrations, 1 Owner, 0600 private keys, locked reinstall and gateway:check.\n";
+printf("PASS: packaged v3 fresh installation, 46 tables, %d exact migrations, 1 Owner, 0600 private keys, locked reinstall and gateway:check.\n",
+    count($migrations));
 '

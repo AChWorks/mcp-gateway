@@ -54,7 +54,7 @@ final readonly class TargetBatchBinding
                     $common = [
                         $recordId, $id, (string) $target->connector_type,
                         (string) $target->getAttribute('relay_record_id'),
-                        (string) $target->getAttribute('relay_binding_revision'),
+                        (string) (int) ($target->getAttribute('transport_revision') ?? 0),
                     ];
                     $hashes[$id] = hash('sha256', implode("\0", [...$common, ...$connectorParts]));
                 }

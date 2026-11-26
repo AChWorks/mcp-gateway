@@ -9,11 +9,13 @@ use App\Application\Mcp\TargetFileInputMcpToolHandlers;
 use App\Application\Mcp\WordpressFileInputMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
 use App\Application\Operations\OperationalSettings;
+use App\Application\Targets\TargetTransportBinding;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetGroup;
+use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Mcp\GatewayMcpEndpoint;
 use App\Models\User;
@@ -39,6 +41,8 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
     private array $sessionTraffic = [];
 
     private bool $pauseDuringCatalog = false;
+
+    private ?string $rebindDuring = null;
 
     private ?string $chatFilePayload = null;
 
@@ -210,6 +214,47 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         self::assertTrue(Target::query()->where('target_id', 'alpha')->firstOrFail()->operations_paused);
         self::assertSame(['wp-ai-bridge/abilities-read'], array_column($this->downstream, 'ability'));
         self::assertSame('DELETE', $this->sessionTraffic[array_key_last($this->sessionTraffic)]['method']);
+    }
+
+    public function test_route_change_during_initialize_or_classification_retires_the_entire_session(): void
+    {
+        $owner = $this->user('owner');
+        $relay = ConnectionRelay::query()->create([
+            'relay_id' => 'fixture-route', 'display_name' => 'Fixture',
+            'control_host' => '192.0.2.2', 'control_port' => 22,
+            'control_user' => 'fixture',
+            'control_host_key' => 'ssh-ed25519 '.base64_encode(pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat('c', 32)),
+            'local_socks_port' => 46081,
+        ]);
+        DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => true]);
+
+        foreach (['initialize', 'catalog'] as $phase) {
+            $target = $this->pair($phase);
+            $this->sessionTraffic = [];
+            $this->downstream = [];
+            $this->rebindDuring = $phase;
+            $result = app(WordpressTargetMcpToolHandlers::class)->execute($owner, $phase, 'demo/read', []);
+            self::assertFalse($result['ok']);
+            self::assertSame('target_changed', $result['error']['code']);
+            self::assertSame($phase === 'initialize' ? ['initialize'] : ['initialize', 'tools/call'],
+                array_column($this->sessionTraffic, 'method'));
+            self::assertSame($phase === 'initialize' ? [] : ['wp-ai-bridge/abilities-read'],
+                array_column($this->downstream, 'ability'));
+            self::assertSame(1, $target->fresh()->transport_revision);
+            $this->assertDatabaseHas('target_credentials', ['target_record_id' => $target->getKey()]);
+            self::assertTrue(app(WordpressTargetMcpToolHandlers::class)->execute($owner, $phase, 'demo/read', [])['ok']);
+        }
+    }
+
+    private function rebindFixture(string $phase, string $host): void
+    {
+        if ($this->rebindDuring !== $phase) {
+            return;
+        }
+        $this->rebindDuring = null;
+        $target = Target::query()->where('target_id', explode('.', $host)[0])->firstOrFail();
+        $bindings = app(TargetTransportBinding::class);
+        self::assertTrue($bindings->change($target, $bindings->revision($target), 'fixture-route'));
     }
 
     public function test_execute_uses_one_legacy_session_for_classification_and_execution_then_closes_it(): void
@@ -417,6 +462,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
                     $executed[] = $ability;
                 }
                 if ($ability === 'wp-ai-bridge/abilities-read') {
+
                     return match ($failure) {
                         'server_failure' => Http::response(['error' => 'unavailable'], 503),
                         'network_failure' => Http::failedConnection(),
@@ -1262,6 +1308,8 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
         if ($path === '/wp-json/wp-ai-bridge/v1/mcp' && $request->method() === 'POST') {
             $payload = $request->data();
             if (($payload['method'] ?? null) === 'initialize') {
+                $this->rebindFixture('initialize', $host);
+
                 return Http::response([
                     'jsonrpc' => '2.0',
                     'id' => 1,
@@ -1277,6 +1325,7 @@ final class WordpressTargetMcpRuntimeTest extends TestCase
                     'transaction' => DB::transactionLevel(),
                 ];
                 if ($ability === 'wp-ai-bridge/abilities-read') {
+                    $this->rebindFixture('catalog', $host);
                     if ($this->pauseDuringCatalog) {
                         DB::table('targets')->where('target_id', explode('.', $host)[0])
                             ->update(['operations_paused' => true]);

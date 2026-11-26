@@ -6,9 +6,13 @@ use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\SshTargetRegistration;
 use App\Application\Targets\SshVerificationState;
+use App\Application\Targets\TargetInventory;
+use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
+use App\Infrastructure\Connectors\SshDirect\SshTargetIdentity;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Group;
@@ -119,6 +123,41 @@ final class SshVerificationStateTest extends TestCase
         self::assertNull($config->fresh()->verification_attempt_id);
         self::assertSame(1, DB::table('activity_events')->where('operation', 'ssh-login-verify')
             ->where('error_code', 'egress_denied')->count());
+    }
+
+    public function test_route_change_and_later_reverse_failure_do_not_report_old_peer_as_current(): void
+    {
+        [$target, $config, $credential] = $this->registered();
+        $state = app(SshVerificationState::class);
+        $attempt = $state->begin($target, $config, $credential);
+        $state->succeeded($target, $config, $credential, $attempt, '8.8.8.8');
+        $target->refresh();
+        $user = User::query()->create([
+            'name' => 'Fixture owner', 'email' => 'route-owner@example.test', 'password' => 'FixtureOwner!234',
+            'role' => 'owner', 'target_scope_mode' => 'all', 'access_enabled' => true,
+        ]);
+        $inventory = app(TargetInventory::class);
+        self::assertCount(1, $inventory->mcpPage($user, search: '8.8.8.8')['items']);
+        self::assertCount(1, $inventory->adminPage($user, search: '8.8.8.8')['items']);
+
+        DB::transaction(function () use ($target): void {
+            $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->sole();
+            app(TargetTransportBinding::class)->changeReverseLocked($locked, 62397, 'fixture-reverse');
+        });
+        $target->refresh();
+        self::assertSame('connected', $target->connection_state->value);
+        self::assertCount(0, $inventory->mcpPage($user, search: '8.8.8.8')['items']);
+        self::assertCount(0, $inventory->adminPage($user, search: '8.8.8.8')['items']);
+
+        $attempt = $state->begin($target, $config->fresh(), $credential);
+        $state->succeeded($target, $config->fresh(), $credential, $attempt, '127.0.0.1');
+        $target->refresh();
+        self::assertSame('reverse_route_verified', SshTargetIdentity::safeMetadata($target->load('sshConfig'))['ip_status']);
+        $attempt = $state->begin($target, $config->fresh(), $credential);
+        $state->failed($target, $config->fresh(), $credential, $attempt, 'reverse_listener_unavailable');
+        $target->refresh();
+        self::assertSame('connected', $target->connection_state->value);
+        self::assertSame('reverse_route_stale', SshTargetIdentity::safeMetadata($target->load('sshConfig'))['ip_status']);
     }
 
     /** @return array{Target, SshTargetConfig, TargetCredential} */

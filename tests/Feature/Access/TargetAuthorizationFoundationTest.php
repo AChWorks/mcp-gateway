@@ -42,7 +42,6 @@ final class TargetAuthorizationFoundationTest extends TestCase
                 static fn (string $value): bool => str_starts_with($value, 'agent.'))));
         }
 
-        self::assertSame(['wp_ai_bridge', 'ssh_direct', 'arvancloud'], Target::KNOWN_CONNECTOR_TYPES);
     }
 
     public function test_unrelated_user_edit_preserves_unrecognized_denials_without_enabling_them(): void
@@ -222,7 +221,37 @@ final class TargetAuthorizationFoundationTest extends TestCase
         );
     }
 
-    public function test_ssh_permission_must_have_selected_scope_even_if_global_denial_is_removed(): void
+    public function test_delegated_permission_migration_preserves_effective_denials(): void
+    {
+        $all = User::query()->create([...$this->attributes('administrator'), 'target_scope_mode' => 'all']);
+        $selected = User::query()->create($this->attributes('administrator'));
+        $target = $this->target('migration-ssh', 'ssh_direct');
+        $group = TargetGroup::query()->create(['name' => 'Migration restrictions']);
+        $scopes = [
+            'user_permission_denials' => ['user_id' => $all->getKey()],
+            'user_target_permission_denials' => ['user_id' => $selected->getKey(), 'target_record_id' => $target->getKey()],
+            'target_group_permission_denials' => ['target_group_id' => $group->getKey()],
+        ];
+        foreach ($scopes as $table => $identity) {
+            DB::table($table)->insert([...$identity, 'permission' => 'targets.update']);
+        }
+
+        $migration = require database_path('migrations/0001_01_01_000003_preserve_delegated_permission_boundaries.php');
+        $migration->up();
+        $migration->up();
+
+        foreach (['ssh.command.run', 'ssh.file.read', 'ssh.file.write'] as $permission) {
+            $this->assertDatabaseHas('user_permission_denials', ['user_id' => $all->getKey(), 'permission' => $permission]);
+            $this->assertDatabaseMissing('user_permission_denials', ['user_id' => $selected->getKey(), 'permission' => $permission]);
+        }
+        foreach ($scopes as $table => $identity) {
+            foreach (['targets.update', 'targets.configure', 'targets.operations.manage'] as $permission) {
+                self::assertSame(1, DB::table($table)->where([...$identity, 'permission' => $permission])->count());
+            }
+        }
+    }
+
+    public function test_explicit_ssh_permission_obeys_either_scope_and_direct_deny(): void
     {
         $operator = app(UserAccessManager::class)->create($this->attributes('operator'), []);
         $target = $this->target('ssh-lab', 'ssh_direct');
@@ -243,7 +272,13 @@ final class TargetAuthorizationFoundationTest extends TestCase
         self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $target));
 
         $operator->forceFill(['target_scope_mode' => 'all'])->save();
-        self::assertFalse($access->allows($operator->fresh(), GatewayPermission::SshCommandRun, $target));
+        $operator->refresh();
+        $other = $this->target('ssh-other', 'ssh_direct');
+        self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $other));
+        self::assertTrue($access->allowsTargetPermissions($operator, $other, [GatewayPermission::SshCommandRun])['ssh.command.run']);
+        DB::table('user_target_access')->where('user_id', $operator->id)->where('target_record_id', $target->getKey())->update(['allowed' => false]);
+        self::assertFalse($access->allows($operator, GatewayPermission::SshCommandRun, $target));
+        self::assertFalse($access->allowsTargetPermissions($operator, $target, [GatewayPermission::SshCommandRun])['ssh.command.run']);
     }
 
     /** @return array{name:string,email:string,password:string,role:string,target_scope_mode:string,access_enabled:bool} */

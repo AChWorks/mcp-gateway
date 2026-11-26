@@ -7,6 +7,7 @@ use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\OutboundTargetPolicy;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
+use Closure;
 
 final class WpAiBridgeDiscovery
 {
@@ -15,8 +16,11 @@ final class WpAiBridgeDiscovery
         private readonly SafeHttpClient $http,
     ) {}
 
-    public function discover(string $baseUrl, ?LocalSocks5Route $relay = null): BridgeDiscovery
+    /** @param Closure(): ?LocalSocks5Route $resolveRoute */
+    public function discover(string $baseUrl, Closure $resolveRoute): BridgeDiscovery
     {
+        // Local route rejection is not a downstream metadata observation.
+        $relay = $resolveRoute();
         try {
             $baseUrl = $this->targets->canonicalBaseUrl($baseUrl);
             $protectedUrl = $this->targets->appendPath($baseUrl, '/.well-known/oauth-protected-resource');
@@ -66,6 +70,7 @@ final class WpAiBridgeDiscovery
             throw new BridgeDiscoveryException('incompatible_metadata', 'WP AI Bridge issuer does not match the configured WordPress base URL.');
         }
 
+        $relay = $resolveRoute();
         try {
             $serverUrl = $this->targets->appendPath($issuer, '/.well-known/oauth-authorization-server');
             $server = $this->http->get($serverUrl, relay: $relay);

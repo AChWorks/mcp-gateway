@@ -10,9 +10,9 @@
         <p class="muted">{{ __('Local Target identity and non-secret connector information. Credentials are never displayed.') }}</p>
     </div>
     <div class="filter-actions">
-        @can('targets.update', $target)
+        @canany(['targets.update', 'targets.configure'], $target)
             <a class="button button-secondary" href="{{ route('admin.targets.edit', ['target' => $target->target_id]) }}">{{ __('Edit Target') }}</a>
-        @endcan
+        @endcanany
         <a href="{{ route('admin.targets.index') }}">{{ __('Back to Targets') }}</a>
     </div>
 </div>
@@ -26,6 +26,9 @@
         <span class="badge badge-{{ $recovery['tone'] === 'caution' ? 'warning' : 'neutral' }}">{{ $recovery['tone'] === 'caution' ? __('Action required') : __('Status') }}</span>
     </div>
     <p class="target-recovery-intro" role="status">{{ $recovery['description'] }}</p>
+    @if ($relayUnavailable ?? false)
+        <p class="field-help" role="status">{{ __('The selected Relay is disabled or unavailable. Target authorization remains unchanged. Restore the route or select another one.') }}</p>
+    @endif
     <dl class="target-recovery-grid">
         <div><dt>{{ __('Reachability evidence') }}</dt><dd>{{ $recovery['reachability'] }}</dd></div>
         <div><dt>{{ __('Authorization') }}</dt><dd>{{ $recovery['authorization'] }}</dd></div>
@@ -47,7 +50,7 @@
             ? __('New Gateway operations against this Target are blocked. Stored connection, credentials, grants and existing remote Jobs are preserved; running Jobs are not stopped.')
             : __('This Target can accept new authorized Gateway operations. Connection status is shown separately below.') }}
     </p>
-    @if (auth()->user()?->role === \App\Domain\Access\GatewayRole::Owner)
+    @can('targets.operations.manage', $target)
         <form method="post" action="{{ route('admin.targets.operations.update', ['target' => $target->target_id]) }}">
             @csrf
             <input type="hidden" name="state" value="{{ $target->operations_paused ? 'enabled' : 'paused' }}">
@@ -55,7 +58,7 @@
                 {{ $target->operations_paused ? __('Resume Target operations') : __('Pause Target operations') }}
             </button>
         </form>
-    @endif
+    @endcan
     <p class="field-help">{{ __('Pausing does not revoke connector authorization or delete stored credentials. Explicit administrative credential recovery and local inventory remain available.') }}</p>
     @if ($target->ai_guidance !== null && $target->ai_guidance !== '')
         <div class="target-subsection" aria-label="{{ __('AI guidance') }}">
@@ -121,11 +124,9 @@
             </div>
         </form>
     @else
-        <p class="muted">{{ __('Normal removal requires a completed connector disconnect and resolved credentials. If the remote service is permanently unavailable, the Owner may explicitly forget the Target locally instead.') }}</p>
-        @can('security.manage')
-            @if (auth()->user()?->role === \App\Domain\Access\GatewayRole::Owner)
+        <p class="muted">{{ __('Normal removal requires a completed connector disconnect and resolved credentials. If the remote service is permanently unavailable, you may explicitly forget the Target locally instead.') }}</p>
                 <div class="target-subsection" aria-labelledby="forget-target-title">
-                    <h3 id="forget-target-title">{{ __('Remove locally without remote revocation (Owner only)') }}</h3>
+                    <h3 id="forget-target-title">{{ __('Remove locally without remote revocation') }}</h3>
                     <p class="field-help" id="forget-target-help">{{ __('This permanently deletes the Target, encrypted credentials, pending OAuth/refresh/revocation state and Target-specific access assignments from this Gateway. No remote connection or revocation is attempted. Existing remote OAuth authorization or Unix-account access may remain valid, and remote in-flight operations cannot be undone. Revoke access separately at the remote service when possible.') }}</p>
                     <form method="post" action="{{ route('admin.targets.forget', ['target' => $target->target_id]) }}" class="form-stack" aria-describedby="forget-target-help">
                         @csrf
@@ -147,7 +148,7 @@
                         </label>
                         @error('confirm_remote_revocation_unknown')<p class="form-error" role="alert" id="forget_remote_revocation_unknown-error">{{ $message }}</p>@enderror
                         <div class="field">
-                            <label for="forget_owner_password">{{ __('Current Owner password') }}</label>
+                            <label for="forget_owner_password">{{ __('Your current Gateway password') }}</label>
                             <input id="forget_owner_password" name="current_password" data-admin-requires-intent type="password" required maxlength="255" autocomplete="current-password" @error('current_password') aria-invalid="true" aria-describedby="forget_owner_password-error" @enderror>
                             @error('current_password')<p class="form-error" role="alert" id="forget_owner_password-error">{{ $message }}</p>@enderror
                         </div>
@@ -156,8 +157,6 @@
                         </div>
                     </form>
                 </div>
-            @endif
-        @endcan
     @endif
     @error('target')
         <p class="form-error" role="alert">{{ $message }}</p>

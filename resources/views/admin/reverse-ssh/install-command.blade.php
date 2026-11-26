@@ -14,7 +14,9 @@
         <h1>{{ __('Pending Setup created') }}</h1>
         <p class="muted">{{ __('The following one-use command is displayed only in this response. Treat it as a short-lived credential. Do not paste it into tickets, logs or shared chat.') }}</p>
     </div>
+    @can('targets.view', $target)
     <a href="{{ route('admin.targets.show', ['target' => $target->target_id]) }}">{{ __('Open Target details') }}</a>
+    @endcan
 </div>
 <section class="panel panel-wide" aria-labelledby="reverse-install-command">
     <h2 id="reverse-install-command">{{ __('Run once on the Target server') }}</h2>

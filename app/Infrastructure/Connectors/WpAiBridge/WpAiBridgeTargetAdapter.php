@@ -55,20 +55,18 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
     {
         return [
             'base_url' => ['required', 'string', 'url:https', 'max:2048'],
-            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
         ];
     }
 
     public function safeOldInputFields(): array
     {
-        return ['base_url', 'connection_relay_id'];
+        return ['base_url'];
     }
 
     public function preflightRules(): array
     {
         return [
             'base_url' => ['required', 'string', 'url:https', 'max:2048'],
-            'connection_relay_id' => ['nullable', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
         ];
     }
 
@@ -117,6 +115,11 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
                 'target_id',
             );
         }
+    }
+
+    public function registrationRequiresPassword(array $input): bool
+    {
+        return false;
     }
 
     public function registrationStatus(): string
@@ -177,9 +180,11 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
     public function disconnect(Target $target): TargetConnectorResult
     {
         try {
-            $this->container->make(WpAiBridgeTargetConnectionService::class)->disconnect($target);
+            $revoked = $this->container->make(WpAiBridgeTargetConnectionService::class)->disconnect($target);
 
-            return new TargetConnectorResult(statusMessage: __('WordPress Target disconnected after confirmed credential revocation.'));
+            return new TargetConnectorResult(statusMessage: $revoked
+                ? __('WordPress Target disconnected after confirmed credential revocation.')
+                : __('WordPress Target disconnected locally. No stored credential was sent for remote revocation.'));
         } catch (WpAiBridgeTargetConnectionException $exception) {
             throw new TargetConnectorFailure($this->connectionFailureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }

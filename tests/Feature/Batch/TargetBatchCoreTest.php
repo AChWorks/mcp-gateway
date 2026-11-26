@@ -9,11 +9,17 @@ use App\Application\Batch\TargetBatchCoordinator;
 use App\Application\Batch\TargetBatchOperationProvider;
 use App\Application\Batch\TargetBatchWorker;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
+use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
+use App\Application\Targets\SshVerificationState;
 use App\Application\Targets\TargetConnectorRegistry;
+use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\OAuthAuthorizationStore;
@@ -524,6 +530,96 @@ final class TargetBatchCoreTest extends TestCase
         self::assertSame('blocked', $second['status']);
         self::assertSame([], $this->fake->effects);
         self::assertSame('failed', app(TargetBatchCoordinator::class)->status($user, $origin, $id)['status']);
+    }
+
+    public function test_relay_disabled_interval_preview_and_queued_work_cannot_cross_restored_authority(): void
+    {
+        $user = $this->owner();
+        $this->actingAs($user);
+        [$target, $other] = $this->targets(2);
+        $pin = $target->sshConfig->pinned_host_key;
+        $relay = ConnectionRelay::query()->create([
+            'relay_id' => 'batch-relay', 'display_name' => 'Fixture Relay',
+            'control_host' => 'relay.example.test', 'control_port' => 22,
+            'control_user' => 'deploy', 'control_host_key' => $pin,
+            'local_socks_port' => 46081,
+        ]);
+        $url = '/admin/settings/connection-relays/'.$relay->getKey();
+        $toggle = fn (int $revision, bool $enabled) => $this->post($url.'/toggle', [
+            'relay_revision' => $revision, 'enable' => $enabled ? '1' : '0', 'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasNoErrors();
+        $toggle(1, true);
+        $bindings = app(TargetTransportBinding::class);
+        self::assertTrue($bindings->change($target, $bindings->revision($target), 'batch-relay'));
+        $target->refresh();
+        $epoch = $target->transport_revision;
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
+        $cipher = $credential->encrypted_payload;
+        $origin = $this->web($user);
+        $core = app(TargetBatchCoordinator::class);
+        $worker = app(TargetBatchWorker::class);
+        $ids = [$target->target_id];
+        $arguments = ['command' => 'uptime', 'timeout_seconds' => 10];
+        $history = $this->create($user, $origin, [$target]);
+        self::assertSame('completed', $worker->workOnce()['status']);
+        $historicalRow = (array) DB::table('target_batch_items')->where('batch_id', $history)->sole();
+        $old = $this->create($user, $origin, [$target]);
+        $otherHash = app(TargetBatchBinding::class)->hash($other);
+
+        $toggle(2, false);
+        $disabled = $target->fresh();
+        self::assertSame($epoch + 1, $disabled->transport_revision);
+        try {
+            app(ConnectionRelayRoutes::class)->sshRouteForTarget($disabled);
+            self::fail('A disabled Relay must not dispatch.');
+        } catch (SshTargetConnectionException $e) {
+            self::assertSame('relay_unavailable', $e->reason);
+        }
+        $config = $disabled->sshConfig;
+        $verification = app(SshVerificationState::class);
+        $attempt = $verification->begin($disabled, $config, $credential);
+        $preview = $core->preview($user, $origin, 'ssh.command.run', $ids, $arguments);
+        $queued = $core->create($user, $origin, (string) Str::uuid(), 'ssh.command.run', $ids,
+            $arguments, $preview['preview_token']);
+        self::assertSame('queued', $queued['status']);
+        $this->put($url, [
+            'relay_id' => 'batch-relay', 'display_name' => 'Fixture Relay',
+            'control_host' => 'replacement.example.test', 'control_port' => 2222,
+            'control_user' => 'deploy', 'control_host_key' => $pin, 'local_socks_port' => 46082,
+            'relay_revision' => 3, 'current_password' => 'CorrectHorse!234',
+        ])->assertSessionHasNoErrors();
+        $toggle(4, true);
+        $fresh = $target->fresh();
+        self::assertSame($epoch + 2, $fresh->transport_revision);
+        self::assertSame(46082, app(ConnectionRelayRoutes::class)->sshRouteForTarget($fresh)?->loopbackPort);
+        $toggle(5, true);
+        self::assertSame(5, $relay->fresh()->lifecycle_revision);
+        self::assertSame($epoch + 2, $target->fresh()->transport_revision);
+        self::assertSame($cipher, $credential->fresh()->encrypted_payload);
+        self::assertSame($otherHash, app(TargetBatchBinding::class)->hash($other->fresh()));
+        $verification->failed($disabled, $config, $credential, $attempt, 'tcp_unreachable');
+        try {
+            $verification->succeeded($disabled, $config, $credential, $attempt, '127.0.0.1');
+            self::fail('A disabled-interval Verify cannot become current after Enable.');
+        } catch (SshTargetConnectionException $e) {
+            self::assertSame('target_changed', $e->reason);
+        }
+        self::assertNull($target->fresh()->last_tested_at);
+        try {
+            $core->create($user, $origin, (string) Str::uuid(), 'ssh.command.run', $ids, $arguments, $preview['preview_token']);
+            self::fail('An approval captured while disabled cannot authorize restored authority.');
+        } catch (InvalidArgumentException $e) {
+            self::assertStringContainsString('Preview again', $e->getMessage());
+        }
+        foreach ([$old, $queued['batch_id']] as $id) {
+            self::assertSame('blocked', $worker->workOnce()['status']);
+            self::assertSame('blocked', $core->status($user, $origin, $id)['items'][0]['status']);
+        }
+        self::assertSame([$target->target_id], $this->fake->effects);
+        $new = $this->create($user, $origin, [$fresh]);
+        self::assertSame('completed', $worker->workOnce()['status']);
+        self::assertSame('completed', $core->status($user, $origin, $new)['items'][0]['status']);
+        self::assertSame($historicalRow, (array) DB::table('target_batch_items')->where('batch_id', $history)->sole());
     }
 
     public function test_mid_dispatch_revocation_blocks_effect_and_an_uncertain_lost_response_is_never_replayed(): void

@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\Targets;
 
+use App\Application\Targets\ConnectionRelayAdministration;
+use App\Application\Targets\TargetTransportBinding;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
@@ -222,17 +224,47 @@ final class WpAiBridgeTargetRegistrationTest extends TestCase
 
         self::assertSame((string) $relay->getKey(), $first->getAttribute('relay_record_id'));
         self::assertSame((string) $relay->getKey(), $second->getAttribute('relay_record_id'));
-        self::assertSame(1, $first->relay_binding_revision);
-        self::assertSame(1, $second->relay_binding_revision);
+        self::assertSame(1, $first->transport_revision);
+        self::assertSame(1, $second->transport_revision);
         self::assertSame(46081, app(ConnectionRelayRoutes::class)->httpRouteForTarget($first)?->loopbackPort);
         self::assertSame(TargetConnectionState::Disconnected, $first->connection_state);
         self::assertSame('https://first.example.test',
             WpAiBridgeTargetConfig::query()->where('target_record_id', $first->getKey())->sole()->base_url);
         Http::assertSentCount(4);
 
-        DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => false]);
+        $bindings = app(TargetTransportBinding::class);
+        $routes = app(ConnectionRelayRoutes::class);
+        $oldRelaySnapshot = clone $first;
+        self::assertTrue($bindings->change($first, $bindings->revision($first), null));
+        $first->refresh();
+        $firstConfig = WpAiBridgeTargetConfig::query()->where('target_record_id', $first->getKey())->sole();
+        self::assertNotNull($firstConfig->metadata_checked_at);
+        self::assertNull($first->last_tested_at);
+        self::assertTrue((bool) $firstConfig->metadata_reachable);
+        self::assertNull($routes->httpRouteForTarget($first));
+
+        $oldDirectSnapshot = clone $first;
+        self::assertTrue($bindings->change($first, $bindings->revision($first), 'iran-wp'));
+        $first->refresh();
+        foreach ([$oldRelaySnapshot, $oldDirectSnapshot] as $stale) {
+            try {
+                $routes->httpRouteForTarget($stale);
+                self::fail('A stale Target snapshot selected a superseded route.');
+            } catch (OutboundRequestException $exception) {
+                self::assertTrue($exception->preDispatch);
+            }
+        }
+        self::assertSame(46081, $routes->httpRouteForTarget($first)?->loopbackPort);
+        Http::assertSentCount(4);
+
+        self::assertTrue(app(ConnectionRelayAdministration::class)->setEnabled($relay->fresh(), 1, false));
+        $secondConfig = WpAiBridgeTargetConfig::query()->where('target_record_id', $second->getKey())->sole();
+        self::assertNotNull($secondConfig->metadata_checked_at);
+        self::assertNull($second->fresh()->last_tested_at);
+        self::assertTrue((bool) $secondConfig->metadata_reachable);
+        self::assertNull($second->fresh()->last_error_code);
         try {
-            app(ConnectionRelayRoutes::class)->httpRouteForTarget($first);
+            app(ConnectionRelayRoutes::class)->httpRouteForTarget($first->fresh());
             self::fail('Disabled Relay must not automatically fall back to Direct.');
         } catch (OutboundRequestException $exception) {
             self::assertTrue($exception->preDispatch);

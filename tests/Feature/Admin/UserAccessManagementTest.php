@@ -105,7 +105,7 @@ final class UserAccessManagementTest extends TestCase
         self::assertFalse($access->allows($user, GatewayPermission::SshFileWrite, $target));
     }
 
-    public function test_user_creation_stays_ssh_default_denied_without_confirmation_or_selected_scope(): void
+    public function test_user_creation_requires_explicit_ssh_review_in_either_scope(): void
     {
         $owner = $this->owner();
         $base = [
@@ -126,9 +126,17 @@ final class UserAccessManagementTest extends TestCase
 
         $this->post('/admin/users', [
             ...$base, 'target_scope_mode' => TargetScopeMode::All->value,
-            'confirm_ssh_permission_changes' => '1',
-        ])->assertSessionHasErrors('target_scope_mode');
+        ])->assertSessionHasErrors('confirm_ssh_permission_changes');
         $this->assertDatabaseMissing('users', ['email' => $base['email']]);
+
+        $this->post('/admin/users', [
+            ...$base, 'email' => 'confirmed-all@example.test',
+            'target_scope_mode' => 'all', 'confirm_ssh_permission_changes' => '1',
+        ])->assertAdminRedirect()->assertSessionHasNoErrors();
+        $all = User::query()->where('email', 'confirmed-all@example.test')->sole();
+        self::assertSame(TargetScopeMode::All, $all->target_scope_mode);
+        $ssh = Target::query()->create(['target_id' => 'all-created-ssh', 'display_name' => 'All SSH', 'connector_type' => 'ssh_direct']);
+        self::assertTrue(app(AccessControl::class)->allows($all, GatewayPermission::SshCommandRun, $ssh));
 
         // Existing non-HTML/API callers keep the mandatory deny defaults even
         // when they do not send the newly introduced review marker.
@@ -147,7 +155,7 @@ final class UserAccessManagementTest extends TestCase
         }
     }
 
-    public function test_existing_ssh_grantee_can_switch_to_all_scope_while_ssh_is_revoked_automatically(): void
+    public function test_existing_ssh_grantee_can_switch_to_all_scope_only_with_explicit_review(): void
     {
         $owner = $this->owner();
         $user = app(UserAccessManager::class)->create([
@@ -166,7 +174,7 @@ final class UserAccessManagementTest extends TestCase
             'access_enabled' => true,
         ], [GatewayPermission::SshFileWrite->value], true);
 
-        $this->actingAs($owner)->put('/admin/users/'.$user->getKey(), [
+        $payload = [
             'name' => $user->name,
             'email' => $user->email,
             'role' => GatewayRole::Operator->value,
@@ -175,15 +183,20 @@ final class UserAccessManagementTest extends TestCase
             'ssh_permissions_reviewed' => '1',
             'denied_permissions' => [GatewayPermission::SshFileWrite->value],
             'current_password' => 'CorrectHorse!234',
-        ])->assertAdminRedirect()->assertSessionHasNoErrors()
-            ->assertSessionHas('status', 'User access updated. All Target scope disables all non-Owner SSH command and SFTP grants.');
+        ];
+        $this->actingAs($owner)->put('/admin/users/'.$user->getKey(), $payload)
+            ->assertSessionHasErrors('confirm_ssh_permission_changes');
+        self::assertSame(TargetScopeMode::Selected, $user->fresh()->target_scope_mode);
+        $this->put('/admin/users/'.$user->getKey(), [...$payload, 'confirm_ssh_permission_changes' => '1'])
+            ->assertAdminRedirect()->assertSessionHasNoErrors();
 
-        self::assertSame(TargetScopeMode::All, $user->fresh()->target_scope_mode);
-        foreach (GatewayPermission::sshCapabilities() as $permission) {
-            $this->assertDatabaseHas('user_permission_denials', [
-                'user_id' => $user->getKey(), 'permission' => $permission->value,
-            ]);
-        }
+        $user->refresh();
+        self::assertSame(TargetScopeMode::All, $user->target_scope_mode);
+        $ssh = Target::query()->create(['target_id' => 'expanded-ssh', 'display_name' => 'SSH', 'connector_type' => 'ssh_direct']);
+        $access = app(AccessControl::class);
+        self::assertTrue($access->allows($user, GatewayPermission::SshCommandRun, $ssh));
+        self::assertTrue($access->allows($user, GatewayPermission::SshFileRead, $ssh));
+        self::assertFalse($access->allows($user, GatewayPermission::SshFileWrite, $ssh));
     }
 
     public function test_role_promotion_cannot_enable_ssh_without_explicit_owner_review(): void
@@ -287,7 +300,7 @@ final class UserAccessManagementTest extends TestCase
         self::assertTrue($access->allows($operator, GatewayPermission::SshFileRead, $target));
     }
 
-    public function test_ssh_grant_requires_separate_explicit_owner_confirmation_and_selected_scope(): void
+    public function test_ssh_grant_requires_explicit_review_and_obeys_configured_scope(): void
     {
         $owner = $this->owner();
         $operator = app(UserAccessManager::class)->create([
@@ -356,21 +369,15 @@ final class UserAccessManagementTest extends TestCase
         self::assertTrue($access->allows($operator, GatewayPermission::SshFileRead, $ssh));
         self::assertFalse($access->allows($operator, GatewayPermission::SshFileWrite, $ssh));
 
-        // Broadening to all-target scope must not preserve shell privileges.
+        // An older form cannot silently broaden an existing SSH grant.
         $this->put('/admin/users/'.$operator->id, [
             ...$payload,
             'target_scope_mode' => 'all',
             'confirm_ssh_permission_changes' => '1',
-        ])->assertAdminRedirect();
-        self::assertFalse($access->allows($operator->refresh(), GatewayPermission::SshCommandRun, $ssh));
-        $this->assertDatabaseHas('user_permission_denials', [
-            'user_id' => $operator->id,
-            'permission' => GatewayPermission::SshCommandRun->value,
-        ]);
-        $this->assertDatabaseHas('user_permission_denials', [
-            'user_id' => $operator->id,
-            'permission' => GatewayPermission::SshFileRead->value,
-        ]);
+        ])->assertSessionHasErrors('confirm_ssh_permission_changes');
+        self::assertSame(TargetScopeMode::Selected, $operator->refresh()->target_scope_mode);
+        self::assertTrue($access->allows($operator, GatewayPermission::SshCommandRun, $ssh));
+        self::assertFalse($access->allows($operator, GatewayPermission::SshFileWrite, $ssh));
     }
 
     public function test_non_owner_cannot_manage_users(): void

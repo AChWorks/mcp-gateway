@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AdministratorPasswordConfirmation;
-use App\Application\Admin\ArvanApiTargetFormCopy;
+use App\Application\Admin\TargetConnectorAdmin;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorRegistry;
@@ -24,12 +24,9 @@ final class TargetConfigurationController extends Controller
         Target $target,
         TargetConnectorRegistry $connectors,
         AdministratorPasswordConfirmation $confirmation,
+        TargetConnectorAdmin $connectorAdmin,
     ): RedirectResponse {
-        // Updating the remote endpoint, trust binding or login secret is more
-        // privileged than changing a display label. Never offer this route to
-        // ordinary users with only targets.update permission.
-        Gate::authorize(GatewayPermission::TargetsUpdate->value, $target);
-        Gate::authorize(GatewayPermission::SecurityManage->value);
+        Gate::authorize(GatewayPermission::TargetsConfigure->value, $target);
 
         // Historical, Owner-paused connector types remain viewable but do
         // not acquire an executable configuration endpoint by accident.
@@ -37,10 +34,11 @@ final class TargetConfigurationController extends Controller
         abort_unless($adapter instanceof TargetConnectorAdapter, 404);
 
         try {
+            $definition = $connectorAdmin->forType($adapter->type())?->definition();
             $validated = $request->validate(
                 $adapter->configurationRules($target),
-                $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::messages() : [],
-                $adapter->type() === 'arvancloud' ? ArvanApiTargetFormCopy::attributes() : [],
+                $definition->validationMessages ?? [],
+                $definition->validationAttributes ?? [],
             );
             $confirmation->confirm($request);
             $result = $adapter->updateConfiguration($target, $validated);

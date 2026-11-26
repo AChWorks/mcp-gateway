@@ -192,11 +192,13 @@ final class UserAccessFormStateTest extends TestCase
             'denied_permissions' => [GatewayPermission::TargetsView->value, ...$ssh],
         ])->assertSessionHasNoErrors()->assertAdminRedirect($url);
         self::assertSame('viewer', $user->fresh()->role->value);
-        // The role itself blocks SSH; explicit active Deny storage is
-        // normalized to the new ceiling without granting any capability.
-        self::assertSame([GatewayPermission::TargetsView->value], $this->storedDenials($user));
+        // Role-ineligible restrictions remain dormant instead of silently
+        // disappearing when a later role promotion makes them applicable.
+        $expected = [GatewayPermission::TargetsView->value, ...$ssh];
+        sort($expected);
+        self::assertSame($expected, $this->storedDenials($user));
         $saved = $this->get($url)->assertOk();
-        self::assertSame([GatewayPermission::TargetsView->value], $this->checkedDenials($saved));
+        self::assertSame($expected, $this->checkedDenials($saved));
         self::assertSame(0, $this->document($saved)->query('//*[@data-user-save-failed]')->length);
     }
 

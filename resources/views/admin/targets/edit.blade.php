@@ -13,6 +13,7 @@
     <a href="{{ route('admin.targets.show', ['target' => $target->target_id]) }}">{{ __('Back to Target') }}</a>
 </div>
 
+@can('targets.update', $target)
 <section class="panel panel-wide target-enrollment" aria-label="{{ __('Target identity') }}">
     <h2>{{ __('Display and identity') }}</h2>
     <form method="post" action="{{ route('admin.targets.update', ['target' => $target->target_id]) }}" class="form-stack">
@@ -44,18 +45,20 @@
         </div>
     </form>
 </section>
+@endcan
 
-@can('security.manage')
-@if(auth()->user()?->getRawOriginal('role') === 'owner' && in_array($target->connector_type, ['ssh_direct','wp_ai_bridge'], true))
+@can('targets.configure', $target)
+@if($routeRevision !== null)
 <section class="panel panel-wide target-enrollment" aria-labelledby="target-route-heading">
     <h2 id="target-route-heading">{{ __('Network routing') }}</h2>
-    <p class="field-help">{{ __('This route is shared by the Target’s SSH/SFTP or WordPress/OAuth/MCP operations. A change fences retained SSH Jobs and requires reconnection. Switch only after finishing pending authentication, revocation and remote operations.') }}</p>
+    <p class="field-help">{{ __('The selected route is only a network path. Changing it preserves Target credentials and authorization, clears current route verification, and fences previously admitted network work.') }}</p>
     <form class="form-stack" method="post" action="{{ route('admin.targets.relay-route.update', ['target' => $target->target_id]) }}">
         @csrf
         @method('PUT')
         <input type="hidden" name="route_revision" value="{{ $routeRevision }}">
         @include('admin.targets.partials.connection-relay-selector', [
             'selectId' => 'target-edit-connection-relay',
+            'reverseSelected' => $target->usesReverseRoute(),
             'initialRelayId' => old('connection_relay_id', $selectedRelay?->relay_id),
             'blockedRelay' => $selectedRelay !== null && ! $connectionRelays->contains(
                 fn($relay) => $relay->getKey() === $selectedRelay->getKey(),
@@ -63,23 +66,23 @@
         ])
         @error('route_revision')<p class="field-error" role="alert" id="route-revision-error">{{ $message }}</p>@enderror
         <div class="field">
-            <label for="target-edit-route-password">{{ __('Current Owner password') }}</label>
+            <label for="target-edit-route-password">{{ __('Your current Gateway password') }}</label>
             <input id="target-edit-route-password" type="password" name="current_password" maxlength="255"
                 data-admin-requires-intent autocomplete="current-password" required>
         </div>
-        <button class="button button-primary" type="submit">{{ __('Save connection route and require re-verification') }}</button>
+        <button class="button button-primary" type="submit">{{ __('Save connection route') }}</button>
     </form>
 </section>
 @endif
 @endcan
 
-@can('security.manage')
+@can('targets.configure', $target)
 @if (! empty($configurationRevision))
     <details id="target-connection-settings" class="panel panel-wide target-enrollment admin-collapsible-panel"
         @if (session('target_configuration_failed') || ($errors->any() && old('configuration_revision') !== null)
             || ($target->connector_type === 'arvancloud' && request()->query('section') === 'api-connection')) open @endif>
         <summary><h2 class="admin-disclosure-heading">{{ __('Advanced connector connection settings') }}</h2></summary>
-        <p class="field-help">{{ __('Only Owners can rotate connector endpoints and encrypted credentials. Changes are audited and require the current Owner password. Existing Target access permissions remain unchanged.') }}</p>
+        <p class="field-help">{{ __('Authorized Target configuration editors can rotate connector endpoints and encrypted credentials. Changes are audited and require your current Gateway password. Existing Target access permissions remain unchanged.') }}</p>
 
         @if ($connectorUi?->configurationView !== null)
             @include($connectorUi->configurationView)

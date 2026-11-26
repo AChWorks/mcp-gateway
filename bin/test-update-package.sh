@@ -83,7 +83,7 @@ EOF_ENV
     ]);
     App\Models\User::query()->create([
       "name"=>"Gateway QA Operator","email"=>"gateway-qa-operator@example.test",
-      "password"=>"CorrectHorse!234","role"=>"operator","access_enabled"=>true
+      "password"=>"CorrectHorse!234","role"=>"operator","access_enabled"=>true,"target_scope_mode"=>"all"
     ]);
     App\Models\User::query()->create([
       "name"=>"Gateway QA Disabled","email"=>"gateway-qa-disabled@example.test",
@@ -128,10 +128,19 @@ $target = App\Domain\Targets\Target::query()->where('target_id', 'qa330-ssh')->f
 $group = App\Domain\Targets\TargetGroup::query()->where('name', 'v3 preserved group')->firstOrFail();
 $cred = App\Domain\Targets\TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
 $owner = $db::table('users')->where('email', 'gateway-qa-owner@example.test')->first();
+$operator = App\Models\User::query()->where('email', 'gateway-qa-operator@example.test')->firstOrFail();
+$access = app(App\Application\Access\AccessControl::class);
+$sshAllowed = $access->allowsTargetPermissions($operator, $target, App\Domain\Access\GatewayPermission::sshCapabilities());
+$expectedMigrations = array_keys(app('migrator')->getMigrationFiles(database_path('migrations')));
+$installedMigrations = $db::table('migrations')->orderBy('migration')->pluck('migration')->all();
+if ($expectedMigrations === [] || $expectedMigrations !== $installedMigrations) {
+    throw new RuntimeException('Installed migration identities do not match this runtime.');
+}
+
 if ($owner === null) { throw new RuntimeException('Owner was lost'); }
 $data = [
  'owner' => [$owner->name, $owner->role, $owner->access_enabled],
- 'operator' => $db::table('users')->where('email', 'gateway-qa-operator@example.test')->value('role'),
+ 'operator' => [$operator->getRawOriginal('role'), $operator->getRawOriginal('target_scope_mode'), $sshAllowed],
  'target' => [$target->target_id, $target->connector_type, $target->display_name],
  'group' => [$group->name, $group->targets()->count(), $group->users()->count()],
  'credential' => Illuminate\Support\Facades\Crypt::decryptString($cred->encrypted_payload),
@@ -140,13 +149,12 @@ $data = [
  'oauth_authorization' => $db::table('oauth_authorizations')->where('client_id', 'qa-client')
    ->where('user_id', $owner->id)->count(),
  'oauth_profile' => $db::table('oauth_client_profiles')->where('profile_key', 'chatgpt')->value('generation'),
- 'migration_ledger' => $db::table('migrations')->orderBy('migration')->pluck('migration')->all(),
 ];
 if ($data['credential'] !== 'qa-stable-secret' || $data['deny'] !== 1 ||
     $data['oauth_authorization'] !== 1 || $data['group'][1] !== 1 ||
     $data['group'][2] !== 1 || $data['oauth_profile'] !== 1 ||
-    count($data['migration_ledger']) !== 2) {
- throw new RuntimeException('Incomplete baseline fixture: '.json_encode($data));
+    in_array(true, $sshAllowed, true)) {
+ throw new RuntimeException('Persistent fixture data or effective access is incorrect.');
 }
 echo hash('sha256', json_encode($data, JSON_THROW_ON_ERROR));
 PHP

@@ -3,7 +3,7 @@
 namespace Tests\Feature\Targets;
 
 use App\Application\Targets\ConnectionRelayAdministration;
-use App\Application\Targets\ConnectionRelayTargetBinding;
+use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use Illuminate\Support\Facades\Artisan;
@@ -71,7 +71,7 @@ final class ConnectionRelayConcurrencyTest extends TestCase
         $this->withBlockedBinding(false);
         $target = $this->target->fresh();
         self::assertNull($target->getAttribute('relay_record_id'));
-        self::assertSame(0, $target->relay_binding_revision);
+        self::assertSame(0, $target->transport_revision);
         self::assertFalse($this->relay->fresh()->enabled);
         self::assertSame(2, $this->relay->fresh()->lifecycle_revision);
     }
@@ -81,12 +81,12 @@ final class ConnectionRelayConcurrencyTest extends TestCase
         $this->withBlockedBinding(true);
         $target = $this->target->fresh();
         self::assertSame((string) $this->relay->getKey(), (string) $target->getAttribute('relay_record_id'));
-        self::assertSame(1, $target->relay_binding_revision);
-        self::assertTrue(app(ConnectionRelayAdministration::class)->disable($this->relay, 1));
+        self::assertSame(1, $target->transport_revision);
+        self::assertTrue(app(ConnectionRelayAdministration::class)->setEnabled($this->relay, 1, false));
         $target = $this->target->fresh();
-        self::assertSame('error', $target->connection_state->value);
-        self::assertSame('relay_disabled', $target->last_error_code);
-        self::assertSame(2, $target->relay_binding_revision);
+        self::assertSame('disconnected', $target->connection_state->value);
+        self::assertNull($target->last_error_code);
+        self::assertSame(2, $target->transport_revision);
     }
 
     private function withBlockedBinding(bool $allowBinding): void
@@ -115,7 +115,7 @@ final class ConnectionRelayConcurrencyTest extends TestCase
         $pdo = new PDO($dsn, (string) $config['username'], (string) ($config['password'] ?? ''), [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_TIMEOUT => 5,
         ]);
-        $revision = app(ConnectionRelayTargetBinding::class)->revision($this->target);
+        $revision = app(TargetTransportBinding::class)->revision($this->target);
         $worker = new Process(
             [PHP_BINARY, base_path('tests/Support/relay_concurrent_binding.php'),
                 'relay-race-target', $revision, $marker],
