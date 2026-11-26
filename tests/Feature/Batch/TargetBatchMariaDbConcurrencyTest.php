@@ -2,8 +2,11 @@
 
 namespace Tests\Feature\Batch;
 
+use App\Application\Access\AccessControl;
+use App\Application\Batch\BatchAttemptAdmission;
 use App\Application\Batch\BatchProviderResolver;
 use App\Application\Batch\DeferredBatchAuthority;
+use App\Application\Batch\TargetBatchBinding;
 use App\Application\Batch\TargetBatchCoordinator;
 use App\Application\Batch\TargetBatchOperationProvider;
 use App\Application\Batch\TargetBatchWorker;
@@ -131,6 +134,65 @@ final class TargetBatchMariaDbConcurrencyTest extends TestCase
         config()->set('batch.max_parallelism', 6);
         config()->set('batch.global_active', 6);
         config()->set('batch.user_active', 6);
+    }
+
+    public function test_final_admission_observes_revocation_committed_by_independent_connection(): void
+    {
+        // Exercise the normal MariaDB default; the admission transaction
+        // must not change the connection's session isolation afterwards.
+        DB::statement('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        $user = User::query()->create([
+            'name' => 'Snapshot User', 'email' => 'snapshot@example.test',
+            'password' => 'StrongPassword!234', 'role' => 'owner',
+            'target_scope_mode' => 'all', 'access_enabled' => true,
+        ]);
+        $pin = 'ssh-ed25519 '.base64_encode(pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat('x', 32));
+        $target = app(SshTargetRegistration::class)->register(
+            'snapshot-test', 'Snapshot Test', 'snapshot.example.test', 22, 'worker',
+            $pin, 'password', 'fixture', null,
+        );
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $request = Request::create('/admin/target-batches', 'POST');
+        $request->setUserResolver(static fn (): User => $user);
+        $origin = app(DeferredBatchAuthority::class)->captureWeb($user, $request);
+        $core = app(TargetBatchCoordinator::class);
+        $args = ['command' => 'fixture-read', 'timeout_seconds' => 10];
+        $preview = $core->preview($user, $origin, 'ssh.command.run', [$target->target_id], $args);
+        $id = $core->create($user, $origin, (string) Str::uuid(), 'ssh.command.run',
+            [$target->target_id], $args, $preview['preview_token'])['batch_id'];
+        $attempt = (string) Str::uuid();
+        DB::table('target_batch_items')->where('batch_id', $id)->update([
+            'status' => 'dispatching', 'dispatch_attempt_id' => $attempt,
+            'effect_admitted' => false, 'lease_expires_at' => now()->addMinute(),
+        ]);
+        $gate = new BatchAttemptAdmission(
+            DB::table('target_batches')->where('id', $id)->sole(),
+            DB::table('target_batch_items')->where('batch_id', $id)->sole(),
+            $attempt, new RaceTestBatchProvider, app(DeferredBatchAuthority::class),
+            app(TargetBatchBinding::class), app(AccessControl::class),
+        );
+        config()->set('database.connections.batch_revoker', config('database.connections.'.DB::getDefaultConnection()));
+        $denied = false;
+        try {
+            $gate->admit(function () use ($gate, $user): void {
+                // Native verification happens after the initial policy read.
+                // A separate committed connection retires the actor here.
+                DB::connection('batch_revoker')->table('users')->where('id', $user->getKey())
+                    ->update(['access_enabled' => false]);
+                if (! $gate->allows()) {
+                    throw new RuntimeException('authorization_revoked');
+                }
+            });
+        } catch (RuntimeException $exception) {
+            $denied = $exception->getMessage() === 'authorization_revoked';
+        } finally {
+            DB::purge('batch_revoker');
+        }
+        self::assertFalse((bool) User::query()->findOrFail($user->getKey())->access_enabled);
+        self::assertTrue($denied, 'Final verification must observe the independently committed revocation.');
+        self::assertSame('authorization_revoked', $gate->denial());
+        self::assertFalse((bool) DB::table('target_batch_items')->where('batch_id', $id)->value('effect_admitted'));
+        self::assertSame('REPEATABLE-READ', DB::selectOne('SELECT @@tx_isolation AS isolation')->isolation);
     }
 
     public static function reconciliationCases(): array

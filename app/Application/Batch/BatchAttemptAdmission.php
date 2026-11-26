@@ -44,7 +44,15 @@ final class BatchAttemptAdmission
      */
     public function admit(Closure $verifyConnector): bool
     {
-        return DB::transaction(function () use ($verifyConnector): bool {
+        $connection = DB::connection();
+        if (in_array($connection->getDriverName(), ['mysql', 'mariadb'], true)) {
+            // The first policy read must not anchor a repeatable-read
+            // snapshot that hides revocation during the native verifier.
+            // Scope this to the next transaction, never the whole session.
+            $connection->statement('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        }
+
+        return $connection->transaction(function () use ($verifyConnector): bool {
             $batch = DB::table('target_batches')->where('id', $this->batch->id)->lockForUpdate()->first();
             $item = DB::table('target_batch_items')->where('id', $this->item->id)->lockForUpdate()->first();
             $this->denial = $this->reason($batch, $item);
@@ -86,7 +94,7 @@ final class BatchAttemptAdmission
             }
 
             return true;
-        }, 3);
+        }); // No automatic retry under a different isolation level.
     }
 
     /** @phpstan-impure Reads the current time on every invocation. */
