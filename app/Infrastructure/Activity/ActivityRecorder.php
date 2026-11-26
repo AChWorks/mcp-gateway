@@ -97,6 +97,7 @@ final class ActivityRecorder
         string $outcome,
         ?Target $target = null,
         ?string $errorCode = null,
+        ?ActivityAttribution $attribution = null,
     ): void {
         $this->persist(...$this->normalized(
             $correlationId,
@@ -104,7 +105,7 @@ final class ActivityRecorder
             $outcome,
             $target,
             $errorCode,
-        ));
+        ), attribution: $attribution);
     }
 
     /**

@@ -3,7 +3,7 @@
 namespace App\Infrastructure\Activity;
 
 /**
- * Immutable, server-owned attribution for deferred work with no HTTP request.
+ * Immutable, server-owned attribution for deferred work and explicit control effects.
  * Never carries an OAuth bearer/refresh token or raw credential.
  */
 final readonly class ActivityAttribution
@@ -14,6 +14,12 @@ final readonly class ActivityAttribution
         public ?string $clientHash,
         public ?string $clientProfileKey,
     ) {}
+
+    /** Human control of a specific client grant, not an MCP actor. */
+    public static function humanClientControl(int $actorId, string $clientId, string $profileKey): self
+    {
+        return new self('administrator', (string) $actorId, hash('sha256', $clientId), $profileKey);
+    }
 
     public static function fromBatch(object $batch): self
     {
