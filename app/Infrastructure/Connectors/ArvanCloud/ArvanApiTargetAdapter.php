@@ -161,7 +161,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
             'base_url' => $config->base_url,
             'spec_url' => $config->spec_url,
             'probe_path' => $config->probe_path,
-        ], $credential?->materialFingerprint());
+        ], $credential?->authorityFingerprint());
     }
 
     public function updateConfiguration(Target $target, array $input): TargetConnectorResult
@@ -191,7 +191,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                 if ($newKey !== '') {
                     $sealed = $this->validatedSeal($locked, $config, $newKey);
                     if ($credential instanceof TargetCredential) {
-                        $credential->forceFill(['encrypted_payload' => $sealed])->save();
+                        $credential->supersedeAuthority($sealed);
                     } else {
                         TargetCredential::query()->create([
                             'target_record_id' => $locked->getKey(),

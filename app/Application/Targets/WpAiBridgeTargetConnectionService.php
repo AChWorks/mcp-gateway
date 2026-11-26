@@ -1048,6 +1048,10 @@ final readonly class WpAiBridgeTargetConnectionService
                 ];
             } else {
                 $intentId = (string) Str::ulid();
+                // Local disconnect intent supersedes ordinary new-work
+                // authority even if revocation later needs reconciliation.
+                // Material generation stays intact for exact intent recovery.
+                $credential->supersedeAuthority();
                 DB::table('wp_ai_bridge_revocation_intents')->insert([
                     'id' => $intentId,
                     'target_record_id' => $locked->getKey(),

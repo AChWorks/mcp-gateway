@@ -196,7 +196,13 @@ final readonly class SshTargetReconfiguration
                 }
 
                 if ($credential instanceof TargetCredential) {
-                    $credential->forceFill(['encrypted_payload' => $encrypted])->save();
+                    if ($replacement !== null) {
+                        $credential->supersedeAuthority($encrypted);
+                    } else {
+                        // Same verified account and host key: rebind the
+                        // envelope, not the grant. Peer revision is separate.
+                        $credential->forceFill(['encrypted_payload' => $encrypted])->save();
+                    }
                 } else {
                     TargetCredential::query()->create([
                         'target_record_id' => $locked->getKey(),
@@ -258,7 +264,7 @@ final readonly class SshTargetReconfiguration
             'binding_revision' => $config->binding_revision,
             // This form also edits the selected manual Reverse route.
             'route' => $this->transportBindings->revision($target),
-        ], $credential?->materialFingerprint());
+        ], $credential?->authorityFingerprint());
     }
 
     private function credential(Target $target, bool $lock = false): ?TargetCredential

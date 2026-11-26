@@ -157,7 +157,7 @@ final readonly class WpAiBridgeTargetReconfiguration
             // transition that changes edit eligibility must also be fenced.
             'route' => $this->transportBindings->revision($target),
             'origin_change_state' => $this->originChangeStateAllows($target),
-        ], $credential === null ? null : (string) $credential->getKey());
+        ], $credential?->authorityFingerprint());
     }
 
     private function originChangeStateAllows(Target $target): bool

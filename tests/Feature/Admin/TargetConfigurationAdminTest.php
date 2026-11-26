@@ -129,6 +129,16 @@ final class TargetConfigurationAdminTest extends TestCase
         $config = SshTargetConfig::query()->sole();
         $credential = TargetCredential::query()->sole();
         $revision = $this->editRevision('ssh-demo');
+        $authority = $credential->authorityFingerprint();
+        $material = $credential->materialFingerprint();
+        $vault = app(SshTargetVault::class);
+        $secret = $vault->open($target, $config, $credential);
+        $credential->forceFill(['encrypted_payload' => $vault->seal(
+            $target, $config, $secret['secret'], $secret['passphrase'],
+        )])->save();
+        self::assertSame($authority, $credential->authorityFingerprint());
+        self::assertNotSame($material, $credential->materialFingerprint());
+        self::assertSame($revision, $this->editRevision('ssh-demo'));
         $verification = app(SshVerificationState::class);
         $attempt = $verification->begin($target, $config, $credential);
         self::assertSame($revision, $this->editRevision('ssh-demo'));
@@ -138,6 +148,9 @@ final class TargetConfigurationAdminTest extends TestCase
             'ssh_password' => 'intentional-replacement',
         ]))->assertAdminRedirect('/admin/targets/ssh-demo')->assertSessionHasNoErrors();
         self::assertNotSame($revision, $this->editRevision('ssh-demo'));
+        self::assertSame($credential->getKey(), $credential->fresh()->getKey());
+        self::assertSame(1, $credential->fresh()->authority_revision);
+        self::assertNotSame($authority, $credential->fresh()->authorityFingerprint());
         $this->put('/admin/targets/ssh-demo/configuration', $this->sshUpdate($revision, [
             'ssh_password' => 'stale-replacement',
         ]))->assertSessionHasErrors('configuration_revision');

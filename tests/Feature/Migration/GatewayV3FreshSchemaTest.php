@@ -23,6 +23,7 @@ final class GatewayV3FreshSchemaTest extends TestCase
         foreach (['sites', 'site_credentials', 'site_groups', 'site_target_reservations'] as $retired) {
             self::assertFalse(Schema::hasTable($retired), 'v2 table still present: '.$retired);
         }
+        self::assertTrue(Schema::hasColumn('target_credentials', 'authority_revision'));
         self::assertTrue(Schema::hasColumn('targets', 'created_by_user_id'));
         self::assertTrue(Schema::hasColumn('users', 'self_created_target_access'));
         self::assertTrue(Schema::hasColumn('users', 'ai_access_enabled'));

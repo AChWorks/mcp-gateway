@@ -284,6 +284,9 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $service = app(WpAiBridgeTargetConnectionService::class);
         $this->pair($alpha);
         $baselineLevel = DB::transactionLevel();
+        $credential = $this->credential($alpha);
+        $authority = $credential->authorityFingerprint();
+        $material = $credential->materialFingerprint();
         $this->failRevocation = true;
 
         try {
@@ -297,6 +300,9 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame('revocation_failed', $alpha->last_error_code);
         self::assertSame(1, DB::table('wp_ai_bridge_revocation_intents')->count());
         self::assertSame(1, DB::table('target_credentials')->count());
+        self::assertSame(1, $credential->fresh()->authority_revision);
+        self::assertNotSame($authority, $credential->fresh()->authorityFingerprint());
+        self::assertSame($material, $credential->fresh()->materialFingerprint());
         $service->testConnection($alpha);
         self::assertSame('revocation_failed', $alpha->refresh()->last_error_code,
             'A successful metadata probe must not mask unresolved credential revocation.');
@@ -640,11 +646,16 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $this->pair($beta);
         $this->expire($alpha);
         $baseline = DB::transactionLevel();
+        $oldCredential = $this->credential($alpha);
+        $authority = $oldCredential->authorityFingerprint();
+        $material = $oldCredential->materialFingerprint();
 
         self::assertSame('alpha-rotated-access', $service->accessToken($alpha));
         self::assertSame('alpha-rotated-access', $service->accessToken($alpha));
         self::assertSame('beta-access', $service->accessToken($beta));
         self::assertSame(1, $this->refreshCalls);
+        self::assertSame($authority, $this->credential($alpha)->authorityFingerprint());
+        self::assertNotSame($material, $this->credential($alpha)->materialFingerprint());
         self::assertSame(2, (int) DB::table('wp_ai_bridge_credential_metadata')
             ->where('credential_id', $this->credential($alpha)->getKey())->value('generation'));
         self::assertSame(1, (int) DB::table('wp_ai_bridge_credential_metadata')

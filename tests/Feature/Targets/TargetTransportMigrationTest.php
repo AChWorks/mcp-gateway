@@ -169,6 +169,42 @@ final class TargetTransportMigrationTest extends TestCase
         self::assertTrue(Schema::hasColumn('targets', 'relay_binding_revision'));
     }
 
+    public function test_credential_authority_upgrade_preserves_material_and_pending_disconnect_evidence_on_restart(): void
+    {
+        $this->upgrade();
+        $credentials = [];
+        foreach (['connected', 'error'] as $state) {
+            $id = (string) Str::ulid();
+            $credential = (string) Str::ulid();
+            $cipher = Crypt::encryptString('retained-fixture-'.$state);
+            DB::table('targets')->insert([
+                'id' => $id, 'target_id' => 'wp-'.$state, 'display_name' => 'WP fixture',
+                'connector_type' => 'wp_ai_bridge', 'connection_state' => $state,
+            ]);
+            DB::table('target_credentials')->insert([
+                'id' => $credential, 'target_record_id' => $id, 'connector_type' => 'wp_ai_bridge',
+                'purpose' => 'oauth', 'encrypted_payload' => $cipher,
+            ]);
+            $credentials[$state] = ['id' => $credential, 'cipher' => $cipher];
+            if ($state === 'error') {
+                DB::table('wp_ai_bridge_revocation_intents')->insert([
+                    'id' => (string) Str::ulid(), 'target_record_id' => $id,
+                    'kind' => 'disconnect', 'created_at' => now(), 'updated_at' => now(),
+                ]);
+            }
+        }
+        $intent = (array) DB::table('wp_ai_bridge_revocation_intents')->sole();
+        $migration = require database_path('migrations/0001_01_01_000006_add_credential_authority_revision.php');
+        $migration->up();
+        $migration->up();
+        foreach ($credentials as $state => $expected) {
+            $row = DB::table('target_credentials')->where('id', $expected['id'])->sole();
+            self::assertSame($expected['cipher'], $row->encrypted_payload);
+            self::assertSame($state === 'error' ? 1 : 0, (int) $row->authority_revision);
+        }
+        self::assertSame($intent, (array) DB::table('wp_ai_bridge_revocation_intents')->sole());
+    }
+
     public function test_fixed_reverse_path_does_not_silently_fall_back_for_an_http_connector(): void
     {
         $this->upgrade();

@@ -516,6 +516,17 @@ final class ArvanApiConnectorTest extends TestCase
         [$target] = $this->fixture();
         $adapter = app(ArvanApiTargetAdapter::class);
         $revision = $adapter->configurationRevision($target);
+        $credential = TargetCredential::query()->sole();
+        $config = ArvanApiTargetConfig::query()->sole();
+        $vault = app(ArvanApiTargetVault::class);
+        $authority = $credential->authorityFingerprint();
+        $material = $credential->materialFingerprint();
+        $credential->forceFill(['encrypted_payload' => $vault->seal(
+            $target, $config, $vault->open($target, $config, $credential),
+        )])->save();
+        self::assertSame($authority, $credential->authorityFingerprint());
+        self::assertNotSame($material, $credential->materialFingerprint());
+        self::assertSame($revision, $adapter->configurationRevision($target));
         Http::fake(static fn () => Http::response(['ok' => true], 200));
         $adapter->test($target);
         self::assertSame('connected', $target->fresh()->getRawOriginal('connection_state'));
@@ -532,6 +543,8 @@ final class ArvanApiConnectorTest extends TestCase
             'api_key' => 'replacement-synthetic-key',
         ];
         $adapter->updateConfiguration($target, $payload);
+        self::assertSame(1, $credential->fresh()->authority_revision);
+        self::assertNotSame($authority, $credential->fresh()->authorityFingerprint());
         self::assertNotSame($revision, $adapter->configurationRevision($target->fresh()));
         try {
             $adapter->updateConfiguration($target, [...$payload, 'api_key' => 'stale-synthetic-key']);
