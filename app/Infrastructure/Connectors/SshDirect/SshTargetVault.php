@@ -31,12 +31,6 @@ final class SshTargetVault
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
     }
 
-    /** Exact, non-secret material snapshot for one in-flight operation. */
-    public static function materialFingerprint(TargetCredential $credential): string
-    {
-        return hash('sha256', (string) $credential->getKey()."\0".(string) $credential->encrypted_payload);
-    }
-
     /** @return array{secret:string,passphrase:?string} */
     public function open(Target $target, SshTargetConfig $config, TargetCredential $credential): array
     {

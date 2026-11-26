@@ -83,7 +83,7 @@ final readonly class SshJobCoordinator
         if (! $credential instanceof TargetCredential) {
             throw new SshTargetConnectionException('credential_unavailable');
         }
-        $material = SshTargetVault::materialFingerprint($credential);
+        $material = $credential->materialFingerprint();
         $original['original_user_id'] = $user->getKey();
         // HMAC avoids retaining a guessable hash of sensitive script contents.
         $digest = hash_hmac('sha256', $script, (string) config('app.key'));

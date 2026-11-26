@@ -16,7 +16,6 @@ use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
-use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -742,7 +741,7 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         [$user, $target] = $this->fixture();
         $config = SshTargetConfig::query()->sole();
         $oldCredential = TargetCredential::query()->sole();
-        $oldMaterial = SshTargetVault::materialFingerprint($oldCredential);
+        $oldMaterial = $oldCredential->materialFingerprint();
         $binding = SshTargetBinding::hash($target, $config);
         $service = app(SshTargetReconfiguration::class);
         $input = [
@@ -756,7 +755,7 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         // the native fixture; no network is permitted in this test.
         $target->fresh()->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
         self::assertSame($binding, SshTargetBinding::hash($target->fresh(), $config->fresh()));
-        $newMaterial = SshTargetVault::materialFingerprint($oldCredential->fresh());
+        $newMaterial = $oldCredential->fresh()->materialFingerprint();
         self::assertNotSame($oldMaterial, $newMaterial);
 
         $policy = new class implements SshDialAddressPolicy

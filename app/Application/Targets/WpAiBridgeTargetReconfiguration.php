@@ -25,6 +25,7 @@ final readonly class WpAiBridgeTargetReconfiguration
         private OutboundTargetPolicy $policy,
         private ActivityRecorder $activity,
         private ConnectionRelayRoutes $relays,
+        private TargetTransportBinding $transportBindings,
     ) {}
 
     public function revision(Target $target): string
@@ -32,7 +33,7 @@ final readonly class WpAiBridgeTargetReconfiguration
         $config = WpAiBridgeTargetConfig::query()
             ->where('target_record_id', $target->getKey())->firstOrFail();
 
-        return TargetConfigurationRevision::make($target, $config->getAttributes(), $this->credential($target));
+        return $this->configurationRevision($target, $config, $this->credential($target));
     }
 
     /** @param array<string,mixed> $input */
@@ -93,12 +94,11 @@ final readonly class WpAiBridgeTargetReconfiguration
                 if ($locked->connector_type !== 'wp_ai_bridge'
                     || ! hash_equals(
                         (string) $input['configuration_revision'],
-                        TargetConfigurationRevision::make($locked, $config->getAttributes(), $credential),
+                        $this->configurationRevision($locked, $config, $credential),
                     )) {
                     throw new TargetConnectorFailure(__('The WordPress Target changed during validation. Reload it.'), 'configuration_revision');
                 }
-                if ($locked->getAttribute('connection_state') !== TargetConnectionState::Disconnected
-                    && $locked->getAttribute('connection_state') !== TargetConnectionState::Error) {
+                if (! $this->originChangeStateAllows($locked)) {
                     throw new TargetConnectorFailure(__('Disconnect WordPress before changing its origin.'), 'base_url');
                 }
                 if ($credential instanceof TargetCredential || $this->hasPendingOauth($locked)) {
@@ -144,9 +144,30 @@ final readonly class WpAiBridgeTargetReconfiguration
         }
     }
 
+    private function configurationRevision(Target $target, WpAiBridgeTargetConfig $config, ?TargetCredential $credential): string
+    {
+        return TargetConfigurationRevision::make($target, [
+            'base_url' => $config->base_url,
+            'mcp_resource_url' => $config->mcp_resource_url,
+            'oauth_issuer_url' => $config->oauth_issuer_url,
+            'oauth_authorization_url' => $config->oauth_authorization_url,
+            'oauth_token_url' => $config->oauth_token_url,
+            'oauth_revocation_url' => $config->oauth_revocation_url,
+            // Origin discovery uses the selected network path. A lifecycle
+            // transition that changes edit eligibility must also be fenced.
+            'route' => $this->transportBindings->revision($target),
+            'origin_change_state' => $this->originChangeStateAllows($target),
+        ], $credential === null ? null : (string) $credential->getKey());
+    }
+
+    private function originChangeStateAllows(Target $target): bool
+    {
+        return in_array($target->getAttribute('connection_state'), [TargetConnectionState::Disconnected, TargetConnectionState::Error], true);
+    }
+
     private function canChangeOrigin(Target $target): bool
     {
-        return in_array($target->getAttribute('connection_state'), [TargetConnectionState::Disconnected, TargetConnectionState::Error], true)
+        return $this->originChangeStateAllows($target)
             && ! $this->credential($target) instanceof TargetCredential
             && ! $this->hasPendingOauth($target);
     }

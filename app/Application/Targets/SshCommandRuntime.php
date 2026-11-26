@@ -82,7 +82,7 @@ final readonly class SshCommandRuntime
             if (($expectedTargetBinding !== null
                 && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($fresh, $config)))
                 || ($expectedCredentialMaterial !== null
-                    && ! hash_equals($expectedCredentialMaterial, SshTargetVault::materialFingerprint($credential)))) {
+                    && ! hash_equals($expectedCredentialMaterial, $credential->materialFingerprint()))) {
                 throw new SshTargetConnectionException('target_changed');
             }
             try {

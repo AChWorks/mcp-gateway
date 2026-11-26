@@ -40,6 +40,15 @@ final class TargetCredential extends Model
         });
     }
 
+    /**
+     * Exact record/material snapshot for in-flight checks and credential editors.
+     * This is not a semantic grant identity; ordinary reseal/refresh may change it.
+     */
+    public function materialFingerprint(): string
+    {
+        return hash('sha256', (string) $this->getKey()."\0".(string) $this->encrypted_payload);
+    }
+
     /** @return BelongsTo<Target, $this> */
     public function target(): BelongsTo
     {

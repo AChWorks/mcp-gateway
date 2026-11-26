@@ -511,6 +511,40 @@ final class ArvanApiConnectorTest extends TestCase
         self::assertTrue((bool) $target->fresh()->operations_paused);
     }
 
+    public function test_configuration_revision_ignores_later_probe_and_separate_route_but_fences_key_changes(): void
+    {
+        [$target] = $this->fixture();
+        $adapter = app(ArvanApiTargetAdapter::class);
+        $revision = $adapter->configurationRevision($target);
+        Http::fake(static fn () => Http::response(['ok' => true], 200));
+        $adapter->test($target);
+        self::assertSame('connected', $target->fresh()->getRawOriginal('connection_state'));
+        self::assertSame($revision, $adapter->configurationRevision($target->fresh()));
+        // A local API configuration edit does not use the selected route.
+        // The separate route mutation fence is checked at dispatch.
+        DB::table('targets')->where('id', $target->getKey())->increment('transport_revision');
+        self::assertSame($revision, $adapter->configurationRevision($target->fresh()));
+        $payload = [
+            'configuration_revision' => $revision,
+            'api_base_url' => 'https://api.example.test/cdn/4.0',
+            'api_spec_url' => 'https://spec.example.test/openapi.yaml',
+            'api_probe_path' => '/domains',
+            'api_key' => 'replacement-synthetic-key',
+        ];
+        $adapter->updateConfiguration($target, $payload);
+        self::assertNotSame($revision, $adapter->configurationRevision($target->fresh()));
+        try {
+            $adapter->updateConfiguration($target, [...$payload, 'api_key' => 'stale-synthetic-key']);
+            self::fail('An old form cannot replace a newer credential.');
+        } catch (TargetConnectorFailure $exception) {
+            self::assertSame('configuration_revision', $exception->field);
+        }
+        self::assertSame('replacement-synthetic-key', app(ArvanApiTargetVault::class)->open(
+            $target->fresh(), ArvanApiTargetConfig::query()->sole(), TargetCredential::query()->sole(),
+        ));
+        Http::assertSentCount(1);
+    }
+
     public function test_arvan_configuration_errors_identify_correct_fields_and_probe_changes_clear_old_verification(): void
     {
         [$target] = $this->fixture();
