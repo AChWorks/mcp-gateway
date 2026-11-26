@@ -2,6 +2,9 @@
 
 namespace Tests\Feature\Mcp;
 
+use App\Application\Access\AccessControl;
+use App\Application\Targets\SshJobLaunchAdmission;
+use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Targets\TargetConnectionState;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
@@ -10,6 +13,7 @@ use App\Models\User;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\Group;
 use RuntimeException;
@@ -158,6 +162,75 @@ final class SshJobDispatchLeaseRaceTest extends TestCase
             }
             rmdir($directory);
         }
+    }
+
+    public function test_job_evidence_migration_preserves_unknown_history_and_final_gate(): void
+    {
+        $user = User::query()->create([
+            'name' => 'Job evidence fixture', 'email' => 'job-evidence@example.test',
+            'password' => 'fixture-only', 'role' => 'owner', 'target_scope_mode' => 'all', 'access_enabled' => true,
+        ]);
+        $pin = 'ssh-ed25519 '.base64_encode(pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat('J', 32));
+        $target = app(SshTargetRegistration::class)->register('job-evidence', 'Job evidence', 'fixture.example.test', 22,
+            'fixture-user', $pin, 'password', 'fixture-only', null);
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->sole();
+        $migration = require database_path('migrations/0001_01_01_000009_record_ssh_job_attempt_evidence.php');
+        $migration->down();
+        $id = (string) Str::ulid();
+        DB::table('ssh_command_jobs')->insert([
+            'id' => $id, 'target_record_id' => $target->getKey(), 'user_id' => $user->getKey(),
+            'original_user_id' => $user->getKey(), 'original_target_record_id' => $target->getKey(),
+            'client_identity_hash' => hash('sha256', 'fixture-client'),
+            'request_id' => (string) Str::uuid(), 'script_digest' => hash('sha256', 'fixture-script'),
+            'target_binding_hash' => SshTargetBinding::hash($target, $config),
+            'status' => 'launch_unknown', 'unit_mode' => 'user', 'runtime_seconds' => 16,
+            'admission_expires_at' => now()->addMinute(), 'expires_at' => now()->addHour(),
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $job = DB::table('ssh_command_jobs')->where('id', $id);
+        $before = (array) $job->sole();
+        Schema::table('ssh_command_jobs', static function ($table): void {
+            $table->char('original_peer_fingerprint', 64)->nullable();
+        });
+        $migration->up();
+        $migration->up();
+        $after = (array) $job->sole();
+        foreach (['original_peer_fingerprint', 'launch_admitted', 'launch_observation_ciphertext'] as $column) {
+            self::assertNull($after[$column]);
+            unset($after[$column]);
+        }
+        self::assertSame($before, $after);
+        self::assertTrue(Schema::hasIndex('ssh_command_jobs', 'ssh_jobs_history_scope'));
+        self::assertFalse(Schema::hasIndex('ssh_command_jobs', 'ssh_jobs_client_discovery'));
+
+        $gate = (new SshJobLaunchAdmission(app(AccessControl::class), $id, (int) $user->getKey(), (string) $target->getKey()))->stage('launch');
+        try {
+            $gate(static function (): void {}, 'command');
+            self::fail('An unknown pre-marker attempt cannot dispatch.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('job_attempt_retired', $exception->reason);
+        }
+        // Simulate a current new attempt for the admission gate itself.
+        $job->update(['launch_admitted' => false, 'admission_expires_at' => now()->addMinute()]);
+        self::assertTrue($gate(static function (): void {}, 'login'));
+        self::assertFalse((bool) $job->value('launch_admitted'));
+        try {
+            $gate(static function (): void {
+                Carbon::setTestNow(now()->addMinutes(2));
+            }, 'command');
+            self::fail('Expired lease must not admit a command after verification.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('dispatch_lease_expired', $exception->reason);
+            self::assertFalse((bool) $job->value('launch_admitted'));
+        } finally {
+            Carbon::setTestNow();
+        }
+        self::assertTrue($gate(static function (): void {}, 'command'));
+        self::assertTrue((bool) $job->value('launch_admitted'));
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Restore the pre-update database');
+        $migration->down();
     }
 
     private function waitUntil(callable $ready): void

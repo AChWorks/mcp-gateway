@@ -3,6 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
+use App\Application\Access\OperationAdmission;
 use App\Application\Files\VerifiedTransferSpool;
 use App\Application\Operations\OperationalSettings;
 use App\Domain\Access\GatewayPermission;
@@ -15,6 +16,10 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Models\User;
 use App\Support\CorrelationId;
+use App\Support\CurrentReadTransaction;
+use App\Support\OperationDiagnostics;
+use Closure;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -56,6 +61,7 @@ final readonly class SshJobCoordinator
         private SshFileRuntime $files,
         private ActivityRecorder $activity,
         private OperationalSettings $settings,
+        private OperationAdmission $operationAdmission,
     ) {}
 
     /** @return array<string,mixed> */
@@ -63,7 +69,7 @@ final readonly class SshJobCoordinator
         User $user, string $targetId, string $clientHash, string $requestId,
         string $script, int $runtimeSeconds = 60,
     ): array {
-        $target = $this->authorized($user, $targetId, true);
+        $target = $this->authorized($user, $targetId, false, checkPause: false, requireConnected: false);
         $policy = $this->settings->sshJobLimits();
         $scriptBytes = strlen($script);
         if (strlen($clientHash) !== 64 || ! ctype_xdigit($clientHash)
@@ -74,18 +80,8 @@ final readonly class SshJobCoordinator
             throw new SshTargetConnectionException('invalid_input');
         }
 
-        $original = $this->originalIdentity($target);
-        $binding = $original['target_binding_hash'];
-        // Freeze the grant and exact login material across all new launch
-        // phases, separately from the immutable retained Job identity.
-        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())
-            ->where('connector_type', 'ssh_direct')->where('purpose', SshTargetVault::PURPOSE)->first();
-        if (! $credential instanceof TargetCredential) {
-            throw new SshTargetConnectionException('credential_unavailable');
-        }
-        $credentialDispatch = $credential->dispatchFingerprint();
-        $original['original_user_id'] = $user->getKey();
-        // HMAC avoids retaining a guessable hash of sensitive script contents.
+        // Recover the exact already recorded intent before requiring a live
+        // route, file-write authority or the current launch policy.
         $digest = hash_hmac('sha256', $script, (string) config('app.key'));
         $identity = [
             'target_record_id' => $target->getKey(),
@@ -93,20 +89,38 @@ final readonly class SshJobCoordinator
             'client_identity_hash' => $clientHash,
             'request_id' => $requestId,
         ];
-        [$row, $created] = DB::transaction(function () use ($user, $identity, $original, $digest, $runtimeSeconds, $binding, $policy, $scriptBytes): array {
+        $existing = DB::table('ssh_command_jobs')->where($identity)->first();
+        if ($existing !== null) {
+            return $this->recoverStart($existing, $digest, $runtimeSeconds);
+        }
+        $target = $this->authorized($user, $targetId, true);
+        if ((string) $target->getKey() !== (string) $identity['target_record_id']) {
+            throw new SshTargetConnectionException('target_changed');
+        }
+        $original = $this->originalIdentity($target);
+        $binding = $original['target_binding_hash'];
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())
+            ->where('connector_type', 'ssh_direct')->where('purpose', SshTargetVault::PURPOSE)->first();
+        if (! $credential instanceof TargetCredential) {
+            throw new SshTargetConnectionException('credential_unavailable');
+        }
+        $credentialDispatch = $credential->dispatchFingerprint();
+        $original['original_user_id'] = $user->getKey();
+        [$row, $created] = CurrentReadTransaction::run(function () use ($user, $targetId, $identity, $original, $digest, $runtimeSeconds, $policy, $scriptBytes): array {
             // Serialize simultaneous intents from one principal on the same
             // database user row, never while an SSH/network operation runs.
             User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
+            $current = $this->authorized($user, $targetId, false, checkPause: false, requireConnected: false);
+            if ((string) $current->getKey() !== (string) $identity['target_record_id']) {
+                throw new SshTargetConnectionException('target_changed');
+            }
             $existing = DB::table('ssh_command_jobs')->where($identity)->first();
             if ($existing !== null) {
-                if (! hash_equals((string) $existing->script_digest, $digest)
-                    || (int) $existing->runtime_seconds !== $runtimeSeconds
-                    || ! hash_equals((string) $existing->target_binding_hash, $binding)) {
-                    throw new SshTargetConnectionException('invalid_input');
-                }
+                $this->recoverStart($existing, $digest, $runtimeSeconds);
 
                 return [$existing, false];
             }
+            $this->authorized($user, $targetId, true);
             if ($scriptBytes > $policy['max_script_bytes']
                 || $runtimeSeconds > $policy['max_runtime_seconds']) {
                 throw new SshTargetConnectionException('invalid_input');
@@ -115,6 +129,7 @@ final readonly class SshJobCoordinator
             // dispatched work. Recover only this pre-side-effect state. The
             // in-flight probe is fenced by a conditional transition below.
             $this->recoverStalePreparing((int) $user->getKey());
+            $this->recoverStaleUnlaunched((int) $user->getKey());
             $active = DB::table('ssh_command_jobs')->where('user_id', $user->getKey())
                 ->whereIn('status', ['preparing', 'launch_unknown', 'running', 'cancel_requested'])
                 ->where(static function ($query): void {
@@ -132,6 +147,7 @@ final readonly class SshJobCoordinator
                 'script_digest' => $digest,
                 ...$original,
                 'status' => 'preparing',
+                'launch_admitted' => false,
                 'runtime_seconds' => $runtimeSeconds,
                 // Freeze the Owner policy for this individual Job. A later
                 // settings update may affect new Jobs, but cannot shorten
@@ -150,21 +166,27 @@ final readonly class SshJobCoordinator
             return [DB::table('ssh_command_jobs')->where('id', $id)->first(), true];
         });
 
-        if (! $created || (string) $row->status !== 'preparing'
-            || ! hash_equals((string) $row->target_binding_hash, $binding)) {
+        if (! $created || (string) $row->status !== 'preparing') {
             return $this->summary($row);
         }
 
         $id = (string) $row->id;
         $directory = $this->directory($id);
-        $mode = $this->probe($user, $target, $binding, $credentialDispatch);
+        $admission = new SshJobLaunchAdmission($this->access, $id, (int) $user->getKey(), (string) $target->getKey());
+        $probe = [];
+        $mode = $this->probe($user, $target, $binding, $credentialDispatch, $admission->stage('probe'), $probe);
         if ($mode === null) {
-            if ($this->transition($id, 'preparing', 'unsupported') === false) {
-                return $this->summary(DB::table('ssh_command_jobs')->where('id', $id)->first());
-            }
-            $this->record($target, 'ssh-job-start', 'failure', 'job_unsupported');
+            $reference = CorrelationId::current();
+            $row = DB::transaction(function () use ($id, $probe, $reference): ?object {
+                DB::table('ssh_command_jobs')->where('id', $id)->lockForUpdate()->first();
+                $this->storeLaunchObservation($id, 'probe', $probe, $reference);
+                $this->transition($id, 'preparing', 'unsupported');
 
-            return $this->summary(DB::table('ssh_command_jobs')->where('id', $id)->first());
+                return DB::table('ssh_command_jobs')->where('id', $id)->first();
+            });
+            $this->record($target, 'ssh-job-start', 'failure', 'job_unsupported', $this->commandDiagnostics($probe), $reference);
+
+            return $this->summary($row);
         }
 
         if ($this->transition($id, 'preparing', 'launch_unknown', ['unit_mode' => $mode]) === false) {
@@ -177,12 +199,12 @@ final readonly class SshJobCoordinator
         $prepared = $this->safeCommand($user, $target,
             'umask 077; mkdir -m 700 -- '.escapeshellarg($directory).
             ' && test "$(stat -c %a -- '.escapeshellarg($directory).')" = 700'.
-            ' && test "$(stat -c %u -- '.escapeshellarg($directory).')" = "$(id -u)"',
-            8, $binding, $credentialDispatch);
+            ' && test "$(stat -c %u -- '.escapeshellarg($directory).')" = "$(id -u)"'
+            .' && printf %s '.escapeshellarg(SshJobRemoteIdentity::witness($id, $original['original_peer_fingerprint']))
+            .' > '.escapeshellarg($directory.'/'.SshJobRemoteIdentity::MARKER),
+            8, $binding, $credentialDispatch, $admission->stage('staging'));
         if (! $this->successful($prepared)) {
-            $this->record($target, 'ssh-job-start', 'unknown', 'outcome_unknown');
-
-            return $this->summary(DB::table('ssh_command_jobs')->where('id', $id)->first());
+            return $this->settleLaunch($target, $id, 'staging_directory', $prepared);
         }
 
         // The detached script may legitimately write large files (e.g. package
@@ -231,7 +253,8 @@ final readonly class SshJobCoordinator
             if ($scriptBytes <= self::MAX_INLINE_SCRIPT_BYTES) {
                 // Preserve the existing 16 KiB safe path for ordinary Jobs.
                 $scriptFile = $this->files->write($user, $target, $directory.'/script.sh',
-                    base64_encode($script), expectedTargetBinding: $binding, expectedCredentialDispatch: $credentialDispatch);
+                    base64_encode($script), expectedTargetBinding: $binding, expectedCredentialDispatch: $credentialDispatch,
+                    admitRemoteEffect: $admission->stage('staging'));
             } else {
                 // Reuse verified whole-file SFTP streaming within the already
                 // private 0700 Job directory. Never put a large script into
@@ -248,6 +271,7 @@ final readonly class SshJobCoordinator
                         $scriptBytes, hash('sha256', $script),
                         $policy['max_script_bytes'], 40, $directory,
                         expectedTargetBinding: $binding, expectedCredentialDispatch: $credentialDispatch,
+                        admitRemoteEffect: $admission->stage('staging'),
                     );
                 } finally {
                     fclose($source);
@@ -256,22 +280,20 @@ final readonly class SshJobCoordinator
             if (($scriptFile['status'] ?? '') !== 'completed') {
                 // No wrapper/launch after an uncertain file stage. Retain any
                 // observed native SFTP evidence from the in-process result.
-                throw new SshTargetConnectionException('outcome_unknown',
-                    is_array($scriptFile['__diagnostic_context'] ?? null)
-                        ? $scriptFile['__diagnostic_context'] : []);
+                $diagnostics = is_array($scriptFile['__diagnostic_context'] ?? null)
+                    ? $scriptFile['__diagnostic_context'] : [];
+                throw new SshTargetConnectionException($diagnostics['provider_error_code'] ?? 'outcome_unknown', $diagnostics);
             }
             $wrapperFile = $this->files->write($user, $target, $directory.'/wrapper.sh',
-                base64_encode($wrapper), expectedTargetBinding: $binding, expectedCredentialDispatch: $credentialDispatch);
+                base64_encode($wrapper), expectedTargetBinding: $binding, expectedCredentialDispatch: $credentialDispatch,
+                admitRemoteEffect: $admission->stage('staging'));
             if (($wrapperFile['status'] ?? '') !== 'completed') {
-                throw new SshTargetConnectionException('outcome_unknown',
-                    is_array($wrapperFile['__diagnostic_context'] ?? null)
-                        ? $wrapperFile['__diagnostic_context'] : []);
+                $diagnostics = is_array($wrapperFile['__diagnostic_context'] ?? null)
+                    ? $wrapperFile['__diagnostic_context'] : [];
+                throw new SshTargetConnectionException($diagnostics['provider_error_code'] ?? 'outcome_unknown', $diagnostics);
             }
         } catch (Throwable $exception) {
-            $this->record($target, 'ssh-job-start', 'unknown', 'outcome_unknown',
-                $exception instanceof SshTargetConnectionException ? $exception->diagnostics : []);
-
-            return $this->summary(DB::table('ssh_command_jobs')->where('id', $id)->first());
+            return $this->settleLaunch($target, $id, 'staging_files', $this->exceptionObservation($exception));
         }
 
         $unit = $this->unit($id);
@@ -286,95 +308,199 @@ final readonly class SshJobCoordinator
         // staging pipeline has already let its prior lease expire, never
         // dispatch late: another Job may have taken that admission slot.
         if (! $this->reserveDispatchLease($id)) {
-            $this->record($target, 'ssh-job-start', 'unknown', 'outcome_unknown');
-
-            return $this->summary(DB::table('ssh_command_jobs')->where('id', $id)->first());
+            return $this->settleLaunch($target, $id, 'dispatch_admission', [
+                'status' => 'failed', 'error_code' => 'job_attempt_retired',
+            ]);
         }
 
-        $result = $this->safeCommand($user, $target, $launch, 8, $binding, $credentialDispatch);
-        if ($this->successful($result)) {
-            $this->transition($id, 'launch_unknown', 'running');
-            $this->record($target, 'ssh-job-start', 'success', null);
-        } else {
-            // No retries: systemd-run may have created the unit even when its
-            // response was lost. Status reconciles unit/spool without relaunch.
-            $this->record($target, 'ssh-job-start', 'unknown', 'outcome_unknown');
+        $result = $this->safeCommand($user, $target, $launch, 8, $binding, $credentialDispatch, $admission->stage('launch'));
+
+        return $this->settleLaunch($target, $id, 'launch', $result);
+    }
+
+    /** @return array<string,mixed> */
+    private function recoverStart(object $row, string $digest, int $runtimeSeconds): array
+    {
+        if (! hash_equals((string) $row->script_digest, $digest)
+            || (int) $row->runtime_seconds !== $runtimeSeconds) {
+            throw new SshTargetConnectionException('invalid_input');
         }
 
-        return $this->summary(DB::table('ssh_command_jobs')->where('id', $id)->first());
+        return $this->summary($row);
+    }
+
+    /**
+     * Preserve exact launch evidence independently of Activity. A failed
+     * staging phase may leave private files, but cannot have run the script
+     * if the durable systemd-run admission marker is still explicitly false.
+     *
+     * @param  array<string,mixed>  $observation
+     * @return array<string,mixed>
+     */
+    private function settleLaunch(Target $target, string $id, string $stage, array $observation): array
+    {
+        $reference = CorrelationId::current();
+        $row = DB::transaction(function () use ($id, $stage, $observation, $reference): ?object {
+            $row = DB::table('ssh_command_jobs')->where('id', $id)->lockForUpdate()->first();
+            if ($row === null) {
+                return null;
+            }
+            $this->storeLaunchObservation($id, $stage, $observation, $reference);
+            if ($row->status === 'launch_unknown') {
+                if ($row->launch_admitted !== null && ! (bool) $row->launch_admitted) {
+                    $this->transition($id, 'launch_unknown', 'failed', ['terminal_reason' => 'pre_launch_failed']);
+                } elseif ($stage === 'launch' && $this->successful($observation)) {
+                    $this->transition($id, 'launch_unknown', 'running');
+                }
+            }
+
+            return DB::table('ssh_command_jobs')->where('id', $id)->first();
+        });
+        $admitted = $row !== null && ($row->launch_admitted === null || (bool) $row->launch_admitted);
+        $acknowledged = $stage === 'launch' && $this->successful($observation) && $admitted;
+        $code = $acknowledged ? null : ($admitted ? 'outcome_unknown' : ($observation['error_code'] ?? 'pre_launch_failed'));
+        $this->record($target, 'ssh-job-start', $acknowledged ? 'success' : ($admitted ? 'unknown' : 'failure'),
+            $code, [...$this->commandDiagnostics($observation), 'job_id' => $id, 'job_stage' => $stage,
+                'job_launch_admitted' => $admitted, 'authoritative_status' => $row?->status], $reference);
+
+        return $this->summary($row);
+    }
+
+    /** @param array<string,mixed> $observation */
+    private function storeLaunchObservation(string $id, string $stage, array $observation, string $reference): void
+    {
+        DB::table('ssh_command_jobs')->where('id', $id)->whereNull('launch_observation_ciphertext')->update([
+            'launch_observation_ciphertext' => Crypt::encryptString(json_encode([
+                'stage' => $stage, 'observed_at' => now()->toISOString(),
+                'diagnostic_reference' => $reference,
+                'status' => $observation['status'] ?? 'outcome_unknown',
+                'error_code' => $observation['error_code'] ?? null,
+                'exit_code' => $observation['exit_code'] ?? null,
+                'diagnostics' => OperationDiagnostics::safeContext($this->commandDiagnostics($observation)),
+            ], JSON_THROW_ON_ERROR)),
+            'updated_at' => now(),
+        ]);
     }
 
     /** @return array<string,mixed> */
     public function status(User $user, string $targetId, string $clientHash, string $jobId): array
     {
         [$target, $row] = $this->existing($user, $targetId, $clientHash, $jobId, false);
-        if ($row->status === 'preparing') {
-            // No remote side effect can precede the launch_unknown CAS.
-            // Do not contact the remote host or misreport a pending probe.
+        if ($row->status === 'preparing' || ($row->status === 'launch_unknown'
+            && $row->launch_admitted !== null && ! (bool) $row->launch_admitted)) {
+            // The exact native launch gate cannot cross either retired state.
             $this->recoverStalePreparing((int) $user->getKey(), $jobId);
+            $this->recoverStaleUnlaunched((int) $user->getKey(), $jobId);
 
             return $this->summary(DB::table('ssh_command_jobs')->where('id', $jobId)->first());
         }
-        if ($row->status === 'failed' && $row->exit_code === null
-            && $row->terminal_reason === 'systemd_exit-code') {
-            // systemd may report the failed exit before the bounded SFTP
-            // read is admitted (e.g. transient per-Target SFTP rate limit).
-            // Never freeze a null exit code: retry ONLY reading the exact
-            // existing marker. This does not redispatch/restart the script.
-            $recoveredExit = $this->exitCode($user, $target, $jobId, (string) $row->target_binding_hash);
-            if ($recoveredExit !== null) {
-                DB::table('ssh_command_jobs')->where('id', $jobId)
-                    ->where('status', 'failed')->whereNull('exit_code')
-                    ->update(['exit_code' => $recoveredExit,
-                        'terminal_reason' => 'script_exit', 'updated_at' => now()]);
-            }
-        } elseif (! in_array($row->status, ['completed', 'failed', 'canceled', 'unsupported', 'retired'], true)) {
-            $exit = $this->exitCode($user, $target, $jobId, (string) $row->target_binding_hash);
-            if ($exit !== null) {
-                $this->transition($jobId, (string) $row->status,
-                    $exit === 0 ? 'completed' : 'failed',
-                    ['exit_code' => $exit, 'terminal_reason' => 'script_exit']);
-            } elseif ($row->unit_mode === 'user' || $row->unit_mode === 'system') {
-                $running = $this->safeCommand($user, $target,
-                    $this->managerEnvironment((string) $row->unit_mode).'systemctl '.($row->unit_mode === 'user' ? '--user ' : '')
-                    .'show '.escapeshellarg($this->unit($jobId))
-                    .' --property=ActiveState --property=Result --property=ExecMainCode --property=ExecMainStatus --no-pager',
-                    8, (string) $row->target_binding_hash);
-                $state = trim((string) ($running['stdout'] ?? ''));
-                if ($this->successful($running)
-                    && preg_match('/(?:^|\n)ActiveState=(?:active|activating)(?:\n|$)/D', $state) === 1) {
-                    if ($row->status === 'launch_unknown') {
-                        $this->transition($jobId, 'launch_unknown', 'running');
-                    }
-                } elseif ($this->successful($running)
-                    && preg_match('/(?:^|\n)ActiveState=failed(?:\n|$)/D', $state) === 1
-                    && preg_match('/(?:^|\n)Result=(timeout|exit-code|signal|core-dump|resources|watchdog|start-limit-hit)(?:\n|$)/D', $state, $match) === 1) {
-                    // No fabricated process exit code: systemd's retained
-                    // failed-unit result is authoritative for terminal failure.
-                    // Omitting --collect keeps failed units inspectable until
-                    // bounded post-retention cleanup, even after disconnect.
-                    // The wrapper may have exited before its SFTP-readable
-                    // marker became available. systemd's retained main-process
-                    // exit status is authoritative only for a normal exit,
-                    // never for signals, timeout or inaccessible units.
-                    $systemdExit = null;
-                    if ($match[1] === 'exit-code'
-                        && preg_match('/(?:^|\n)ExecMainCode=1(?:\n|$)/D', $state) === 1
-                        && preg_match('/(?:^|\n)ExecMainStatus=([0-9]{1,3})(?:\n|$)/D', $state, $exitMatch) === 1
-                        && (int) $exitMatch[1] > 0 && (int) $exitMatch[1] <= 255) {
-                        $systemdExit = (int) $exitMatch[1];
-                    }
-                    $this->transition($jobId, (string) $row->status, 'failed',
-                        ['exit_code' => $systemdExit, 'terminal_reason' => 'systemd_'.$match[1]]);
-                } elseif ($row->status === 'running') {
-                    // An absent/inaccessible unit without exit evidence is
-                    // NOT proof of completion or a safe re-launch.
-                    $this->transition($jobId, 'running', 'launch_unknown');
-                }
-            }
+        $recoverExit = $row->status === 'failed' && $row->exit_code === null
+            && $row->terminal_reason === 'systemd_exit-code';
+        if ($this->terminal($row) && ! $recoverExit) {
+            return $this->summary($row);
         }
 
-        return $this->summary(DB::table('ssh_command_jobs')->where('id', $jobId)->first());
+        try {
+            $remote = SshJobRemoteIdentity::forJob($target, $row, $this->directory($jobId));
+        } catch (SshTargetConnectionException $exception) {
+            return $this->remoteFailure($target, $row, 'ssh-job-status', $this->exceptionObservation($exception));
+        }
+
+        // A missing marker is normal before completion. Permission or
+        // transport failure is separate evidence, not a fabricated exit.
+        $readFailure = null;
+        try {
+            $exit = $this->exitCode($user, $target, $jobId, $remote);
+        } catch (Throwable $exception) {
+            $exit = null;
+            $readFailure = $this->exceptionObservation($exception);
+            if (($exception instanceof SshTargetConnectionException && $exception->reason === 'job_identity_unverified') || $recoverExit) {
+                return $this->remoteFailure($target, $row, 'ssh-job-status', $readFailure);
+            }
+        }
+        if ($exit !== null) {
+            if ($recoverExit) {
+                DB::table('ssh_command_jobs')->where('id', $jobId)
+                    ->where('status', 'failed')->whereNull('exit_code')
+                    ->where('terminal_reason', 'systemd_exit-code')
+                    ->update(['exit_code' => $exit, 'terminal_reason' => 'script_exit', 'updated_at' => now()]);
+            } else {
+                $this->transition($jobId, (string) $row->status, $exit === 0 ? 'completed' : 'failed',
+                    ['exit_code' => $exit, 'terminal_reason' => 'script_exit']);
+            }
+
+            return $this->summary(DB::table('ssh_command_jobs')->where('id', $jobId)->first(), remoteObserved: true);
+        }
+        if ($recoverExit) {
+            return $this->summary($row, remoteObserved: false);
+        }
+        if (! in_array($row->unit_mode, ['user', 'system'], true)) {
+            return $this->remoteFailure($target, $row, 'ssh-job-status', $readFailure ?? [
+                'error_code' => 'job_state_unconfirmed', 'status' => 'outcome_unknown',
+            ]);
+        }
+
+        $running = $this->safeCommand($user, $target,
+            $this->managerEnvironment((string) $row->unit_mode).'systemctl '.($row->unit_mode === 'user' ? '--user ' : '')
+            .'show '.escapeshellarg($this->unit($jobId))
+            .' --property=LoadState --property=ActiveState --property=Result --property=ExecMainCode --property=ExecMainStatus --no-pager',
+            8, remote: $remote);
+        if (! $this->successful($running)) {
+            return $this->remoteFailure($target, $row, 'ssh-job-status', $running);
+        }
+        $state = trim((string) ($running['stdout'] ?? ''));
+        if (preg_match('/(?:^|\n)LoadState=loaded(?:\n|$)/D', $state) === 1
+            && preg_match('/(?:^|\n)ActiveState=(?:active|activating)(?:\n|$)/D', $state) === 1) {
+            if ($row->status === 'launch_unknown') {
+                $this->transition($jobId, 'launch_unknown', 'running');
+            }
+        } elseif (preg_match('/(?:^|\n)LoadState=loaded(?:\n|$)/D', $state) === 1
+            && preg_match('/(?:^|\n)ActiveState=failed(?:\n|$)/D', $state) === 1
+            && preg_match('/(?:^|\n)Result=(timeout|exit-code|signal|core-dump|resources|watchdog|start-limit-hit)(?:\n|$)/D', $state, $match) === 1) {
+            $systemdExit = null;
+            if ($match[1] === 'exit-code'
+                && preg_match('/(?:^|\n)ExecMainCode=1(?:\n|$)/D', $state) === 1
+                && preg_match('/(?:^|\n)ExecMainStatus=([0-9]{1,3})(?:\n|$)/D', $state, $exitMatch) === 1
+                && (int) $exitMatch[1] > 0 && (int) $exitMatch[1] <= 255) {
+                $systemdExit = (int) $exitMatch[1];
+            }
+            $this->transition($jobId, (string) $row->status, 'failed',
+                ['exit_code' => $systemdExit, 'terminal_reason' => 'systemd_'.$match[1]]);
+        } elseif ($row->status === 'cancel_requested'
+            && preg_match('/(?:^|\n)LoadState=loaded(?:\n|$)/D', $state) === 1) {
+            // A loaded unit can still be safely stopped by an explicit
+            // cancel request, even without a readable natural exit marker.
+            return $this->summary($row, remoteObserved: true);
+        } else {
+            // Unavailable/collected unit is not evidence that a prior
+            // confirmed running state was false. Keep the journal intact.
+            return $this->remoteFailure($target, $row, 'ssh-job-status', $readFailure ?? [
+                'error_code' => 'job_state_unconfirmed', 'status' => 'outcome_unknown',
+            ]);
+        }
+
+        return $this->summary(DB::table('ssh_command_jobs')->where('id', $jobId)->first(), remoteObserved: true);
+    }
+
+    private function terminal(object $row): bool
+    {
+        return in_array($row->status, ['completed', 'failed', 'canceled', 'unsupported', 'retired'], true);
+    }
+
+    /** @param array<string,mixed> $observation
+     * @return array<string,mixed>
+     */
+    private function remoteFailure(Target $target, object $row, string $operation, array $observation): array
+    {
+        $code = (string) ($observation['error_code'] ?? 'job_state_unconfirmed');
+        $reference = CorrelationId::current();
+        $this->record($target, $operation, ($observation['status'] ?? null) === 'outcome_unknown' ? 'unknown' : 'failure',
+            $code, [...$this->commandDiagnostics($observation), 'job_id' => $row->id], $reference);
+
+        return [
+            ...$this->summary(DB::table('ssh_command_jobs')->where('id', $row->id)->first(), $code),
+            'diagnostic_reference' => $reference,
+        ];
     }
 
     /**
@@ -389,7 +515,7 @@ final readonly class SshJobCoordinator
         User $user, string $targetId, string $clientHash,
         ?string $status = null, ?string $cursor = null, int $limit = 20,
     ): array {
-        $target = $this->authorized($user, $targetId, false);
+        $target = $this->authorized($user, $targetId, false, checkPause: false, requireConnected: false);
         if (strlen($clientHash) !== 64 || ! ctype_xdigit($clientHash)) {
             throw new SshTargetConnectionException('target_not_found');
         }
@@ -401,12 +527,11 @@ final readonly class SshJobCoordinator
             throw new SshTargetConnectionException('invalid_input');
         }
 
-        $binding = $this->binding($target);
         $after = null;
         if ($cursor !== null) {
             if (preg_match('/^([0-9A-HJKMNP-TV-Z]{26})\\.([a-f0-9]{64})$/D', $cursor, $match) !== 1
                 || ! hash_equals($this->listCursorSignature(
-                    $user, $target, $clientHash, $binding, $status, $match[1],
+                    $user, $target, $clientHash, $status, $match[1],
                 ), $match[2])) {
                 throw new SshTargetConnectionException('invalid_input');
             }
@@ -415,11 +540,10 @@ final readonly class SshJobCoordinator
 
         $rows = DB::table('ssh_command_jobs')
             ->select(['id', 'status', 'created_at', 'updated_at', 'expires_at',
-                'runtime_seconds', 'exit_code', 'terminal_reason'])
+                'runtime_seconds', 'exit_code', 'terminal_reason', 'launch_admitted'])
             ->where('user_id', $user->getKey())
             ->where('target_record_id', $target->getKey())
             ->where('client_identity_hash', $clientHash)
-            ->where('target_binding_hash', $binding)
             ->where(static function ($query): void {
                 $query->whereNotIn('status', ['completed', 'failed', 'canceled', 'unsupported', 'retired'])
                     ->orWhere('expires_at', '>', now());
@@ -441,23 +565,24 @@ final readonly class SshJobCoordinator
             'terminal_reason' => $row->terminal_reason,
             'complete' => in_array($row->status, ['completed', 'failed', 'canceled'], true),
             'retry_safe' => false,
+            'launch_admitted' => $row->launch_admitted === null ? null : (bool) $row->launch_admitted,
         ])->values()->all();
         $last = $hasMore ? end($items)['job_id'] : null;
 
         return [
             'jobs' => $items,
             'next_cursor' => $last === null ? null : $last.'.'.$this->listCursorSignature(
-                $user, $target, $clientHash, $binding, $status, $last,
+                $user, $target, $clientHash, $status, $last,
             ),
             'has_more' => $hasMore,
         ];
     }
 
     private function listCursorSignature(
-        User $user, Target $target, string $clientHash, string $binding, ?string $status, string $id,
+        User $user, Target $target, string $clientHash, ?string $status, string $id,
     ): string {
         return hash_hmac('sha256', implode("\0", [
-            (string) $user->getKey(), (string) $target->getKey(), $clientHash, $binding,
+            (string) $user->getKey(), (string) $target->getKey(), $clientHash,
             $status ?? '', $id,
         ]), (string) config('app.key'));
     }
@@ -478,10 +603,20 @@ final readonly class SshJobCoordinator
             || $length > $this->settings->sshJobOutputWindowBytes()) {
             throw new SshTargetConnectionException('invalid_input');
         }
+        if ($row->launch_admitted !== null && ! (bool) $row->launch_admitted) {
+            return [
+                'job_id' => $jobId, 'stream' => $stream, 'available' => false,
+                'offset' => $offset, 'encoding' => 'base64', 'data' => '',
+                'complete' => $this->terminal($row), 'status' => $row->status,
+                'launch_admitted' => false,
+            ];
+        }
+        $remote = SshJobRemoteIdentity::forJob($target, $row, $this->directory($jobId));
         try {
             $file = $this->files->read($user, $target,
                 $this->directory($jobId).'/'.$stream, $offset, $length,
-                expectedTargetBinding: (string) $row->target_binding_hash);
+                expectedTargetBinding: $remote->binding, expectedCredentialDispatch: $remote->credentialDispatch,
+                verifySource: $remote->sftpVerifier());
         } catch (SshTargetConnectionException $exception) {
             if (! $this->isMissingJobOutput($exception)) {
                 // A provider permission failure, lost transport, or unknown
@@ -513,7 +648,8 @@ final readonly class SshJobCoordinator
                 // Keep the marker probe bound to the original Job Target.
                 $this->files->read($user, $target,
                     $this->directory($jobId).'/'.$stream.'.truncated',
-                    0, 1, expectedTargetBinding: (string) $row->target_binding_hash);
+                    0, 1, expectedTargetBinding: $remote->binding, expectedCredentialDispatch: $remote->credentialDispatch,
+                    verifySource: $remote->sftpVerifier());
                 $overflowConfirmed = true;
             } catch (SshTargetConnectionException $exception) {
                 if (! $this->isMissingJobOutput($exception)) {
@@ -576,60 +712,87 @@ final readonly class SshJobCoordinator
     public function cancel(User $user, string $targetId, string $clientHash, string $jobId): array
     {
         [$target, $row] = $this->existing($user, $targetId, $clientHash, $jobId, false);
-        if (in_array($row->status, ['completed', 'failed', 'canceled', 'unsupported', 'retired'], true)) {
+        $row = CurrentReadTransaction::run(function () use ($user, $target, $clientHash, $jobId): object {
+            User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
+            $row = DB::table('ssh_command_jobs')->where('id', $jobId)
+                ->where('user_id', $user->getKey())->where('target_record_id', $target->getKey())
+                ->where('client_identity_hash', $clientHash)->lockForUpdate()->first();
+            if ($row === null) {
+                throw new SshTargetConnectionException('target_not_found');
+            }
+            $current = $this->authorized($user, $target->target_id, false, checkPause: false, requireConnected: false);
+            if ((string) $current->getKey() !== (string) $target->getKey()) {
+                throw new SshTargetConnectionException('target_not_found');
+            }
+            if (! $this->terminal($row)) {
+                if ($row->status === 'preparing' || ($row->launch_admitted !== null && ! (bool) $row->launch_admitted)) {
+                    $reason = $row->status === 'preparing' ? 'pre_dispatch_canceled' : 'pre_launch_canceled';
+                    $this->transition($jobId, $row->status, 'canceled', ['terminal_reason' => $reason]);
+                } elseif ($row->status !== 'cancel_requested') {
+                    $this->transition($jobId, $row->status, 'cancel_requested');
+                }
+            }
+
+            return DB::table('ssh_command_jobs')->where('id', $jobId)->firstOrFail();
+        });
+        if ($this->terminal($row)) {
             return $this->summary($row);
         }
-        // Reconcile an already-finished unit before issuing a stop, avoiding
-        // mislabeling a prior systemd failure as a cancellation.
+
+        // A local cancellation request is not a stop confirmation.
+        // Reconcile a prior natural exit first; no re-launch path exists.
         $reconciled = $this->status($user, $targetId, $clientHash, $jobId);
-        if (in_array($reconciled['status'], ['completed', 'failed', 'canceled', 'unsupported', 'retired'], true)) {
+        $row = DB::table('ssh_command_jobs')->where('id', $jobId)->firstOrFail();
+        if ($this->terminal($row) || isset($reconciled['remote_error_code'])) {
             return $reconciled;
         }
-        // Status may change launch_unknown -> running or vice versa.
-        // Never apply a stale expected-state condition after reconciliation.
-        $row = DB::table('ssh_command_jobs')->where('id', $jobId)->first();
+        try {
+            $remote = SshJobRemoteIdentity::forJob($target, $row, $this->directory($jobId));
+        } catch (SshTargetConnectionException $exception) {
+            return $this->remoteFailure($target, $row, 'ssh-job-cancel', $this->exceptionObservation($exception));
+        }
         if (! in_array($row->unit_mode, ['system', 'user'], true)) {
-            // A unit was never confirmed available; never pretend its
-            // cancellation proves any post-dispatch process was terminated.
-            return $this->summary($row);
+            return $this->summary($row, 'job_state_unconfirmed');
         }
-        if ($row->status !== 'cancel_requested') {
-            $this->transition($jobId, (string) $row->status, 'cancel_requested');
-        }
-        // Stopping the same unique systemd unit is idempotent; a lost stop
-        // reply may safely be reconciled without starting new remote work.
+
         $scope = $row->unit_mode === 'user' ? '--user ' : '';
         $unit = escapeshellarg($this->unit($jobId));
+        $systemctl = $this->managerEnvironment((string) $row->unit_mode).'systemctl '.$scope;
+        // Prove this unique unit was actually loaded before stopping it.
+        // A not-found unit could be a launch admitted but not yet sent.
+        $cancelGate = (new SshJobLaunchAdmission($this->access, $jobId, (int) $user->getKey(), (string) $target->getKey()))->stage('cancel');
         $response = $this->safeCommand($user, $target,
-            $this->managerEnvironment((string) $row->unit_mode).'systemctl '.$scope.'stop '.$unit,
-            8, (string) $row->target_binding_hash);
-        if ($this->successful($response)) {
-            // A successful stop request is not enough: independently inspect
-            // the unit's active state and process identities. Never infer
-            // cancellation solely from an absent PID or a failed query.
-            $verification = $this->safeCommand($user, $target,
-                $this->managerEnvironment((string) $row->unit_mode).'systemctl '.$scope.'show '.$unit
-                .' --property=ActiveState --property=MainPID --property=ControlPID --no-pager',
-                8, (string) $row->target_binding_hash);
-            $state = (string) ($verification['stdout'] ?? '');
-            if ($this->successful($verification)
-                && preg_match('/(?:^|\\n)ActiveState=(?:inactive|failed)(?:\\n|$)/D', trim($state)) === 1
-                && preg_match('/(?:^|\\n)MainPID=0(?:\\n|$)/D', trim($state)) === 1
-                && preg_match('/(?:^|\\n)ControlPID=0(?:\\n|$)/D', trim($state)) === 1) {
-                // The script might have exited before the stop request
-                // won the race. Its durable exit marker outranks a cancel.
-                $exit = $this->exitCode($user, $target, $jobId, (string) $row->target_binding_hash);
-                $final = $exit === null ? 'canceled' : ($exit === 0 ? 'completed' : 'failed');
-                $this->transition($jobId, 'cancel_requested', $final,
-                    ['exit_code' => $exit, 'terminal_reason' => $exit === null ? 'canceled' : 'script_exit']);
-                $this->record($target, 'ssh-job-cancel', 'success', null);
-
-                return $this->summary(DB::table('ssh_command_jobs')->where('id', $jobId)->first());
-            }
+            'test "$('.$systemctl.'show --property=LoadState --value '.$unit.')" = loaded && '.$systemctl.'stop '.$unit,
+            8, admitRemoteEffect: $cancelGate, remote: $remote);
+        if (! $this->successful($response)) {
+            return $this->remoteFailure($target, $row, 'ssh-job-cancel', $response);
         }
-        $this->record($target, 'ssh-job-cancel', 'unknown', 'outcome_unknown');
+        $verification = $this->safeCommand($user, $target,
+            $systemctl.'show '.$unit.' --property=LoadState --property=ActiveState --property=MainPID --property=ControlPID --no-pager',
+            8, remote: $remote);
+        $state = (string) ($verification['stdout'] ?? '');
+        if (! $this->successful($verification)
+            || (! $this->stoppedUnitEvidence($state) && ! $this->collectedUnitEvidence($state))) {
+            return $this->remoteFailure($target, $row, 'ssh-job-cancel',
+                $this->successful($verification) ? ['status' => 'outcome_unknown', 'error_code' => 'job_state_unconfirmed'] : $verification);
+        }
 
-        return $this->summary(DB::table('ssh_command_jobs')->where('id', $jobId)->first());
+        // The exact loaded unit was stopped and its zero-PID state verified.
+        // A durable natural exit marker, if available, outranks cancellation.
+        $exit = null;
+        try {
+            $exit = $this->exitCode($user, $target, $jobId, $remote);
+        } catch (SshTargetConnectionException $exception) {
+            // Stop is proven; a failed read cannot erase that evidence.
+            $this->record($target, 'ssh-job-cancel-exit-read', 'failure', $exception->reason, $exception->diagnostics);
+        }
+        $final = $exit === null ? 'canceled' : ($exit === 0 ? 'completed' : 'failed');
+        if ($this->transition($jobId, 'cancel_requested', $final,
+            ['exit_code' => $exit, 'terminal_reason' => $exit === null ? 'canceled' : 'script_exit'])) {
+            $this->record($target, 'ssh-job-cancel', 'success', null);
+        }
+
+        return $this->summary(DB::table('ssh_command_jobs')->where('id', $jobId)->first(), remoteObserved: true);
     }
 
     /**
@@ -659,7 +822,8 @@ final readonly class SshJobCoordinator
             if ($row->status === 'retired') {
                 return $this->summary($row);
             }
-            if (! in_array($row->status, ['completed', 'failed', 'canceled', 'unsupported'], true)
+            if ((! in_array($row->status, ['completed', 'failed', 'canceled', 'unsupported'], true)
+                    || in_array($row->terminal_reason, ['pre_launch_failed', 'pre_launch_abandoned', 'pre_launch_canceled'], true))
                 && ($row->admission_expires_at === null || $row->admission_expires_at > now()->toDateTimeString())) {
                 // A late first dispatch could still be underway; the
                 // operator cannot retire/reassign its slot during the lease.
@@ -734,7 +898,7 @@ final readonly class SshJobCoordinator
     private function pruneDetailed(): array
     {
         $stats = [
-            'preparing_recovered' => $this->recoverStalePreparing(),
+            'preparing_recovered' => $this->recoverStalePreparing() + $this->recoverStaleUnlaunched(),
             'scanned' => 0, 'eligible' => 0, 'processed' => 0, 'cleaned' => 0,
             'blocked_by_identity' => 0, 'retained_by_policy' => 0,
             'remote_unavailable' => 0, 'error' => 0,
@@ -770,7 +934,7 @@ final readonly class SshJobCoordinator
             $last = $row;
             $stats['scanned']++;
             if ($row->status === 'unsupported' || $row->status === 'retired'
-                || ($row->status === 'failed' && $row->terminal_reason === 'pre_dispatch_abandoned')) {
+                || in_array($row->terminal_reason, ['pre_dispatch_abandoned', 'pre_dispatch_canceled'], true)) {
                 $stats['eligible']++;
                 $stats['cleaned'] += DB::table('ssh_command_jobs')->where('id', $row->id)
                     ->where('status', $row->status)->delete();
@@ -786,14 +950,19 @@ final readonly class SshJobCoordinator
             }
             try {
                 $this->authorized($user, $target->target_id, false);
-                if (! hash_equals((string) $row->target_binding_hash, $this->binding($target))) {
-                    $stats['blocked_by_identity']++;
+                $remote = SshJobRemoteIdentity::forJob($target, $row, $this->directory((string) $row->id));
+                $stats['eligible']++;
+                $stats['processed']++;
+                // A never-admitted launch cannot have created a detached
+                // unit; still wait out its staging lease before cleanup.
+                $neverLaunched = $row->launch_admitted !== null && ! (bool) $row->launch_admitted
+                    && in_array($row->terminal_reason, ['pre_launch_failed', 'pre_launch_abandoned', 'pre_launch_canceled'], true);
+                if ($neverLaunched && ($row->admission_expires_at === null || now()->lt($row->admission_expires_at))) {
+                    $stats['retained_by_policy']++;
 
                     continue;
                 }
-                $stats['eligible']++;
-                $stats['processed']++;
-                $stopProof = $this->remoteUnitStopProof($user, $target, $row);
+                $stopProof = $neverLaunched ? 'never_launched' : $this->remoteUnitStopProof($user, $target, $row, $remote);
                 if ($stopProof === null) {
                     $stats['retained_by_policy']++;
                     Log::notice('SSH Job spool retained: remote process stop was not proven.', [
@@ -806,8 +975,9 @@ final readonly class SshJobCoordinator
                 $clean = $this->spoolCleanupCommand(
                     $this->directory((string) $row->id),
                     $stopProof === 'exit_marker' ? (int) $row->exit_code : null,
+                    $row->original_peer_fingerprint !== null,
                 );
-                $result = $this->safeCommand($user, $target, $clean, 8, (string) $row->target_binding_hash);
+                $result = $this->safeCommand($user, $target, $clean, 8, remote: $remote);
                 if (! $this->successful($result)) {
                     $stderr = ($result['stderr_encoding'] ?? null) === 'utf-8'
                         ? (string) ($result['stderr'] ?? '') : '';
@@ -833,7 +1003,7 @@ final readonly class SshJobCoordinator
                 $stats['cleaned'] += DB::table('ssh_command_jobs')->where('id', $row->id)
                     ->where('status', $row->status)->delete();
             } catch (SshTargetConnectionException $exception) {
-                $stats['retained_by_policy']++;
+                $stats[in_array($exception->reason, ['target_changed', 'job_identity_unverified'], true) ? 'blocked_by_identity' : 'retained_by_policy']++;
                 Log::notice('SSH Job cleanup retained without authority.', [
                     'job_id' => $row->id, 'reason' => $exception->reason,
                 ]);
@@ -856,10 +1026,13 @@ final readonly class SshJobCoordinator
      * Unknown files, directories, symlinks and mismatched exit witnesses must
      * preserve all evidence; never substitute a recursive removal.
      */
-    private function spoolCleanupCommand(string $directory, ?int $exitCode): string
+    private function spoolCleanupCommand(string $directory, ?int $exitCode, bool $hasWitness = false): string
     {
         $files = ['script.sh', 'wrapper.sh', 'stdout', 'stderr', 'exit-code',
             'stdout.pipe', 'stderr.pipe', 'stdout.truncated', 'stderr.truncated'];
+        if ($hasWitness) {
+            $files[] = SshJobRemoteIdentity::MARKER;
+        }
         $quoted = escapeshellarg($directory);
         $expected = implode('|', array_map(
             static fn (string $file): string => escapeshellarg($directory.'/'.$file), $files,
@@ -901,7 +1074,7 @@ final readonly class SshJobCoordinator
      *
      * @return 'loaded'|'canceled'|'exit_marker'|null
      */
-    private function remoteUnitStopProof(User $user, Target $target, object $row): ?string
+    private function remoteUnitStopProof(User $user, Target $target, object $row, SshJobRemoteIdentity $remote): ?string
     {
         if (! in_array($row->unit_mode, ['system', 'user'], true)) {
             return null;
@@ -911,7 +1084,7 @@ final readonly class SshJobCoordinator
             $this->managerEnvironment($mode).'systemctl '.($mode === 'user' ? '--user ' : '')
             .'show '.escapeshellarg($this->unit((string) $row->id))
             .' --property=LoadState --property=ActiveState --property=MainPID --property=ControlPID --no-pager',
-            8, (string) $row->target_binding_hash);
+            8, remote: $remote);
         if (! $this->successful($result)) {
             return null;
         }
@@ -1018,7 +1191,9 @@ final readonly class SshJobCoordinator
                 $stats['processed']++;
                 $current = $this->status($user, $target->target_id,
                     (string) $row->client_identity_hash, (string) $row->id);
-                if (in_array($current['status'], ['completed', 'failed', 'canceled'], true)) {
+                if (isset($current['remote_error_code'])) {
+                    $stats['remote_unavailable']++;
+                } elseif (in_array($current['status'], ['completed', 'failed', 'canceled'], true)) {
                     $stats['terminal_reconciled']++;
                 } else {
                     $stats['unresolved']++;
@@ -1068,7 +1243,7 @@ final readonly class SshJobCoordinator
         // Resolve the caller-visible Target without revealing pause state.
         // Job ownership/client/binding and current read permissions must
         // be verified before a paused Target is reported or audited.
-        $target = $this->authorized($user, $targetId, false, checkPause: false);
+        $target = $this->authorized($user, $targetId, false, checkPause: false, requireConnected: false);
         if (strlen($jobId) !== 26 || preg_match('/^[0-9A-HJKMNP-TV-Z]{26}$/D', $jobId) !== 1
             || strlen($clientHash) !== 64 || ! ctype_xdigit($clientHash)) {
             throw new SshTargetConnectionException('target_not_found');
@@ -1080,32 +1255,32 @@ final readonly class SshJobCoordinator
         // TTL only governs pruning completed evidence. Uncertain launches
         // stay inspectable until explicitly reconciled; silently expiring
         // them would discard the only safe no-replay recovery handle.
-        if ($row === null || ! hash_equals((string) $row->target_binding_hash, $this->binding($target))
-            || ($requireFileRead && ! $this->access->allows($user, GatewayPermission::SshFileRead, $target))) {
+        $actor = $this->operationAdmission->currentActor($this->operationAdmission->capture($user), $user);
+        if ($row === null || ! $actor instanceof User
+            || ! $this->access->allows($actor, GatewayPermission::SshCommandRun, $target)
+            || ($requireFileRead && ! $this->access->allows($actor, GatewayPermission::SshFileRead, $target))) {
             throw new SshTargetConnectionException('target_not_found');
-        }
-
-        if (TargetOperationGate::isPaused($target)) {
-            // This rejection belongs to a verified Job principal/client
-            // binding, never an attacker-supplied or unrelated Job handle.
-            throw new SshTargetConnectionException('target_paused');
         }
 
         return [$target, $row];
     }
 
     private function authorized(
-        User $user, string $targetId, bool $requiresFileWrite, bool $checkPause = true,
+        User $user, string $targetId, bool $requiresFileWrite, bool $checkPause = true, bool $requireConnected = true,
     ): Target {
         if (strlen($targetId) > 64
             || preg_match('/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D', $targetId) !== 1) {
             throw new SshTargetConnectionException('target_not_found');
         }
-        $target = $this->access->scopeTargets(Target::query(), $user, GatewayPermission::SshCommandRun)
+        $actor = $this->operationAdmission->currentActor($this->operationAdmission->capture($user), $user);
+        if (! $actor instanceof User) {
+            throw new SshTargetConnectionException('target_not_found');
+        }
+        $target = $this->access->scopeTargets(Target::query(), $actor, GatewayPermission::SshCommandRun)
             ->where('target_id', $targetId)->where('connector_type', 'ssh_direct')->first();
-        if (! $target instanceof Target || $target->getAttribute('connection_state') !== TargetConnectionState::Connected
-            || ($requiresFileWrite && (! $this->access->allows($user, GatewayPermission::SshFileWrite, $target)
-                || ! $this->access->allows($user, GatewayPermission::SshFileRead, $target)))) {
+        if (! $target instanceof Target || ($requireConnected && $target->getAttribute('connection_state') !== TargetConnectionState::Connected)
+            || ($requiresFileWrite && (! $this->access->allows($actor, GatewayPermission::SshFileWrite, $target)
+                || ! $this->access->allows($actor, GatewayPermission::SshFileRead, $target)))) {
             throw new SshTargetConnectionException('target_not_found');
         }
         if ($checkPause && TargetOperationGate::isPaused($target)) {
@@ -1113,11 +1288,6 @@ final readonly class SshJobCoordinator
         }
 
         return $target;
-    }
-
-    private function binding(Target $target): string
-    {
-        return $this->originalIdentity($target)['target_binding_hash'];
     }
 
     /**
@@ -1137,6 +1307,7 @@ final readonly class SshJobCoordinator
 
         return [
             'target_binding_hash' => SshTargetBinding::hash($target, $config),
+            'original_peer_fingerprint' => SshJobRemoteIdentity::peerFingerprint($target, $config),
             'original_target_record_id' => (string) $target->getKey(),
             'original_target_id' => (string) $target->target_id,
             'original_host' => (string) $config->host,
@@ -1147,7 +1318,8 @@ final readonly class SshJobCoordinator
         ];
     }
 
-    private function probe(User $user, Target $target, string $expectedTargetBinding, string $expectedCredentialDispatch): ?string
+    /** @param array<string,mixed> $observation */
+    private function probe(User $user, Target $target, string $expectedTargetBinding, string $expectedCredentialDispatch, Closure $gate, array &$observation): ?string
     {
         $command = 'command -v mkfifo >/dev/null && command -v head >/dev/null'
             .' && command -v wc >/dev/null && command -v rm >/dev/null'
@@ -1157,7 +1329,8 @@ final readonly class SshJobCoordinator
             .' && command -v systemd-run >/dev/null'
             .' && '.$this->managerEnvironment('user').'systemctl --user show-environment >/dev/null 2>&1'
             .' && printf user; fi';
-        $result = $this->safeCommand($user, $target, $command, 5, $expectedTargetBinding, $expectedCredentialDispatch);
+        $result = $this->safeCommand($user, $target, $command, 5, $expectedTargetBinding, $expectedCredentialDispatch, $gate);
+        $observation = $result;
         if (! $this->successful($result)) {
             return null;
         }
@@ -1178,17 +1351,59 @@ final readonly class SshJobCoordinator
             : '';
     }
 
-    /** @return array<string,mixed>|null */
+    /** @return array<string,mixed> */
     private function safeCommand(
         User $user, Target $target, string $command, int $seconds, ?string $expectedTargetBinding = null,
-        ?string $expectedCredentialDispatch = null,
-    ): ?array {
+        ?string $expectedCredentialDispatch = null, ?Closure $admitRemoteEffect = null,
+        ?SshJobRemoteIdentity $remote = null,
+    ): array {
         try {
-            return $this->commands->run($user, $target, $command, $seconds, $expectedTargetBinding,
-                expectedCredentialDispatch: $expectedCredentialDispatch);
-        } catch (Throwable) {
-            return null;
+            $result = $this->commands->run($user, $target, $remote?->command($command) ?? $command, $seconds,
+                $remote->binding ?? $expectedTargetBinding,
+                expectedCredentialDispatch: $remote->credentialDispatch ?? $expectedCredentialDispatch,
+                admitRemoteEffect: $admitRemoteEffect);
+            if ($remote !== null && ($result['exit_code'] ?? null) === 1
+                && trim((string) ($result['stderr'] ?? '')) === 'ssh_job_identity_unverified') {
+                return [...$result, 'error_code' => 'job_identity_unverified'];
+            }
+            if (($result['status'] ?? null) === 'outcome_unknown') {
+                return [...$result, 'error_code' => 'outcome_unknown'];
+            }
+            if (($result['exit_code'] ?? null) !== 0) {
+                return [...$result, 'error_code' => 'remote_exit_nonzero'];
+            }
+
+            return $result;
+        } catch (Throwable $exception) {
+            return $this->exceptionObservation($exception);
         }
+    }
+
+    /** @return array<string,mixed> */
+    private function exceptionObservation(Throwable $exception): array
+    {
+        return [
+            'status' => $exception instanceof SshTargetConnectionException ? 'failed' : 'outcome_unknown',
+            'error_code' => $exception instanceof SshTargetConnectionException ? $exception->reason : 'job_unavailable',
+            'diagnostics' => [
+                ...($exception instanceof SshTargetConnectionException ? $exception->diagnostics : []),
+                'exception_class' => $exception::class,
+            ],
+        ];
+    }
+
+    /** @param array<string,mixed> $result
+     * @return array<string,mixed>
+     */
+    private function commandDiagnostics(array $result): array
+    {
+        return [
+            ...($result['diagnostics'] ?? []),
+            ...isset($result['error_code']) ? ['provider_error_code' => $result['error_code'],
+                'source_error_code' => $result['diagnostics']['source_error_code'] ?? $result['error_code']] : [],
+            ...is_int($result['exit_code'] ?? null) ? ['remote_exit_code' => $result['exit_code']] : [],
+            ...($result['status'] ?? null) === 'outcome_unknown' ? ['effect_unconfirmed' => true] : [],
+        ];
     }
 
     /** @param array<string,mixed>|null $result */
@@ -1199,17 +1414,20 @@ final readonly class SshJobCoordinator
             && ($result['exit_code'] ?? null) === 0;
     }
 
-    private function exitCode(User $user, Target $target, string $id, string $expectedTargetBinding): ?int
+    private function exitCode(User $user, Target $target, string $id, SshJobRemoteIdentity $remote): ?int
     {
         try {
             $file = $this->files->read($user, $target, $this->directory($id).'/exit-code', 0, 8,
-                expectedTargetBinding: $expectedTargetBinding);
+                expectedTargetBinding: $remote->binding, expectedCredentialDispatch: $remote->credentialDispatch,
+                verifySource: $remote->sftpVerifier());
             $value = trim((string) base64_decode((string) $file['data'], true));
             if (preg_match('/^[0-9]{1,3}$/D', $value) === 1 && (int) $value <= 255) {
                 return (int) $value;
             }
-        } catch (Throwable) {
-            // A missing/partially-written marker is not completion evidence.
+        } catch (SshTargetConnectionException $exception) {
+            if (! $this->isMissingJobOutput($exception)) {
+                throw $exception;
+            }
         }
 
         return null;
@@ -1361,11 +1579,40 @@ final readonly class SshJobCoordinator
         ]);
     }
 
+    private function recoverStaleUnlaunched(?int $userId = null, ?string $jobId = null): int
+    {
+        $stamp = now();
+
+        return DB::table('ssh_command_jobs')->where('status', 'launch_unknown')
+            ->where('launch_admitted', false)->whereNotNull('admission_expires_at')
+            ->where('admission_expires_at', '<=', $stamp)
+            ->when($userId !== null, static fn ($q) => $q->where('user_id', $userId))
+            ->when($jobId !== null, static fn ($q) => $q->where('id', $jobId))
+            ->update([
+                'status' => 'failed', 'terminal_reason' => 'pre_launch_abandoned',
+                'expires_at' => $stamp->copy()->addHours($this->settings->sshJobLimits()['retention_hours']),
+                'updated_at' => $stamp,
+            ]);
+    }
+
     /** @return array<string,mixed> */
-    private function summary(?object $row): array
+    private function summary(?object $row, ?string $remoteReason = null, bool $remoteObserved = false): array
     {
         if ($row === null) {
             throw new SshTargetConnectionException('target_not_found');
+        }
+
+        $evidence = [];
+        if ($row->launch_observation_ciphertext !== null) {
+            try {
+                $observation = json_decode(Crypt::decryptString($row->launch_observation_ciphertext), true, 512, JSON_THROW_ON_ERROR);
+                $evidence = [
+                    'launch_error_code' => $observation['error_code'] ?? null,
+                    'launch_diagnostic_reference' => $observation['diagnostic_reference'] ?? null,
+                ];
+            } catch (Throwable) {
+                $evidence = ['launch_evidence_available' => false];
+            }
         }
 
         return [
@@ -1377,7 +1624,12 @@ final readonly class SshJobCoordinator
             'expires_at' => $row->expires_at,
             'complete' => in_array($row->status, ['completed', 'failed', 'canceled'], true),
             'retry_safe' => false,
-            'continuation_available' => ! in_array($row->status, ['unsupported', 'retired'], true),
+            'continuation_available' => $remoteReason === null && ! in_array($row->status, ['unsupported', 'retired'], true)
+                && ! ($this->terminal($row) && $row->launch_admitted !== null && ! (bool) $row->launch_admitted),
+            'launch_admitted' => $row->launch_admitted === null ? null : (bool) $row->launch_admitted,
+            'remote_observed' => $remoteObserved,
+            ...$evidence,
+            ...$remoteReason === null ? [] : ['remote_error_code' => $remoteReason],
         ];
     }
 
@@ -1393,9 +1645,9 @@ final readonly class SshJobCoordinator
 
     /** @param array<string,mixed> $observed */
     private function record(
-        Target $target, string $operation, string $outcome, ?string $code, array $observed = [],
+        Target $target, string $operation, string $outcome, ?string $code, array $observed = [], ?string $reference = null,
     ): void {
-        $this->activity->record(CorrelationId::current(), $operation, $outcome, $target, $code, [
+        $this->activity->record($reference ?? CorrelationId::current(), $operation, $outcome, $target, $code, [
             ...($outcome === 'unknown' ? [
                 'failure_origin' => 'unknown',
                 'failure_stage' => 'operation',

@@ -4,6 +4,6 @@ namespace App\Infrastructure\Connectors\SshDirect;
 
 interface SshDialAddressPolicy
 {
-    /** @return non-empty-list<string> */
+    /** @return list<string> Empty means no address is approved. */
     public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array;
 }

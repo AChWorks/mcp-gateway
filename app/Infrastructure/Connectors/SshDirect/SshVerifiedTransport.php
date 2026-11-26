@@ -131,8 +131,8 @@ final readonly class SshVerifiedTransport
 
         // One approved numeric connection attempt, no fallback after key
         // mismatch or loss of a specific reverse listener.
-        $ip = $approved[0];
-        if (@inet_pton($ip) === false) {
+        $ip = $approved[0] ?? null;
+        if (! is_string($ip) || @inet_pton($ip) === false) {
             throw new SshTargetConnectionException('egress_denied');
         }
         $address = 'tcp://'.(str_contains($ip, ':') ? '['.$ip.']' : $ip).':'.$dialPort;

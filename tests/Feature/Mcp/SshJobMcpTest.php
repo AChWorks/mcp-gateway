@@ -109,7 +109,7 @@ final class SshJobMcpTest extends TestCase
         // Nonterminal uncertain Jobs survive nominal expiration; expired
         // terminal evidence is excluded even before operator-side pruning.
         DB::table('ssh_command_jobs')->where('id', $ids[1])
-            ->update(['status' => 'launch_unknown', 'expires_at' => now()->subHour()]);
+            ->update(['status' => 'launch_unknown', 'launch_admitted' => null, 'expires_at' => now()->subHour()]);
         DB::table('ssh_command_jobs')->where('id', $ids[0])
             ->update(['status' => 'completed', 'exit_code' => 0,
                 'terminal_reason' => 'script_exit', 'expires_at' => now()->subHour()]);
@@ -161,14 +161,19 @@ final class SshJobMcpTest extends TestCase
         self::assertNotContains($foreignClient, array_column($all, 'job_id'));
 
         $target->forceFill(['operations_paused' => true])->save();
-        self::assertSame('target_paused', $tool->list($owner, $target->target_id, $client)['error']['code']);
+        self::assertSame([$newId, ...array_reverse(array_slice($ids, 1))],
+            array_column($tool->list($owner, $target->target_id, $client)['result']['jobs'], 'job_id'));
         $owner->forceFill(['access_enabled' => false])->save();
         self::assertSame('target_not_found', $tool->list($owner, $target->target_id, $client)['error']['code']);
         $owner->forceFill(['access_enabled' => true])->save();
         $target->forceFill(['operations_paused' => false])->save();
         DB::table('ssh_direct_target_configs')->where('target_record_id', $target->getKey())
             ->update(['username' => 'rotated-list-account']);
-        self::assertSame([], $tool->list($owner, $target->target_id, $client)['result']['jobs']);
+        $target->forceFill(['connection_state' => TargetConnectionState::Disconnected])->save();
+        self::assertSame([$newId, ...array_reverse(array_slice($ids, 1))],
+            array_column($tool->list($owner, $target->target_id, $client)['result']['jobs'], 'job_id'));
+        self::assertSame(array_reverse(array_slice($ids, 1, 2)),
+            array_column($tool->list($owner, $target->target_id, $client, cursor: $cursor, limit: 2)['result']['jobs'], 'job_id'));
     }
 
     public function test_job_authorization_remains_bound_to_user_client_target_and_config(): void
@@ -191,10 +196,48 @@ final class SshJobMcpTest extends TestCase
         self::assertSame('target_not_found',
             $tool->cancel($other, $target->target_id, $client, $id)['error']['code']);
 
+        DB::table('ssh_command_jobs')->where('id', $id)->update(['status' => 'running', 'launch_admitted' => true, 'unit_mode' => 'user']);
         DB::table('ssh_direct_target_configs')->where('target_record_id', $target->getKey())
             ->update(['username' => 'rotated-account']);
-        self::assertSame('target_not_found',
-            $tool->status($user, $target->target_id, $client, $id)['error']['code']);
+        $status = $tool->status($user, $target->target_id, $client, $id);
+        self::assertSame('target_changed', $status['error']['code']);
+        self::assertSame($id, $status['result']['job_id']);
+        self::assertSame('running', $status['result']['status']);
+        self::assertFalse($status['result']['remote_observed']);
+        self::assertSame('target_changed', $tool->output($user, $target->target_id, $client, $id)['error']['code']);
+    }
+
+    public function test_history_recovery_needs_current_command_scope_but_not_new_launch_grants_or_old_route(): void
+    {
+        $user = $this->user('operator');
+        $target = $this->target();
+        $client = hash('sha256', 'history-recovery');
+        $request = (string) Str::uuid();
+        $tool = app(SshJobMcpToolHandlers::class);
+        $first = $tool->start($user, $target->target_id, $client, $request, 'echo original');
+        $id = $first['result']['job_id'];
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $user->getKey(), 'target_record_id' => $target->getKey(),
+            'permission' => GatewayPermission::SshFileWrite->value, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $target->forceFill(['operations_paused' => true, 'connection_state' => TargetConnectionState::Disconnected])->save();
+        $duplicate = $tool->start($user, $target->target_id, $client, $request, 'echo original');
+        self::assertSame($id, $duplicate['result']['job_id']);
+        self::assertSame(1, DB::table('ssh_command_jobs')->count());
+        self::assertSame('invalid_input', $tool->start($user, $target->target_id, $client, $request, 'echo changed')['error']['code']);
+        self::assertSame($id, $tool->list($user, $target->target_id, $client)['result']['jobs'][0]['job_id']);
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $user->getKey(), 'target_record_id' => $target->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        self::assertSame('target_not_found', $tool->start($user, $target->target_id, $client, $request, 'echo original')['error']['code']);
+        self::assertSame('target_not_found', $tool->list($user, $target->target_id, $client)['error']['code']);
+        $recordId = $target->getKey();
+        $target->delete();
+        $replacement = $this->target();
+        self::assertNotSame($recordId, $replacement->getKey());
+        self::assertSame([], $tool->list($user, $replacement->target_id, $client)['result']['jobs']);
+        self::assertSame('target_not_found', $tool->status($user, $replacement->target_id, $client, $id)['error']['code']);
     }
 
     public function test_paused_target_verifies_job_handle_before_emitting_diagnostic_activity(): void
@@ -215,6 +258,7 @@ final class SshJobMcpTest extends TestCase
         $otherClientId = $jobs->start(
             $owner, $target->target_id, $otherClient, (string) Str::uuid(), 'echo other-client',
         )['result']['job_id'];
+        DB::table('ssh_command_jobs')->where('id', $ownedId)->update(['status' => 'running', 'launch_admitted' => true, 'unit_mode' => 'user']);
         $target->forceFill(['operations_paused' => true])->save();
 
         $before = DB::table('activity_events')->count();
@@ -281,6 +325,7 @@ final class SshJobMcpTest extends TestCase
         );
         self::assertSame('unsupported', $created['result']['status']);
         $jobId = $created['result']['job_id'];
+        DB::table('ssh_command_jobs')->where('id', $jobId)->update(['status' => 'running', 'launch_admitted' => true, 'unit_mode' => 'user']);
         $target->forceFill(['operations_paused' => true])->save();
 
         $first = $handler->status($operator, $target->target_id, $client, $jobId);
@@ -467,10 +512,12 @@ final class SshJobMcpTest extends TestCase
         $client = hash('sha256', 'job-diagnostic-client');
         $jobs = app(SshJobMcpToolHandlers::class);
         // The synthetic host declines all outbound SSH, but its durable
-        // unsupported handle is sufficient for a bounded read admission test.
+        // unsupported handle is promoted to a simulated previously admitted
+        // Job to exercise the remote read admission boundary.
         $created = $jobs->start($owner, $target->target_id, $client, (string) Str::uuid(), 'echo no-send');
         self::assertSame('unsupported', $created['result']['status']);
         $jobId = $created['result']['job_id'];
+        DB::table('ssh_command_jobs')->where('id', $jobId)->update(['status' => 'running', 'launch_admitted' => true, 'unit_mode' => 'user']);
         $rateKey = 'ssh-file:'.hash('sha256', (string) $target->getKey()).':rate';
         RateLimiter::clear($rateKey);
         for ($i = 0; $i < 30; $i++) {
@@ -599,6 +646,7 @@ final class SshJobMcpTest extends TestCase
 
         DB::table('ssh_command_jobs')->where('id', $id)->update([
             'status' => 'launch_unknown',
+            'launch_admitted' => null,
             'unit_mode' => 'user',
             'expires_at' => now()->subDay(),
         ]);
@@ -606,10 +654,14 @@ final class SshJobMcpTest extends TestCase
         self::assertSame($id, $tool->start(
             $owner, $target->target_id, $client, $requestId, $script,
         )['result']['job_id']);
-        self::assertSame('launch_unknown',
-            $tool->status($owner, $target->target_id, $client, $id)['result']['status']);
+        $status = $tool->status($owner, $target->target_id, $client, $id);
+        self::assertSame('egress_denied', $status['error']['code']);
+        self::assertSame('launch_unknown', $status['result']['status']);
+        self::assertNull($status['result']['launch_admitted']);
+        self::assertFalse($status['result']['remote_observed']);
         $cancel = $tool->cancel($owner, $target->target_id, $client, $id);
-        self::assertTrue($cancel['ok']);
+        self::assertFalse($cancel['ok']);
+        self::assertSame('egress_denied', $cancel['error']['code']);
         self::assertSame('cancel_requested', $cancel['result']['status']);
         self::assertFalse($cancel['result']['complete']);
         // The remote unit was uncontactable: a stop was not verified.

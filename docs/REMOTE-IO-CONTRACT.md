@@ -40,7 +40,7 @@ Streaming is not synonymous with unbounded work: use bounded buffers, enforce ag
 | Small JSON/UTF-8 | one complete bounded reply | typed oversize/unsupported or **source-implemented** pagination; never truncate malformed JSON and claim success |
 | Structured collection/tree | projection, filtered subset, bounded page | stable cursor/subtree selection **only if Target implements it**; no invented continuation |
 | One-off SSH command | finite separated stdout/stderr preview, nullable exit, truncation flags | truncated output is not retrievable unless actual remote file/result storage exists; never rerun effectful commands to fetch “the rest” |
-| Retained SSH Job | stable job identity, actual state, bounded output windows | resume reading stored output by offset only while original binding and retention remain valid; cancellation requests are not proof of stop |
+| Retained SSH Job | stable job identity, actual state, bounded output windows | read retained metadata independent of current route; resume stored output by offset with current permission and verified original artifact identity; cancellation requests are not proof of stop |
 | Binary/document/media | explicitly discovered, permission-filtered file mode, byte count/digest | genuine ranged/streamed/direct data path with consistency and endpoint validation, not a model-facing handle masquerading as bytes |
 | Multi-Target action | one record per selected authorized Target and operation | partial success and per-Target unknown outcomes; not an atomic all-or-nothing transaction |
 

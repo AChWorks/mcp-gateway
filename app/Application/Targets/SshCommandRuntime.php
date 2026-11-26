@@ -105,10 +105,10 @@ final readonly class SshCommandRuntime
             $relay = $this->relayRoutes->sshRouteForTarget($fresh);
             $started = microtime(true);
 
-            $dispatch = static function () use ($guard, $admitRemoteEffect): void {
+            $dispatch = static function (string $phase) use ($guard, $admitRemoteEffect): void {
                 if ($admitRemoteEffect === null) {
                     $guard();
-                } elseif (! $admitRemoteEffect($guard)) {
+                } elseif (! $admitRemoteEffect($guard, $phase)) {
                     throw new SshTargetConnectionException('authorization_revoked');
                 }
             };
@@ -121,7 +121,7 @@ final readonly class SshCommandRuntime
                 ): array {
                     return $this->executeOnce($ssh, $command, $timeoutSeconds, $peerIp, $config, $started, $fresh->transportKind(), $dispatch);
                 },
-                $route, $relay, $dispatch,
+                $route, $relay, static fn () => $dispatch('login'),
             );
         }, $timeoutSeconds);
     }
@@ -146,7 +146,7 @@ final readonly class SshCommandRuntime
         $unknown = false;
         $exit = null;
         $ssh->disableQuietMode();
-        $dispatch();
+        $dispatch('command');
         $deadline = new SshCommandExecutionDeadline($timeoutSeconds);
         $ssh->setTimeout($deadline->remainingSocketSeconds());
         try {

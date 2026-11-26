@@ -167,6 +167,7 @@ final readonly class SshFileRuntime
         User $user, Target $target, string $path, int $offset = 0, int $length = 16384,
         ?int $expectedSize = null, ?int $expectedMtime = null,
         ?string $expectedTargetBinding = null,
+        ?string $expectedCredentialDispatch = null, ?Closure $verifySource = null,
     ): array {
         $this->validatePath($path);
         $maxReadBytes = $this->settings->sshFileLimits()['read_bytes'];
@@ -183,10 +184,14 @@ final readonly class SshFileRuntime
 
         return $this->operate($user, $target, GatewayPermission::SshFileRead,
             function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $_assertWriteAuthority, string $routeMode) use (
-                $path, $offset, $length, $expectedSize, $expectedMtime,
+                $path, $offset, $length, $expectedSize, $expectedMtime, $verifySource,
             ): array {
                 $sftp->disableStatCache();
                 try {
+                    if ($verifySource !== null) {
+                        $verifySource($sftp);
+                        $_assertWriteAuthority();
+                    }
                     $before = $this->stableRegularFile($sftp, $path);
                     $this->requireVersion($before, $expectedSize, $expectedMtime);
                     $bytesToRead = max(0, min($length, $before['size'] - $offset));
@@ -217,7 +222,7 @@ final readonly class SshFileRuntime
                     'complete' => true,
                     'source_check' => 'size_mtime_best_effort',
                 ];
-            }, expectedTargetBinding: $expectedTargetBinding);
+            }, expectedTargetBinding: $expectedTargetBinding, expectedCredentialDispatch: $expectedCredentialDispatch);
     }
 
     /**
@@ -287,7 +292,7 @@ final readonly class SshFileRuntime
         User $user, Target $target, string $path, string $contentBase64,
         bool $overwrite = false, ?int $expectedSize = null, ?int $expectedMtime = null,
         ?string $expectedTargetBinding = null, bool $preserveOriginalOwner = false,
-        ?string $expectedCredentialDispatch = null,
+        ?string $expectedCredentialDispatch = null, ?Closure $admitRemoteEffect = null,
     ): array {
         $this->validatePath($path);
         if ($path === '/' || str_ends_with($path, '/')
@@ -569,7 +574,7 @@ final readonly class SshFileRuntime
                     'publish_method' => $overwrite ? 'posix_replace' : 'exclusive_hardlink',
                     'overwrote' => $overwrite,
                 ];
-            }, expectedTargetBinding: $expectedTargetBinding, expectedCredentialDispatch: $expectedCredentialDispatch);
+            }, expectedTargetBinding: $expectedTargetBinding, expectedCredentialDispatch: $expectedCredentialDispatch, admitRemoteEffect: $admitRemoteEffect);
     }
 
     /** @param Closure(SFTP,string,SshTargetConfig,Closure():void,string):array<string,mixed> $operation
@@ -579,6 +584,7 @@ final readonly class SshFileRuntime
         User $user, Target $target, GatewayPermission $permission,
         Closure $operation, ?int $deadlineNs = null, ?string $expectedTargetBinding = null,
         ?string $expectedCredentialDispatch = null, ?string $expectedExecution = null,
+        ?Closure $admitRemoteEffect = null,
     ): array {
         // This is an end-to-end budget, including admission and credential
         // lookups, not a fresh timeout for each SFTP packet or path operation.
@@ -595,7 +601,7 @@ final readonly class SshFileRuntime
         }
 
         return $this->admission->run((string) $target->getKey(), function () use (
-            $context, $user, $target, $permission, $operation, $deadlineNs, $expectedTargetBinding, $expectedCredentialDispatch, $expectedExecution,
+            $context, $user, $target, $permission, $operation, $deadlineNs, $expectedTargetBinding, $expectedCredentialDispatch, $expectedExecution, $admitRemoteEffect,
         ): array {
             $this->ensureFileDeadline($deadlineNs);
             $fresh = Target::query()->whereKey($target->getKey())->first();
@@ -637,6 +643,14 @@ final readonly class SshFileRuntime
             }
 
             $guard = $this->executionAdmission->guard($context, $user, $fresh, $permission, $config, $credential);
+            if ($admitRemoteEffect !== null) {
+                $nativeGuard = $guard;
+                $guard = static function () use ($nativeGuard, $admitRemoteEffect): void {
+                    if (! $admitRemoteEffect($nativeGuard, 'file')) {
+                        throw new SshTargetConnectionException('job_attempt_retired');
+                    }
+                };
+            }
             $route = $this->reverseRoutes->forTarget($fresh);
             $relay = $this->relayRoutes->sshRouteForTarget($fresh);
             $this->ensureFileDeadline($deadlineNs);
@@ -777,6 +791,7 @@ final readonly class SshFileRuntime
                     'gateway_error_message' => 'SFTP write failed during staging: '.$exception->reason,
                 ];
             }
+            $details['provider_error_code'] = $exception->reason;
         } else {
             $details = $this->unexpectedSftpFailure($exception)->diagnostics;
         }

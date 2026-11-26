@@ -2,10 +2,13 @@
 
 namespace Tests\Feature\Mcp;
 
+use App\Application\Access\AccessControl;
 use App\Application\Mcp\SshJobMcpToolHandlers;
 use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshJobCoordinator;
+use App\Application\Targets\SshJobLaunchAdmission;
+use App\Application\Targets\SshJobRemoteIdentity;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetReconfiguration;
 use App\Application\Targets\SshTargetRegistration;
@@ -177,12 +180,16 @@ final class SshJobLifecycleRecoveryTest extends TestCase
     public function test_prune_persistent_cursor_advances_past_more_than_200_deleted_target_rows(): void
     {
         [$user, $target, $client] = $this->fixture();
-        $result = app(SshJobMcpToolHandlers::class)->start(
-            $user, $target->target_id, $client, (string) Str::uuid(), 'echo identity',
-        );
-        $source = (array) DB::table('ssh_command_jobs')
-            ->where('id', $result['result']['job_id'])->first();
-        DB::table('ssh_command_jobs')->where('id', $source['id'])->delete();
+        // Cursor maintenance needs retained rows, not a remote launch.
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->sole();
+        $source = [
+            'target_record_id' => $target->getKey(), 'user_id' => $user->getKey(),
+            'original_user_id' => $user->getKey(), 'original_target_record_id' => $target->getKey(),
+            'client_identity_hash' => $client, 'script_digest' => hash('sha256', 'fixture-script'),
+            'target_binding_hash' => SshTargetBinding::hash($target, $config),
+            'runtime_seconds' => 30, 'launch_admitted' => null,
+            'created_at' => now()->toDateTimeString(), 'updated_at' => now()->toDateTimeString(),
+        ];
 
         $blocked = [];
         for ($i = 0; $i < 275; $i++) {
@@ -233,7 +240,7 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         );
         $id = $result['result']['job_id'];
         DB::table('ssh_command_jobs')->where('id', $id)->update([
-            'status' => 'launch_unknown', 'unit_mode' => 'user',
+            'status' => 'launch_unknown', 'unit_mode' => 'user', 'launch_admitted' => null,
             'updated_at' => now()->subHour(),
             'admission_expires_at' => now()->subHour(),
             'expires_at' => now()->subDay(),
@@ -318,7 +325,7 @@ final class SshJobLifecycleRecoveryTest extends TestCase
             $id = $tools->start($user, $target->target_id, $client,
                 $requestId, 'echo keep')['result']['job_id'];
             DB::table('ssh_command_jobs')->where('id', $id)->update([
-                'status' => $state, 'unit_mode' => 'user',
+                'status' => $state, 'unit_mode' => 'user', 'launch_admitted' => true,
                 'admission_expires_at' => now()->subMinute(),
                 'expires_at' => now()->subDay(),
             ]);
@@ -464,8 +471,10 @@ final class SshJobLifecycleRecoveryTest extends TestCase
             // journal entry; no command has ever been remotely dispatched.
             self::assertSame($id, $tool->start($user, $target->target_id, $client,
                 $requestId, 'echo never-relaunch', 16)['result']['job_id']);
-            self::assertSame('launch_unknown',
+            self::assertSame('failed',
                 DB::table('ssh_command_jobs')->where('id', $id)->value('status'));
+            self::assertSame('pre_launch_abandoned',
+                DB::table('ssh_command_jobs')->where('id', $id)->value('terminal_reason'));
         } finally {
             Carbon::setTestNow();
         }
@@ -726,14 +735,84 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         self::assertNull($journal->terminal_reason);
         self::assertNull($journal->exit_code);
         self::assertSame($binding, $journal->target_binding_hash);
-        self::assertSame('target_paused', $tools->start(
+        self::assertSame($id, $tools->start(
             $user, $target->target_id, $client, $requestId, $script,
+        )['result']['job_id']);
+        self::assertSame('target_paused', $tools->start(
+            $user, $target->target_id, $client, (string) Str::uuid(), $script,
         )['error']['code']);
-        self::assertSame('target_paused', $tools->status(
-            $user, $target->target_id, $client, $id,
-        )['error']['code']);
+        $status = $tools->status($user, $target->target_id, $client, $id);
+        self::assertSame('launch_unknown', $status['result']['status']);
+        self::assertFalse($status['result']['launch_admitted']);
+        self::assertFalse($status['result']['remote_observed']);
         self::assertSame(1, DB::table('ssh_command_jobs')->count(), 'An old Job must not be relaunched or erased.');
         self::assertSame('launch_unknown', DB::table('ssh_command_jobs')->where('id', $id)->value('status'));
+    }
+
+    public function test_final_job_admission_rechecks_lease_and_cancellation_and_never_replays(): void
+    {
+        [$user, $target, $client] = $this->fixture();
+        $tools = app(SshJobMcpToolHandlers::class);
+        $id = $tools->start($user, $target->target_id, $client, (string) Str::uuid(), 'echo never-replay')['result']['job_id'];
+        $job = DB::table('ssh_command_jobs')->where('id', $id);
+        $job->update(['status' => 'launch_unknown', 'unit_mode' => 'user', 'launch_admitted' => false,
+            'admission_expires_at' => now()->addMinute(), 'launch_observation_ciphertext' => null]);
+        $gate = (new SshJobLaunchAdmission(app(AccessControl::class), $id, (int) $user->getKey(), (string) $target->getKey()))->stage('launch');
+        self::assertTrue($gate(static function (): void {}, 'login'));
+        self::assertFalse((bool) $job->value('launch_admitted'));
+        try {
+            $gate(static function (): void {
+                Carbon::setTestNow(now()->addMinutes(2));
+            }, 'command');
+            self::fail('Lease must be checked after native verifier.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('dispatch_lease_expired', $exception->reason);
+            self::assertFalse((bool) $job->value('launch_admitted'));
+        } finally {
+            Carbon::setTestNow();
+        }
+        $cancel = $tools->cancel($user, $target->target_id, $client, $id);
+        self::assertSame('canceled', $cancel['result']['status']);
+        self::assertSame('pre_launch_canceled', $cancel['result']['terminal_reason']);
+        self::assertFalse($cancel['result']['launch_admitted']);
+        self::assertFalse($tools->output($user, $target->target_id, $client, $id)['result']['available']);
+        try {
+            $gate(static function (): void {}, 'command');
+            self::fail('Canceled attempt must not admit a command.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('job_attempt_retired', $exception->reason);
+        }
+        $job->update(['status' => 'launch_unknown', 'terminal_reason' => null, 'admission_expires_at' => now()->addMinute()]);
+        self::assertTrue($gate(static function (): void {}, 'command'));
+        self::assertTrue((bool) $job->value('launch_admitted'));
+        try {
+            $gate(static function (): void {}, 'command');
+            self::fail('A second launch command must never be admitted.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('job_attempt_retired', $exception->reason);
+        }
+        $cancel = $tools->cancel($user, $target->target_id, $client, $id);
+        self::assertSame('cancel_requested', $cancel['result']['status']);
+        self::assertTrue($cancel['result']['launch_admitted']);
+        $late = (new \ReflectionMethod(SshJobCoordinator::class, 'settleLaunch'))
+            ->invoke(app(SshJobCoordinator::class), $target, $id, 'launch', ['status' => 'completed', 'exit_code' => 0]);
+        self::assertSame('cancel_requested', $late['status']);
+        self::assertNotNull($job->value('launch_observation_ciphertext'));
+        self::assertFalse($late['retry_safe']);
+    }
+
+    public function test_artifact_identity_is_independent_of_route_and_login_material_but_not_peer_or_account(): void
+    {
+        [$user, $target, $client] = $this->fixture();
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->sole();
+        $original = SshJobRemoteIdentity::peerFingerprint($target, $config);
+        $config->forceFill(['host' => 'another-alias.example.test', 'port' => 2222, 'auth_method' => 'private_key', 'binding_revision' => 9]);
+        self::assertSame($original, SshJobRemoteIdentity::peerFingerprint($target, $config));
+        $config->forceFill(['username' => 'another-user']);
+        self::assertNotSame($original, SshJobRemoteIdentity::peerFingerprint($target, $config));
+        $config->refresh();
+        $config->forceFill(['pinned_host_key' => 'another-key']);
+        self::assertNotSame($original, SshJobRemoteIdentity::peerFingerprint($target, $config));
     }
 
     public function test_same_endpoint_credential_rotation_fences_new_job_stages_without_changing_peer_identity(): void
@@ -911,8 +990,12 @@ final class SshJobLifecycleRecoveryTest extends TestCase
             DB::table('ssh_command_jobs')->where('id', $id)->value('target_binding_hash'));
         self::assertSame('launch_unknown',
             DB::table('ssh_command_jobs')->where('id', $id)->value('status'));
-        self::assertSame('target_not_found',
-            $tool->status($user, $target->target_id, $client, $id)['error']['code']);
+        DB::table('ssh_command_jobs')->where('id', $id)->update(['launch_admitted' => true]);
+        $status = $tool->status($user, $target->target_id, $client, $id);
+        self::assertSame('target_changed', $status['error']['code']);
+        self::assertSame($id, $status['result']['job_id']);
+        self::assertFalse($status['result']['remote_observed']);
+        self::assertSame(0, $spy->attempts);
     }
 
     /** @return array{0:User,1:Target,2:string} */

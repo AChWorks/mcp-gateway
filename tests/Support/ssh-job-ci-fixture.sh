@@ -57,6 +57,10 @@ php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
 php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
   --filter=test_job_refuses_script_publication_after_credential_rotation_and_reverification
 
+# Expire a real Job at its final native connection boundary, after reservation.
+php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
+  --filter=test_final_launch_lease_expiry_after_reservation_fences_real_systemd_exec
+
 sudo loginctl disable-linger "$user"
 # The guard must reject new detached work while the user manager may linger
 # briefly from its last session; don't assume the bus vanishes immediately.
