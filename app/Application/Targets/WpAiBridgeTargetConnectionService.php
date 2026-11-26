@@ -27,8 +27,6 @@ use RuntimeException;
 
 final readonly class WpAiBridgeTargetConnectionService
 {
-    private const PURPOSE = 'wordpress_oauth';
-
     // A confirmed pre-rotation Bridge client-auth failure can be retried on a
     // later request/cron tick; never spin or use the one-shot response recovery.
     private const CLIENT_AUTH_RETRY_BACKOFF_SECONDS = 60;
@@ -256,7 +254,7 @@ final readonly class WpAiBridgeTargetConnectionService
             $credential = TargetCredential::query()->create([
                 'target_record_id' => $locked->getKey(),
                 'connector_type' => 'wp_ai_bridge',
-                'purpose' => self::PURPOSE,
+                'purpose' => WpAiBridgeTargetVault::PURPOSE,
                 'encrypted_payload' => $encrypted,
             ]);
             DB::table('wp_ai_bridge_credential_metadata')->insert([
@@ -1425,7 +1423,7 @@ final readonly class WpAiBridgeTargetConnectionService
         return TargetCredential::query()
             ->where('target_record_id', $target->getKey())
             ->where('connector_type', 'wp_ai_bridge')
-            ->where('purpose', self::PURPOSE)->first();
+            ->where('purpose', WpAiBridgeTargetVault::PURPOSE)->first();
     }
 
     private function configuration(string $targetRecordId): object

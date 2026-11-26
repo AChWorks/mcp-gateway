@@ -157,7 +157,7 @@ final readonly class ArvanApiOperations
             || ! $currentConfig instanceof ArvanApiTargetConfig
             || ! $currentCredential instanceof TargetCredential
             || ! hash_equals($currentConfig->base_url, $config->base_url)
-            || ! hash_equals((string) $currentCredential->encrypted_payload, (string) $credential->encrypted_payload)) {
+            || ! hash_equals($currentCredential->dispatchFingerprint(), $credential->dispatchFingerprint())) {
             return $this->failed($operation, $target, 'forbidden');
         }
 

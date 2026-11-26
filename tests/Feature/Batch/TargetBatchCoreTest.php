@@ -20,6 +20,8 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
+use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
+use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\OAuthAuthorizationStore;
@@ -532,6 +534,84 @@ final class TargetBatchCoreTest extends TestCase
         self::assertSame('failed', app(TargetBatchCoordinator::class)->status($user, $origin, $id)['status']);
     }
 
+    public function test_same_grant_reseal_preserves_queued_work_but_superseded_grant_fences_it(): void
+    {
+        $user = $this->owner();
+        [$target] = $this->targets(1);
+        $origin = $this->web($user);
+        $config = $target->sshConfig;
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
+        $vault = app(SshTargetVault::class);
+        $binding = app(TargetBatchBinding::class);
+        $worker = app(TargetBatchWorker::class);
+        $peer = SshTargetBinding::peerFingerprint($target, $config);
+        $route = $target->transportAuthorityFingerprint();
+        $grant = $credential->authorityFingerprint();
+        $material = $credential->materialFingerprint();
+        $dispatch = $credential->dispatchFingerprint();
+        $original = $binding->hash($target);
+        self::assertIsString($original);
+        $history = $this->create($user, $origin, [$target]);
+        $secret = $vault->open($target, $config, $credential);
+        DB::transaction(function () use ($target, $credential, $vault, $config, $secret): void {
+            Target::query()->whereKey($target->getKey())->lockForUpdate()->sole();
+            $credential->forceFill(['encrypted_payload' => $vault->seal($target, $config, $secret['secret'], $secret['passphrase'])])->save();
+        });
+        self::assertSame($grant, $credential->authorityFingerprint());
+        self::assertNotSame($material, $credential->materialFingerprint());
+        self::assertNotSame($dispatch, $credential->dispatchFingerprint());
+        self::assertSame($original, $binding->hash($target->fresh()));
+        self::assertSame('completed', $worker->workOnce()['status']);
+        $evidence = (array) DB::table('target_batch_items')->where('batch_id', $history)->sole();
+        $old = $this->create($user, $origin, [$target->fresh()]);
+        $material = $credential->materialFingerprint();
+        $dispatch = $credential->dispatchFingerprint();
+        DB::transaction(function () use ($target, $credential): void {
+            Target::query()->whereKey($target->getKey())->lockForUpdate()->sole();
+            $credential->supersedeAuthority();
+        });
+        $fresh = $target->fresh();
+        self::assertSame($peer, SshTargetBinding::peerFingerprint($fresh, $fresh->sshConfig));
+        self::assertSame($route, $fresh->transportAuthorityFingerprint());
+        self::assertSame($material, $credential->materialFingerprint());
+        self::assertNotSame($grant, $credential->authorityFingerprint());
+        self::assertNotSame($dispatch, $credential->dispatchFingerprint());
+        self::assertNotSame($original, $binding->hash($fresh));
+        $blocked = $worker->workOnce();
+        self::assertSame('blocked', $blocked['status']);
+        self::assertSame('authorization_revoked', $blocked['error_code']);
+        self::assertSame('blocked', app(TargetBatchCoordinator::class)->status($user, $origin, $old)['items'][0]['status']);
+        self::assertSame([$target->target_id], $this->fake->effects);
+        $new = $this->create($user, $origin, [$fresh]);
+        self::assertSame('completed', $worker->workOnce()['status']);
+        self::assertSame('completed', app(TargetBatchCoordinator::class)->status($user, $origin, $new)['items'][0]['status']);
+        self::assertSame($evidence, (array) DB::table('target_batch_items')->where('batch_id', $history)->sole());
+    }
+
+    public function test_reused_target_slug_never_revives_old_batch_authority(): void
+    {
+        $user = $this->owner();
+        [$old] = $this->targets(1);
+        $origin = $this->web($user);
+        $oldBinding = app(TargetBatchBinding::class)->hash($old);
+        $id = $this->create($user, $origin, [$old]);
+        // Construct the already-recreated identity state directly; deletion
+        // policy is tested separately. A journal must never use a public
+        // slug to substitute another immutable Target record.
+        $old->delete();
+        [$replacement] = $this->targets(1);
+        self::assertSame($old->target_id, $replacement->target_id);
+        self::assertNotSame($old->getKey(), $replacement->getKey());
+        self::assertNotSame($oldBinding, app(TargetBatchBinding::class)->hash($replacement));
+        $worker = app(TargetBatchWorker::class);
+        self::assertSame('blocked', $worker->workOnce()['status']);
+        self::assertSame([], $this->fake->effects);
+        self::assertSame('blocked', DB::table('target_batch_items')->where('batch_id', $id)->value('status'));
+        $this->create($user, $origin, [$replacement]);
+        self::assertSame('completed', $worker->workOnce()['status']);
+        self::assertSame([$replacement->target_id], $this->fake->effects);
+    }
+
     public function test_relay_disabled_interval_preview_and_queued_work_cannot_cross_restored_authority(): void
     {
         $user = $this->owner();
@@ -555,6 +635,9 @@ final class TargetBatchCoreTest extends TestCase
         $epoch = $target->transport_revision;
         $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
         $cipher = $credential->encrypted_payload;
+        $grant = $credential->authorityFingerprint();
+        $peer = SshTargetBinding::peerFingerprint($target, $target->sshConfig);
+        $route = $target->transportAuthorityFingerprint();
         $origin = $this->web($user);
         $core = app(TargetBatchCoordinator::class);
         $worker = app(TargetBatchWorker::class);
@@ -596,6 +679,9 @@ final class TargetBatchCoreTest extends TestCase
         self::assertSame(5, $relay->fresh()->lifecycle_revision);
         self::assertSame($epoch + 2, $target->fresh()->transport_revision);
         self::assertSame($cipher, $credential->fresh()->encrypted_payload);
+        self::assertSame($grant, $credential->fresh()->authorityFingerprint());
+        self::assertSame($peer, SshTargetBinding::peerFingerprint($fresh, $fresh->sshConfig));
+        self::assertNotSame($route, $fresh->transportAuthorityFingerprint());
         self::assertSame($otherHash, app(TargetBatchBinding::class)->hash($other->fresh()));
         $verification->failed($disabled, $config, $credential, $attempt, 'tcp_unreachable');
         try {

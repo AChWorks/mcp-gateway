@@ -207,7 +207,7 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
         $id = $target->getKey();
         $credential = TargetCredential::query()
             ->where('target_record_id', $id)->where('connector_type', $this->type())
-            ->where('purpose', 'wordpress_oauth')->first(['id']);
+            ->where('purpose', WpAiBridgeTargetVault::PURPOSE)->first(['id']);
 
         return [
             'wpConfig' => WpAiBridgeTargetConfig::query()->where('target_record_id', $id)->first(),

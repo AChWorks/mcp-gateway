@@ -6,6 +6,7 @@ use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -42,7 +43,7 @@ final class MaintainWordpressTargetCredentials extends Command
                 ->where('targets.connector_type', 'wp_ai_bridge')
                 ->where('targets.connection_state', TargetConnectionState::Connected->value)
                 ->where('credentials.connector_type', 'wp_ai_bridge')
-                ->where('credentials.purpose', 'wordpress_oauth')
+                ->where('credentials.purpose', WpAiBridgeTargetVault::PURPOSE)
                 ->whereNotNull('metadata.refresh_due_at')
                 ->where('metadata.refresh_due_at', '<=', now())
                 ->whereNotExists(static function ($q): void {

@@ -10,6 +10,7 @@ use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\WpAiBridge\BridgeDiscoveryException;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeDiscovery;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\OutboundTargetPolicy;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
@@ -175,7 +176,7 @@ final readonly class WpAiBridgeTargetReconfiguration
     private function credential(Target $target, bool $lock = false): ?TargetCredential
     {
         $query = TargetCredential::query()->where('target_record_id', $target->getKey())
-            ->where('connector_type', 'wp_ai_bridge');
+            ->where('connector_type', 'wp_ai_bridge')->where('purpose', WpAiBridgeTargetVault::PURPOSE);
 
         return ($lock ? $query->lockForUpdate() : $query)->first();
     }

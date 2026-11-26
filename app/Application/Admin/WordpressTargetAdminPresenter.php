@@ -5,6 +5,7 @@ namespace App\Application\Admin;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use Illuminate\Support\Facades\DB;
 
 final class WordpressTargetAdminPresenter implements TargetConnectorAdminPresenter
@@ -39,7 +40,7 @@ final class WordpressTargetAdminPresenter implements TargetConnectorAdminPresent
             ->get(['target_record_id', 'metadata_checked_at', 'metadata_reachable'])->keyBy('target_record_id');
         $credentialIds = TargetCredential::query()
             ->whereIn('target_record_id', $ids)->where('connector_type', 'wp_ai_bridge')
-            ->where('purpose', 'wordpress_oauth')->pluck('target_record_id')->all();
+            ->where('purpose', WpAiBridgeTargetVault::PURPOSE)->pluck('target_record_id')->all();
         $result = [];
         foreach ($targets as $target) {
             $hasCredential = in_array((string) $target->getKey(), $credentialIds, true);

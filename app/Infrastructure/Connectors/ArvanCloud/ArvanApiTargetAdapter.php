@@ -363,8 +363,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                     || $config->probe_path !== $currentConfig->probe_path
                     || $config->spec_url !== $currentConfig->spec_url
                     || ! $currentCredential instanceof TargetCredential
-                    || ! hash_equals((string) $credential->getKey(), (string) $currentCredential->getKey())
-                    || ! hash_equals((string) $credential->encrypted_payload, (string) $currentCredential->encrypted_payload)) {
+                    || ! hash_equals($credential->dispatchFingerprint(), $currentCredential->dispatchFingerprint())) {
                     throw new TargetConnectorFailure(
                         __('The API configuration, route or key changed during the probe. Reload and verify the current credentials.'),
                         null, 'probe_stale',

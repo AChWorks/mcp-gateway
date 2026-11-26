@@ -76,10 +76,7 @@ final class SshTargetVault
     {
         $pin = SshHostKeyPin::fromLine($config->pinned_host_key);
 
-        $parts = [
-            (string) $target->getKey(), $target->target_id, $config->host,
-            (string) $config->port, $config->username, $config->auth_method, $pin->canonicalLine(),
-        ];
+        $parts = SshTargetBinding::endpointParts($target, $config, $pin->canonicalLine());
 
         // Login ownership is bound to the actual endpoint, account and
         // verified host key, never to a Gateway transport or a job epoch.

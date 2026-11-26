@@ -62,6 +62,12 @@ final class TargetCredential extends Model
         return hash('sha256', (string) $this->getKey()."\0".(string) $this->authority_revision);
     }
 
+    /** Exact authority AND material used for a new authenticated dispatch. */
+    public function dispatchFingerprint(): string
+    {
+        return hash('sha256', $this->authorityFingerprint()."\0".$this->materialFingerprint());
+    }
+
     /**
      * Supersede new-work authority on explicit replacement or local revoke
      * intent. Call under the existing Target mutation lock. Do not use for

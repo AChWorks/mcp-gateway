@@ -143,8 +143,20 @@ final class TargetTransportMigrationTest extends TestCase
         self::assertSame($converted, DB::table('target_credentials')->where('id', $record['credential'])->value('encrypted_payload'));
         (require database_path('migrations/0001_01_01_000005_move_reverse_to_target_transport.php'))->up();
 
-        $current = app(TargetBatchBinding::class)->hash(Target::query()->findOrFail($record['id']));
-        self::assertSame($current, $convertedHash);
+        $target = Target::query()->findOrFail($record['id']);
+        $p0 = hash('sha256', implode("\0", [
+            $record['id'], $target->target_id, 'ssh_direct', '', (string) $target->transport_revision,
+            SshTargetBinding::hash($target, $target->sshConfig), $record['credential'], 'ssh_auth', hash('sha256', $converted),
+        ]));
+        self::assertSame($p0, $convertedHash);
+        (require database_path('migrations/0001_01_01_000006_add_credential_authority_revision.php'))->up();
+        $migration = require database_path('migrations/0001_01_01_000007_bind_queued_batches_to_credential_authority.php');
+        $migration->up();
+        $current = app(TargetBatchBinding::class)->hash($target->fresh());
+        self::assertIsString($current);
+        self::assertNotSame($p0, $current);
+        $migration->up();
+        self::assertSame($converted, DB::table('target_credentials')->where('id', $record['credential'])->value('encrypted_payload'));
         self::assertSame($current, DB::table('target_batch_items')->where('id', $items[0])->value('target_binding_hash'));
         self::assertSame($stale, DB::table('target_batch_items')->where('id', $items[1])->value('target_binding_hash'));
         self::assertSame($binding, DB::table('target_batch_items')->where('id', $items[2])->value('target_binding_hash'));

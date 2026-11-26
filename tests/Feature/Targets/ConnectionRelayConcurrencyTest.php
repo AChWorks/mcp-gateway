@@ -6,6 +6,8 @@ use App\Application\Targets\ConnectionRelayAdministration;
 use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Targets\Target;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
+use App\Infrastructure\Http\OutboundRequestException;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -87,6 +89,29 @@ final class ConnectionRelayConcurrencyTest extends TestCase
         self::assertSame('disconnected', $target->connection_state->value);
         self::assertNull($target->last_error_code);
         self::assertSame(2, $target->transport_revision);
+        $disabled = $target->transportAuthorityFingerprint();
+        $other = Target::query()->create([
+            'target_id' => 'unrelated-direct', 'display_name' => 'Unrelated',
+            'connector_type' => 'wp_ai_bridge', 'connection_state' => 'disconnected',
+        ]);
+        $otherFence = $other->transportAuthorityFingerprint();
+        self::assertTrue(app(ConnectionRelayAdministration::class)->setEnabled($this->relay, 2, true));
+        $restored = $target->fresh();
+        self::assertSame(3, $restored->transport_revision);
+        self::assertNotSame($disabled, $restored->transportAuthorityFingerprint());
+        self::assertSame($otherFence, $other->fresh()->transportAuthorityFingerprint());
+        $routes = app(ConnectionRelayRoutes::class);
+        foreach ([1, 2] as $stale) {
+            try {
+                $routes->httpRouteAtEpoch((string) $target->getKey(), $stale);
+                self::fail('An obsolete route epoch cannot cross restored authority.');
+            } catch (OutboundRequestException $exception) {
+                self::assertTrue($exception->preDispatch);
+            }
+        }
+        self::assertSame(46123, $routes->httpRouteForTarget($restored)?->loopbackPort);
+        self::assertFalse(app(ConnectionRelayAdministration::class)->setEnabled($this->relay, 3, true));
+        self::assertSame($restored->transportAuthorityFingerprint(), $restored->fresh()->transportAuthorityFingerprint());
     }
 
     private function withBlockedBinding(bool $allowBinding): void

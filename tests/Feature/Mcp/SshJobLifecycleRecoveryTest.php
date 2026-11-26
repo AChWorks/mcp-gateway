@@ -742,6 +742,7 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         $config = SshTargetConfig::query()->sole();
         $oldCredential = TargetCredential::query()->sole();
         $oldMaterial = $oldCredential->materialFingerprint();
+        $oldDispatch = $oldCredential->dispatchFingerprint();
         $binding = SshTargetBinding::hash($target, $config);
         $service = app(SshTargetReconfiguration::class);
         $input = [
@@ -756,7 +757,9 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         $target->fresh()->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
         self::assertSame($binding, SshTargetBinding::hash($target->fresh(), $config->fresh()));
         $newMaterial = $oldCredential->fresh()->materialFingerprint();
+        $newDispatch = $oldCredential->fresh()->dispatchFingerprint();
         self::assertNotSame($oldMaterial, $newMaterial);
+        self::assertNotSame($oldDispatch, $newDispatch);
 
         $policy = new class implements SshDialAddressPolicy
         {
@@ -777,9 +780,9 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         rewind($stream);
         try {
             foreach ([
-                fn () => $commands->run($user, $target, 'true', 5, $binding, expectedCredentialMaterial: $oldMaterial),
-                fn () => $files->write($user, $target, '/tmp/fixture', base64_encode('fixture'), expectedTargetBinding: $binding, expectedCredentialMaterial: $oldMaterial),
-                fn () => $files->uploadFromStream($user, $target, '/tmp/fixture', $stream, 7, hash('sha256', 'fixture'), 65536, 30, '/tmp', expectedTargetBinding: $binding, expectedCredentialMaterial: $oldMaterial),
+                fn () => $commands->run($user, $target, 'true', 5, $binding, expectedCredentialDispatch: $oldDispatch),
+                fn () => $files->write($user, $target, '/tmp/fixture', base64_encode('fixture'), expectedTargetBinding: $binding, expectedCredentialDispatch: $oldDispatch),
+                fn () => $files->uploadFromStream($user, $target, '/tmp/fixture', $stream, 7, hash('sha256', 'fixture'), 65536, 30, '/tmp', expectedTargetBinding: $binding, expectedCredentialDispatch: $oldDispatch),
             ] as $operation) {
                 try {
                     $operation();
@@ -790,10 +793,22 @@ final class SshJobLifecycleRecoveryTest extends TestCase
             }
             self::assertSame(0, $policy->attempts);
             try {
-                $commands->run($user, $target, 'true', 5, $binding, expectedCredentialMaterial: $newMaterial);
+                $commands->run($user, $target, 'true', 5, $binding, expectedCredentialDispatch: $newDispatch);
                 self::fail('Fixture policy denies every real dial.');
             } catch (SshTargetConnectionException $exception) {
                 self::assertSame('egress_denied', $exception->reason);
+            }
+            self::assertSame(1, $policy->attempts);
+            DB::transaction(function () use ($target, $oldCredential): void {
+                Target::query()->whereKey($target->getKey())->lockForUpdate()->sole();
+                $oldCredential->fresh()->supersedeAuthority();
+            });
+            self::assertSame($newMaterial, $oldCredential->fresh()->materialFingerprint());
+            try {
+                $commands->run($user, $target, 'true', 5, $binding, expectedCredentialDispatch: $newDispatch);
+                self::fail('A superseded semantic grant must not authorize a new launch stage.');
+            } catch (SshTargetConnectionException $exception) {
+                self::assertSame('target_changed', $exception->reason);
             }
             self::assertSame(1, $policy->attempts);
         } finally {

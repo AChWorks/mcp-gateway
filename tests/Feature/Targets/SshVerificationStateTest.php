@@ -105,6 +105,33 @@ final class SshVerificationStateTest extends TestCase
         self::assertSame(0, DB::table('activity_events')->where('operation', 'ssh-login-verify')->count());
     }
 
+    public function test_same_ciphertext_superseded_grant_cannot_commit_old_verify(): void
+    {
+        [$target, $config, $credential] = $this->registered();
+        $state = app(SshVerificationState::class);
+        $attempt = $state->begin($target, $config, $credential);
+        $material = $credential->materialFingerprint();
+        DB::transaction(function () use ($target, $credential): void {
+            Target::query()->whereKey($target->getKey())->lockForUpdate()->sole();
+            $credential->fresh()->supersedeAuthority();
+        });
+        self::assertSame($material, $credential->fresh()->materialFingerprint());
+        self::assertNotSame($credential->authorityFingerprint(), $credential->fresh()->authorityFingerprint());
+        try {
+            $state->succeeded($target, $config, $credential, $attempt, '8.8.8.8');
+            self::fail('Superseded grant cannot commit a successful Verify.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('target_changed', $exception->reason);
+        }
+        $state->failed($target, $config, $credential, $attempt, 'authentication_failed');
+        self::assertNull($target->fresh()->last_tested_at);
+        $fresh = $credential->fresh();
+        $new = $state->begin($target, $config->fresh(), $fresh);
+        $state->succeeded($target, $config->fresh(), $fresh, $new, '8.8.8.8');
+        self::assertSame('connected', $target->fresh()->connection_state->value);
+        self::assertSame(1, DB::table('activity_events')->where('operation', 'ssh-login-verify')->count());
+    }
+
     public function test_public_egress_failure_flows_through_claim_and_fenced_failure_commit(): void
     {
         [$target, $config] = $this->registered();

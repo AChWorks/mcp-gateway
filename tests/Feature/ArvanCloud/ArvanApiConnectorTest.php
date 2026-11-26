@@ -1035,6 +1035,33 @@ YAML, 200);
         Http::assertSentCount(1);
     }
 
+    public function test_probe_reply_cannot_verify_superseded_grant_with_unchanged_material(): void
+    {
+        [$target] = $this->fixture();
+        $adapter = app(ArvanApiTargetAdapter::class);
+        $credential = TargetCredential::query()->sole();
+        $material = $credential->materialFingerprint();
+        Http::fake(function (Request $request) use ($target, $credential) {
+            self::assertTrue($request->hasHeader('Authorization', 'Apikey '.self::KEY));
+            DB::transaction(function () use ($target, $credential): void {
+                Target::query()->whereKey($target->getKey())->lockForUpdate()->sole();
+                $credential->fresh()->supersedeAuthority();
+            });
+
+            return Http::response(['status' => true], 200);
+        });
+        try {
+            $adapter->test($target);
+            self::fail('A superseded grant must not receive current verification.');
+        } catch (TargetConnectorFailure $exception) {
+            self::assertSame('probe_stale', $exception->reason);
+        }
+        self::assertSame($material, $credential->fresh()->materialFingerprint());
+        self::assertNotSame($credential->authorityFingerprint(), $credential->fresh()->authorityFingerprint());
+        self::assertNull($target->fresh()->last_tested_at);
+        Http::assertSentCount(1);
+    }
+
     public function test_probe_reply_after_key_and_origin_rotation_keeps_new_credential_disconnected(): void
     {
         [$target] = $this->fixture();
