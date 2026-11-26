@@ -269,6 +269,16 @@ try {
             throw new RuntimeException('Disable did not publish empty control policy and advance route epoch.');
         }
         $deny(fn () => $commands->run($owner, $target, 'true'), 'reverse_route_not_approved');
+        $jobTools = app(SshJobMcpToolHandlers::class);
+        $jobClient = hash('sha256', 'managed-reverse-e2e-job');
+        $local = $jobTools->status($owner, $target->target_id, $jobClient, $job->id);
+        $unavailable = $jobTools->output($owner, $target->target_id, $jobClient, $job->id, 'stdout', 0, 16384);
+        if (! ($local['ok'] ?? false) || ($local['result']['status'] ?? null) !== 'completed'
+            || ($local['result']['remote_observed'] ?? null) !== false
+            || ($unavailable['ok'] ?? true) || ($unavailable['error']['code'] ?? null) !== 'reverse_route_not_approved'
+            || isset($unavailable['result'])) {
+            throw new RuntimeException('Disabled route must preserve local Job history without remote output.');
+        }
         $disabledTarget = $target->fresh();
         $disabledConfig = $config->fresh();
         $disabledAttempt = $verification->begin($disabledTarget, $disabledConfig, $credential);
@@ -321,16 +331,21 @@ try {
         $deny(fn () => $commands->run($owner, $target, 'true', expectedTargetBinding: $disabledBinding), 'target_changed');
         $path = '/home/deploy.prod/.mcp-reverse-aba-'.bin2hex(random_bytes(6));
         $deny(fn () => $files->write($owner, $target, $path, base64_encode('stale'), expectedTargetBinding: $oldBinding), 'target_changed');
-        $status = app(SshJobMcpToolHandlers::class)->status(
-            $owner, $target->target_id, hash('sha256', 'managed-reverse-e2e-job'), $job->id,
-        );
+        $status = $jobTools->status($owner, $target->target_id, $jobClient, $job->id);
         $retained = DB::table('ssh_command_jobs')->where('id', $job->id)->sole();
-        if (($status['error']['code'] ?? null) !== 'target_not_found'
-            || $retained->target_binding_hash !== $oldBinding || $retained->status !== 'completed') {
-            throw new RuntimeException('Old Job was revived or its historical evidence was rewritten.');
+        if (! ($status['ok'] ?? false) || ($status['result']['status'] ?? null) !== 'completed'
+            || ($status['result']['remote_observed'] ?? null) !== false
+            || (array) $retained !== (array) $job || $retained->target_binding_hash !== $oldBinding) {
+            throw new RuntimeException('Local Job history was hidden or its original evidence was rewritten.');
         }
         app(SshTargetConnectionService::class)->test($fresh);
         $fresh = $target->fresh();
+        $output = $jobTools->output($owner, $fresh->target_id, $jobClient, $job->id, 'stdout', 0, 16384);
+        if (! ($output['ok'] ?? false)
+            || base64_decode((string) ($output['result']['data'] ?? ''), true) !== 'managed_real_retained_job_ok'
+            || (array) DB::table('ssh_command_jobs')->where('id', $job->id)->sole() !== (array) $job) {
+            throw new RuntimeException('Fresh pinned route could not prove original Job artifact without rewriting evidence.');
+        }
         $written = $files->write($owner, $fresh, $path, base64_encode('managed-fresh-authority'), expectedTargetBinding: $binding);
         if (($written['status'] ?? null) !== 'completed') {
             throw new RuntimeException('Fresh SFTP publication failed after re-enable.');
@@ -346,7 +361,7 @@ try {
             || $worker->workOnce() !== null) {
             throw new RuntimeException('Fresh pinned managed Batch failed or historical evidence changed.');
         }
-        echo "PASS: real Owner controller disable/re-enable, key publication, stale command/SFTP/Job/Batch/Verify fences and fresh pinned work; disabled-interval Preview, durable Worker, history.\n";
+        echo "PASS: real Owner controller disable/re-enable, key publication, stale command/SFTP/Batch/Verify fences, route-independent Job history and fresh artifact proof; disabled-interval Preview, durable Worker, history.\n";
         exit(0);
     }
 
