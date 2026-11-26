@@ -14,6 +14,7 @@ use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Infrastructure\Activity\ActivityAttribution;
 use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
@@ -126,9 +127,9 @@ final class ChatGptOAuthFlowTest extends TestCase
             }
 
             public function execute(
-                User $user, Target $target, array $arguments, \Closure $beforeRemoteEffect, bool $requiresAiAccess,
+                User $user, Target $target, array $arguments, \Closure $beforeRemoteEffect, bool $requiresAiAccess, \Closure $admitRemoteEffect, ActivityAttribution $attribution,
             ): array {
-                if (! $beforeRemoteEffect()) {
+                if (! $beforeRemoteEffect() || ! $admitRemoteEffect(static function (): void {})) {
                     return ['ok' => false, 'status' => 'blocked', 'error_code' => 'authorization_revoked'];
                 }
                 $this->targetIds[] = $target->target_id;

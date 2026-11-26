@@ -7,6 +7,7 @@ use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
+use App\Infrastructure\Activity\ActivityAttribution;
 use App\Models\User;
 use Closure;
 use Throwable;
@@ -61,12 +62,13 @@ final readonly class SshCommandBatchProvider implements TargetBatchOperationProv
         return max(1, (int) ($arguments['timeout_seconds'] ?? 10));
     }
 
-    public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess): array
+    public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess, Closure $admitRemoteEffect, ActivityAttribution $attribution): array
     {
         try {
             $result = $this->runtime->run(
                 $user, $target, $arguments['command'], $arguments['timeout_seconds'] ?? 10,
                 beforeRemoteEffect: $beforeRemoteEffect,
+                admitRemoteEffect: $admitRemoteEffect,
             );
         } catch (SshTargetConnectionException $exception) {
             return ['ok' => false, 'status' => 'failed', 'error_code' => $exception->reason,

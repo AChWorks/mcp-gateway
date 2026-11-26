@@ -124,31 +124,32 @@ final readonly class WordpressTargetOperations
      * @param  array<string, mixed>  $input
      * @return array<string, mixed>
      */
-    public function execute(User $user, string $target_id, string $ability, array $input, bool $readonlyOnly = false, bool $requiresAiAccess = false, ?Closure $beforeRemoteEffect = null, ?WordpressExecutionScope $scope = null): array
+    public function execute(User $user, string $target_id, string $ability, array $input, bool $readonlyOnly = false, bool $requiresAiAccess = false, ?Closure $beforeRemoteEffect = null, ?WordpressExecutionScope $scope = null, ?Closure $admitRemoteEffect = null, ?WordpressOperationEvidence $evidence = null): array
     {
         $operation = 'wordpress-ability-execute';
+        $reference = $evidence?->reference ?? CorrelationId::current();
         $context = $scope->context ?? $this->admission->capture($user, $beforeRemoteEffect);
         $timing = OperationTiming::forWordpress();
         $lookedUpAt = $timing?->stamp() ?? 0;
         $target = $scope !== null ? $scope->target : $this->target($user, $target_id);
         if ($requiresAiAccess && ! $user->ai_access_enabled) {
-            return $this->failed($operation, null, 'forbidden', 'AI connection is not authorized.');
+            return $this->failed($operation, null, 'forbidden', 'AI connection is not authorized.', evidence: $evidence);
         }
         $timing?->finish('target_lookup_ms', $lookedUpAt);
         if (! $target instanceof Target) {
-            return $this->failed($operation, null, 'target_not_found', 'WordPress Target is unavailable.');
+            return $this->failed($operation, null, 'target_not_found', 'WordPress Target is unavailable.', evidence: $evidence);
         }
 
         $ability = trim($ability);
         if ($ability === '' || mb_strlen($ability) > 255 || preg_match('/[\x00-\x1F\x7F]/', $ability) === 1) {
-            return $this->failed($operation, $target, 'invalid_input', 'Invalid WordPress Ability name.');
+            return $this->failed($operation, $target, 'invalid_input', 'Invalid WordPress Ability name.', evidence: $evidence);
         }
         try {
             if (strlen(json_encode($input, JSON_THROW_ON_ERROR)) > $this->settings->wpAbilityInputBytes()) {
-                return $this->failed($operation, $target, 'invalid_input', 'Ability input exceeds the bounded request limit.');
+                return $this->failed($operation, $target, 'invalid_input', 'Ability input exceeds the bounded request limit.', evidence: $evidence);
             }
         } catch (JsonException) {
-            return $this->failed($operation, $target, 'invalid_input', 'Ability input must be valid JSON.');
+            return $this->failed($operation, $target, 'invalid_input', 'Ability input must be valid JSON.', evidence: $evidence);
         }
 
         // A single Target-scoped request-entry snapshot bounds initial
@@ -172,10 +173,10 @@ final readonly class WordpressTargetOperations
             $timing?->finish('authorization_ms', $authorizedAt);
         }
         if (! in_array(true, $allowed, true)) {
-            return $this->failed($operation, $target, 'forbidden', 'WordPress execution is not authorized.');
+            return $this->failed($operation, $target, 'forbidden', 'WordPress execution is not authorized.', evidence: $evidence);
         }
         if (TargetOperationGate::isPaused($target)) {
-            return $this->failed($operation, $target, 'target_paused', 'This Target is paused by the Gateway Owner.');
+            return $this->failed($operation, $target, 'target_paused', 'This Target is paused by the Gateway Owner.', evidence: $evidence);
         }
 
         // Initialization and classification require at least one still
@@ -204,25 +205,26 @@ final readonly class WordpressTargetOperations
             return false;
         };
         if ($scope !== null && ! $authorize()) {
-            return $this->failed($operation, $target, 'forbidden', 'WordPress execution is not authorized.');
+            return $this->failed($operation, $target, 'forbidden', 'WordPress execution is not authorized.', evidence: $evidence);
         }
         try {
             $result = $this->bridge->executeAuthorizedAbility(
                 $target,
                 $ability,
                 $input,
-                CorrelationId::current(),
+                $reference,
                 $authorize,
                 $authorize,
                 $timing,
+                admitRemoteEffect: $admitRemoteEffect,
             );
         } catch (WpAiBridgeTargetConnectionException|WpAiBridgeMcpException $exception) {
             return $this->failed($operation, $target, $exception->reason, 'WordPress Ability could not complete safely.', [
                 ...$this->safeDetails($exception), ...($timing?->details(true) ?? []),
-            ]);
+            ], $evidence);
         }
 
-        $this->activity->record(CorrelationId::current(), $operation, 'success', $target, null, $timing?->details() ?? []);
+        $this->activity->record($reference, $operation, 'success', $target, null, $timing?->details() ?? [], $evidence?->attribution);
 
         return ['ok' => true, 'target_id' => $target->target_id, 'ability' => $ability, 'result' => $result];
     }
@@ -409,9 +411,10 @@ final readonly class WordpressTargetOperations
     /** @param array<string,mixed> $diagnostics
      * @return array<string, mixed>
      */
-    private function failed(string $operation, ?Target $target, string $code, string $message, array $diagnostics = []): array
+    private function failed(string $operation, ?Target $target, string $code, string $message, array $diagnostics = [], ?WordpressOperationEvidence $evidence = null): array
     {
-        $reference = CorrelationId::current();
+        $reference = $evidence?->reference ?? CorrelationId::current();
+        $evidence?->failure($code, $diagnostics);
         // Preserve error.code compatibility, while recording a remote Tool
         // rejection with unconfirmed effects as unknown, never confirmed safe.
         $unknown = $code === 'outcome_unknown' || ($diagnostics['effect_unconfirmed'] ?? null) === true;
@@ -422,6 +425,7 @@ final readonly class WordpressTargetOperations
             $target,
             $code,
             $diagnostics,
+            $evidence?->attribution,
         );
 
         $error = [

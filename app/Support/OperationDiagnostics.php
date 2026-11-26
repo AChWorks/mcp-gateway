@@ -154,7 +154,7 @@ final class OperationDiagnostics
         // SFTP failures distinguish a confirmed destination preflight
         // rejection from an ambiguous publish. Stage residue is tracked
         // separately; only safe booleans enter Activity diagnostics.
-        foreach (['publication_attempted', 'temporary_cleanup_confirmed'] as $field) {
+        foreach (['publication_attempted', 'temporary_cleanup_confirmed', 'batch_effect_admitted'] as $field) {
             if (is_bool($details[$field] ?? null)) {
                 $safe[$field] = $details[$field];
             }

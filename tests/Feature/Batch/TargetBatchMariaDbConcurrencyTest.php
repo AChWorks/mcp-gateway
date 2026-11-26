@@ -11,11 +11,13 @@ use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Infrastructure\Activity\ActivityAttribution;
 use App\Models\User;
 use Closure;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -28,6 +30,8 @@ use Tests\TestCase;
 final class RaceTestBatchProvider implements TargetBatchOperationProvider
 {
     public static ?string $lateResultBarrier = null;
+
+    public static bool $holdBeforeAdmission = false;
 
     public function key(): string
     {
@@ -59,30 +63,39 @@ final class RaceTestBatchProvider implements TargetBatchOperationProvider
         return 10;
     }
 
-    public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess): array
+    public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess, Closure $admitRemoteEffect, ActivityAttribution $attribution): array
     {
-        if (! $beforeRemoteEffect()) {
+        if (self::$holdBeforeAdmission) {
+            $this->awaitReconciliation();
+        }
+        if (! $beforeRemoteEffect() || ! $admitRemoteEffect(static function (): void {})) {
             return ['ok' => false, 'status' => 'blocked', 'error_code' => 'authorization_revoked'];
         }
         DB::table('batch_fixture_effects')->insert([
             'target_id' => $target->target_id, 'pid' => getmypid(), 'created_at' => now(),
         ]);
-        if (self::$lateResultBarrier !== null) {
-            // Remote effect happened; the original worker now holds a delayed
-            // successful response while an independent process reconciles.
-            touch(self::$lateResultBarrier.'-dispatched');
-            $deadline = microtime(true) + 12;
-            while (! is_file(self::$lateResultBarrier.'-release') && microtime(true) < $deadline) {
-                usleep(10000);
-            }
-            if (! is_file(self::$lateResultBarrier.'-release')) {
-                throw new RuntimeException('Late-result fixture synchronization timed out.');
-            }
+        if (! self::$holdBeforeAdmission) {
+            $this->awaitReconciliation();
         }
         // Keep the claim visibly in-flight while the sibling worker enters.
         usleep(30000);
 
         return ['ok' => true, 'status' => 'completed', 'result' => ['target_id' => $target->target_id]];
+    }
+
+    private function awaitReconciliation(): void
+    {
+        if (self::$lateResultBarrier === null) {
+            return;
+        }
+        touch(self::$lateResultBarrier.'-waiting');
+        $deadline = microtime(true) + 12;
+        while (! is_file(self::$lateResultBarrier.'-release') && microtime(true) < $deadline) {
+            usleep(10000);
+        }
+        if (! is_file(self::$lateResultBarrier.'-release')) {
+            throw new RuntimeException('Attempt fixture synchronization timed out.');
+        }
     }
 }
 
@@ -120,7 +133,13 @@ final class TargetBatchMariaDbConcurrencyTest extends TestCase
         config()->set('batch.user_active', 6);
     }
 
-    public function test_original_worker_late_success_after_second_process_reconciliation_keeps_journal_and_activity_unknown(): void
+    public static function reconciliationCases(): array
+    {
+        return ['expired before admission' => [true], 'expired after admission' => [false]];
+    }
+
+    #[DataProvider('reconciliationCases')]
+    public function test_second_process_reconciliation_preserves_dispatch_certainty_and_never_replays(bool $beforeAdmission): void
     {
         $user = User::query()->create([
             'name' => 'Late Worker User', 'email' => 'batch-late-worker@example.test',
@@ -142,8 +161,27 @@ final class TargetBatchMariaDbConcurrencyTest extends TestCase
         $id = $core->create($user, $origin, (string) Str::uuid(), 'ssh.command.run',
             [$target->target_id], $args, $preview['preview_token'])['batch_id'];
 
+        if ($beforeAdmission) {
+            $migration = require database_path('migrations/0001_01_01_000008_record_batch_dispatch_evidence.php');
+            $migration->down();
+            $before = (array) DB::table('target_batch_items')->where('batch_id', $id)->sole();
+            Schema::table('target_batch_items', static function (Blueprint $table): void {
+                $table->boolean('effect_admitted')->nullable();
+            });
+            $migration->up();
+            $migration->up();
+            $after = DB::table('target_batch_items')->where('batch_id', $id)->sole();
+            self::assertNull($after->effect_admitted);
+            self::assertNull($after->late_observation_ciphertext);
+            $restored = (array) $after;
+            unset($restored['effect_admitted'], $restored['late_observation_ciphertext']);
+            self::assertSame($before, $restored);
+        }
+
         $barrier = storage_path('framework/testing/batch-late-'.bin2hex(random_bytes(8)));
         RaceTestBatchProvider::$lateResultBarrier = $barrier;
+        RaceTestBatchProvider::$holdBeforeAdmission = $beforeAdmission;
+        $expected = $beforeAdmission ? 'blocked' : 'outcome_unknown';
         $pid = pcntl_fork();
         if ($pid === -1) {
             throw new RuntimeException('Could not fork late-result Worker A.');
@@ -165,17 +203,17 @@ final class TargetBatchMariaDbConcurrencyTest extends TestCase
             DB::disconnect();
             DB::reconnect();
             $deadline = microtime(true) + 12;
-            while (! is_file($barrier.'-dispatched') && microtime(true) < $deadline) {
+            while (! is_file($barrier.'-waiting') && microtime(true) < $deadline) {
                 usleep(10000);
             }
-            self::assertFileExists($barrier.'-dispatched');
+            self::assertFileExists($barrier.'-waiting');
             DB::table('target_batch_items')->where('batch_id', $id)->update([
                 'lease_expires_at' => now()->subMinute(),
             ]);
             // Worker B sees the expired committed claim and reconciles without
             // dispatching a second remote operation.
             self::assertNull(app(TargetBatchWorker::class)->workOnce());
-            self::assertSame('outcome_unknown', DB::table('target_batch_items')->where('batch_id', $id)->value('status'));
+            self::assertSame($expected, DB::table('target_batch_items')->where('batch_id', $id)->value('status'));
             touch($barrier.'-release');
             $status = 0;
             self::assertSame($pid, pcntl_waitpid($pid, $status));
@@ -183,22 +221,32 @@ final class TargetBatchMariaDbConcurrencyTest extends TestCase
             DB::disconnect();
             DB::reconnect();
             $worked = json_decode((string) file_get_contents($barrier.'-result'), true, 512, JSON_THROW_ON_ERROR);
-            self::assertSame('outcome_unknown', $worked['status']);
+            self::assertSame($expected, $worked['status']);
             self::assertSame('dispatch_lease_expired', $worked['error_code']);
-            self::assertSame('outcome_unknown', DB::table('target_batches')->where('id', $id)->value('status'));
-            self::assertSame(1, DB::table('batch_fixture_effects')->where('target_id', $target->target_id)->count());
+            self::assertSame($beforeAdmission ? 'failed' : 'outcome_unknown', DB::table('target_batches')->where('id', $id)->value('status'));
+            self::assertSame($beforeAdmission ? 0 : 1, DB::table('batch_fixture_effects')->where('target_id', $target->target_id)->count());
             self::assertSame(0, DB::table('activity_events')->where('operation', 'like', 'target-batch%')
                 ->where('outcome', 'success')->count());
             $event = DB::table('activity_events')->where('correlation_id', $worked['diagnostic_reference'])->first();
             self::assertNotNull($event);
-            self::assertSame('unknown', $event->outcome);
+            self::assertSame($beforeAdmission ? 'failure' : 'unknown', $event->outcome);
             self::assertSame('late_result_ignored', $event->error_code);
-            self::assertSame('outcome_unknown', json_decode((string) $event->diagnostic_context, true)['authoritative_status']);
+            self::assertSame($expected, json_decode((string) $event->diagnostic_context, true)['authoritative_status']);
+            $child = DB::table('target_batch_items')->where('batch_id', $id)->sole();
+            self::assertSame(! $beforeAdmission, (bool) $child->effect_admitted);
+            self::assertNull($child->result_ciphertext);
+            $late = json_decode(Crypt::decryptString($child->late_observation_ciphertext), true, 512, JSON_THROW_ON_ERROR);
+            self::assertSame($child->dispatch_attempt_id, $late['attempt_id']);
+            self::assertSame($beforeAdmission ? 'blocked' : 'completed', $late['observation']['status']);
+            if (! $beforeAdmission) {
+                self::assertSame($target->target_id, $late['observation']['result']['target_id']);
+            }
             self::assertNull(app(TargetBatchWorker::class)->workOnce());
-            self::assertSame(1, DB::table('batch_fixture_effects')->count());
+            self::assertSame($beforeAdmission ? 0 : 1, DB::table('batch_fixture_effects')->count());
         } finally {
             touch($barrier.'-release');
             RaceTestBatchProvider::$lateResultBarrier = null;
+            RaceTestBatchProvider::$holdBeforeAdmission = false;
             foreach (glob($barrier.'-*') ?: [] as $path) {
                 @unlink($path);
             }

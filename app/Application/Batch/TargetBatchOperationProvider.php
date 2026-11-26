@@ -4,6 +4,7 @@ namespace App\Application\Batch;
 
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
+use App\Infrastructure\Activity\ActivityAttribution;
 use App\Models\User;
 use Closure;
 
@@ -31,11 +32,16 @@ interface TargetBatchOperationProvider
     public function remoteTimeoutSeconds(array $arguments): int;
 
     /**
-     * Called after a durable, non-replayable dispatch claim. The provided
-     * gate MUST run again as close to each new remote effect as possible.
+     * The preflight guard checks current authority without claiming a send.
+     * The final admission gate MUST succeed at each new protected transport
+     * effect, after local preparation. It durably records possible dispatch.
+     * Its connector verifier runs locally under the attempt lock (no I/O).
+     * Attribution belongs to the originating actor/client, not the Worker.
      *
+     * @param  Closure():bool  $beforeRemoteEffect
+     * @param  Closure(Closure():void):bool  $admitRemoteEffect
      * @param  array<string,mixed>  $arguments
      * @return array<string,mixed>
      */
-    public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess): array;
+    public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess, Closure $admitRemoteEffect, ActivityAttribution $attribution): array;
 }

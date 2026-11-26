@@ -43,6 +43,7 @@ final readonly class SshCommandRuntime
         ?string $expectedTargetBinding = null,
         ?Closure $beforeRemoteEffect = null,
         ?string $expectedCredentialDispatch = null,
+        ?Closure $admitRemoteEffect = null,
     ): array {
         if ($target->connector_type !== 'ssh_direct') {
             throw new SshTargetConnectionException('unsupported_connector');
@@ -69,7 +70,7 @@ final readonly class SshCommandRuntime
             throw new SshTargetConnectionException('forbidden');
         }
 
-        return $this->admission->run((string) $target->getKey(), function () use ($context, $user, $target, $command, $timeoutSeconds, $expectedTargetBinding, $expectedCredentialDispatch): array {
+        return $this->admission->run((string) $target->getKey(), function () use ($context, $user, $target, $command, $timeoutSeconds, $expectedTargetBinding, $expectedCredentialDispatch, $admitRemoteEffect): array {
             $fresh = Target::query()->whereKey($target->getKey())->first();
             $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
             if ($fresh instanceof Target && $fresh->operations_paused) {
@@ -104,17 +105,23 @@ final readonly class SshCommandRuntime
             $relay = $this->relayRoutes->sshRouteForTarget($fresh);
             $started = microtime(true);
 
+            $dispatch = static function () use ($guard, $admitRemoteEffect): void {
+                if ($admitRemoteEffect === null) {
+                    $guard();
+                } elseif (! $admitRemoteEffect($guard)) {
+                    throw new SshTargetConnectionException('authorization_revoked');
+                }
+            };
+
             return $this->transport->withAuthenticatedSession(
                 $config->endpoint(), $pin, $config->auth_method,
                 $material['secret'], $material['passphrase'],
                 function (SSH2 $ssh, string $peerIp) use (
-                    $guard, $fresh, $config, $command, $timeoutSeconds, $started,
+                    $dispatch, $fresh, $config, $command, $timeoutSeconds, $started,
                 ): array {
-                    $guard();
-
-                    return $this->executeOnce($ssh, $command, $timeoutSeconds, $peerIp, $config, $started, $fresh->transportKind());
+                    return $this->executeOnce($ssh, $command, $timeoutSeconds, $peerIp, $config, $started, $fresh->transportKind(), $dispatch);
                 },
-                $route, $relay, $guard,
+                $route, $relay, $dispatch,
             );
         }, $timeoutSeconds);
     }
@@ -122,7 +129,7 @@ final readonly class SshCommandRuntime
     /** @return array<string,mixed> */
     private function executeOnce(
         SSH2 $ssh, string $command, int $timeoutSeconds,
-        string $peerIp, SshTargetConfig $config, float $started, string $routeMode,
+        string $peerIp, SshTargetConfig $config, float $started, string $routeMode, Closure $dispatch,
     ): array {
         // The collector must be ready BEFORE we send any remote command.
         // It clears phpseclib's cumulative private stderr log per packet;
@@ -138,8 +145,9 @@ final readonly class SshCommandRuntime
 
         $unknown = false;
         $exit = null;
-        $deadline = new SshCommandExecutionDeadline($timeoutSeconds);
         $ssh->disableQuietMode();
+        $dispatch();
+        $deadline = new SshCommandExecutionDeadline($timeoutSeconds);
         $ssh->setTimeout($deadline->remainingSocketSeconds());
         try {
             $ssh->exec($command, static function (string $chunk) use ($ssh, $collector, $deadline): bool {

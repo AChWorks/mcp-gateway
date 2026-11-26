@@ -98,14 +98,15 @@ final readonly class WpAiBridgeMcpClient
         callable $authorizeClass,
         ?OperationTiming $timing = null,
         ?callable $verifyContract = null,
+        ?Closure $admitRemoteEffect = null,
     ): mixed {
-        $routing = $this->routingContext($target, $timing, $authorize);
+        $routing = $this->routingContext($target, $timing, $authorize, $admitRemoteEffect);
 
-        return $this->withSession($routing, $correlationId, $authorize, function (string $url, array $headers) use ($target, $routing, $ability, $input, $authorize, $authorizeClass, $verifyContract, $timing): mixed {
+        return $this->withSession($routing, $correlationId, $authorize, function (string $url, array $headers) use ($target, $routing, $ability, $input, $authorize, $authorizeClass, $verifyContract, $timing, $admitRemoteEffect): mixed {
             $classifiedAt = $timing?->stamp() ?? 0;
             try {
                 $contract = null;
-                $executionClass = $this->abilityExecutionClass($routing, $ability, $headers, $authorize, $timing, $contract);
+                $executionClass = $this->abilityExecutionClass($routing, $ability, $headers, $authorize, $timing, $contract, $admitRemoteEffect);
             } finally {
                 $timing?->finish('mcp_classification_ms', $classifiedAt);
             }
@@ -124,11 +125,11 @@ final readonly class WpAiBridgeMcpClient
             $dispatchedAt = $timing?->stamp() ?? 0;
             try {
                 return $this->callTool($url, $headers, $ability, $input, $executionClass->hasMutationRisk(), 3, $timing, $routing['relay'],
-                    $this->guard($routing, fn (): bool => $authorizeClass($executionClass)));
+                    $this->guard($routing, fn (): bool => $authorizeClass($executionClass), admitRemoteEffect: $admitRemoteEffect));
             } finally {
                 $timing?->finish('mcp_execute_ms', $dispatchedAt);
             }
-        }, $timing);
+        }, $timing, $admitRemoteEffect);
     }
 
     /**
@@ -145,9 +146,10 @@ final readonly class WpAiBridgeMcpClient
         Closure $authorize,
         ?OperationTiming $timing = null,
         ?array &$contract = null,
+        ?Closure $admitRemoteEffect = null,
     ): AbilityExecutionClass {
         $catalog = $this->callTool($routing['resource_url'], $sessionHeaders, self::CATALOG_ABILITY,
-            ['action' => 'get', 'name' => $ability], false, 2, $timing, $routing['relay'], $this->guard($routing, $authorize));
+            ['action' => 'get', 'name' => $ability], false, 2, $timing, $routing['relay'], $this->guard($routing, $authorize, admitRemoteEffect: $admitRemoteEffect));
 
         // A failed catalog lookup is NOT an unclassified Ability. Preserve
         // the downstream error (network, auth, protocol, etc.) and do not
@@ -216,7 +218,7 @@ final readonly class WpAiBridgeMcpClient
      * @param  Closure():bool  $authorize
      * @param  callable(string,array<string,string>):mixed  $operation
      */
-    private function withSession(array $routing, string $correlationId, Closure $authorize, callable $operation, ?OperationTiming $timing = null): mixed
+    private function withSession(array $routing, string $correlationId, Closure $authorize, callable $operation, ?OperationTiming $timing = null, ?Closure $admitRemoteEffect = null): mixed
     {
         $headers = [
             'Authorization' => 'Bearer '.$routing['access_token'],
@@ -226,7 +228,7 @@ final readonly class WpAiBridgeMcpClient
         ];
         $initializedAt = $timing?->stamp() ?? 0;
         try {
-            $sessionId = $this->initialize($routing['resource_url'], $headers, $timing, $routing['relay'], $this->guard($routing, $authorize));
+            $sessionId = $this->initialize($routing['resource_url'], $headers, $timing, $routing['relay'], $this->guard($routing, $authorize, admitRemoteEffect: $admitRemoteEffect));
         } finally {
             $timing?->finish('mcp_initialize_ms', $initializedAt);
         }
@@ -254,9 +256,9 @@ final readonly class WpAiBridgeMcpClient
      * @param  (Closure():bool)|null  $authorize
      * @return Closure():void
      */
-    private function guard(array $routing, ?Closure $authorize, bool $cleanup = false): Closure
+    private function guard(array $routing, ?Closure $authorize, bool $cleanup = false, ?Closure $admitRemoteEffect = null): Closure
     {
-        return function () use ($routing, $authorize, $cleanup): void {
+        $verify = function () use ($routing, $authorize, $cleanup): void {
             if ($authorize !== null && ! $authorize()) {
                 throw new WpAiBridgeMcpException('forbidden', 'WordPress operation authority changed before dispatch.', null, [
                     'failure_origin' => 'gateway_admission', 'failure_stage' => 'admission', 'request_not_sent' => true,
@@ -264,6 +266,18 @@ final readonly class WpAiBridgeMcpClient
             }
             $this->assertCurrentRouting($routing);
             $this->targetConnections->assertCurrentMcpCredential($routing, $cleanup);
+        };
+
+        if ($admitRemoteEffect === null) {
+            return $verify;
+        }
+
+        return static function () use ($admitRemoteEffect, $verify): void {
+            if (! $admitRemoteEffect($verify)) {
+                throw new WpAiBridgeMcpException('forbidden', 'WordPress durable attempt changed before dispatch.', null, [
+                    'failure_origin' => 'gateway_admission', 'failure_stage' => 'admission', 'request_not_sent' => true,
+                ]);
+            }
         };
     }
 
@@ -284,7 +298,7 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /** @return RoutingSnapshot */
-    private function routingContext(Target $target, ?OperationTiming $timing, Closure $authorize): array
+    private function routingContext(Target $target, ?OperationTiming $timing, Closure $authorize, ?Closure $admitRemoteEffect = null): array
     {
         if ($target->connector_type !== 'wp_ai_bridge') {
             throw new WpAiBridgeMcpException(
@@ -300,7 +314,7 @@ final readonly class WpAiBridgeMcpClient
         $credentialAt = $timing?->stamp() ?? 0;
         try {
             try {
-                return $this->targetConnections->routingContextWithRecovery($target, authorize: $authorize);
+                return $this->targetConnections->routingContextWithRecovery($target, authorize: $authorize, admitRemoteEffect: $admitRemoteEffect);
             } catch (OutboundRequestException $exception) {
                 throw new WpAiBridgeMcpException($exception->reason, 'Selected Target Relay could not be reached.', $exception, $exception->details);
             }

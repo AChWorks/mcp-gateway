@@ -308,7 +308,7 @@ try {
         }
         for ($i = 0; $i < 2; $i++) {
             $outcome = $worker->workOnce();
-            if (($outcome['status'] ?? null) !== 'blocked' || ($outcome['error_code'] ?? null) !== 'authorization_revoked') {
+            if (($outcome['status'] ?? null) !== 'blocked' || ($outcome['error_code'] ?? null) !== 'target_changed') {
                 throw new RuntimeException('Old real managed Batch crossed restored authority.');
             }
         }

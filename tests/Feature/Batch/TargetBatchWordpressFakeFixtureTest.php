@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /** Connector-neutral Batch proof against a fake WordPress MCP transport. */
@@ -33,6 +34,8 @@ final class TargetBatchWordpressFakeFixtureTest extends TestCase
     private array $abilityCalls = [];
 
     private bool $rejectBridgeInfo = false;
+
+    private ?string $expireOnInitialize = null;
 
     protected function setUp(): void
     {
@@ -200,12 +203,18 @@ final class TargetBatchWordpressFakeFixtureTest extends TestCase
         self::assertNull(app(TargetBatchBinding::class)->hash($target));
         $outcome = app(TargetBatchWorker::class)->workOnce();
         self::assertSame('blocked', $outcome['status']);
-        self::assertSame('authorization_revoked', $outcome['error_code']);
+        self::assertSame('target_unavailable', $outcome['error_code']);
         self::assertSame([], $this->abilityCalls);
         self::assertSame('blocked', $core->status($user, $origin, $created['batch_id'])['items'][0]['status']);
     }
 
-    public function test_failed_wordpress_provider_preserves_native_cause_and_original_reference_in_batch_activity(): void
+    public static function nativeActivityCases(): array
+    {
+        return ['native Activity available' => [false], 'native Activity fails' => [true]];
+    }
+
+    #[DataProvider('nativeActivityCases')]
+    public function test_failed_wordpress_provider_preserves_native_cause_and_original_reference_in_batch_activity(bool $failActivity): void
     {
         $user = User::query()->create([
             'name' => 'WP Batch Failure User', 'email' => 'wp-batch-failure@example.test',
@@ -230,7 +239,19 @@ final class TargetBatchWordpressFakeFixtureTest extends TestCase
             [$target->target_id], []);
         $created = $core->create($user, $origin, (string) Str::uuid(),
             'wordpress.bridge.info', [$target->target_id], [], $preview['preview_token']);
-        $worked = app(TargetBatchWorker::class)->workOnce();
+        if ($failActivity) {
+            if (DB::getDriverName() !== 'sqlite') {
+                $this->markTestSkipped('Uses isolated SQLite native Activity failure injection.');
+            }
+            DB::unprepared("CREATE TEMP TRIGGER reject_native_activity BEFORE INSERT ON activity_events WHEN NEW.operation = 'wordpress-ability-execute' BEGIN SELECT RAISE(ABORT, 'fixture native activity unavailable'); END");
+        }
+        try {
+            $worked = app(TargetBatchWorker::class)->workOnce();
+        } finally {
+            if ($failActivity) {
+                DB::unprepared('DROP TRIGGER reject_native_activity');
+            }
+        }
         self::assertSame('failed', $worked['status']);
         self::assertSame('downstream_rejected', $worked['error_code']);
         $activity = DB::table('activity_events')
@@ -246,10 +267,49 @@ final class TargetBatchWordpressFakeFixtureTest extends TestCase
         $native = DB::table('activity_events')
             ->where('correlation_id', $context['downstream_diagnostic_reference'])
             ->where('target_record_id', $target->getKey())->first();
-        self::assertNotNull($native);
-        self::assertSame('downstream_rejected', $native->error_code);
+        if ($failActivity) {
+            self::assertNull($native);
+        } else {
+            self::assertNotNull($native);
+            self::assertSame('downstream_rejected', $native->error_code);
+            self::assertSame((string) $activity->actor_id, (string) $native->actor_id);
+            self::assertSame($activity->actor_type, $native->actor_type);
+        }
+        $result = $core->status($user, $origin, $created['batch_id'])['items'][0]['result'];
+        self::assertSame('wp_permission_denied', $result['diagnostics']['source_error_code']);
+        self::assertSame('missing_role', $result['diagnostics']['source_error_details']['reason']);
         self::assertSame('failed', $core->status($user, $origin, $created['batch_id'])['status']);
         self::assertSame(['wp-ai-bridge/abilities-read', 'wp-ai-bridge/bridge-info'], $this->abilityCalls);
+        self::assertNull(app(TargetBatchWorker::class)->workOnce());
+    }
+
+    public function test_expired_attempt_after_initialize_cannot_send_catalog_or_ability(): void
+    {
+        $user = User::query()->create([
+            'name' => 'WP Lease User', 'email' => 'wp-lease@example.test',
+            'password' => 'StrongPassword!234', 'role' => 'owner',
+            'target_scope_mode' => 'all', 'access_enabled' => true,
+        ]);
+        $target = app(WpAiBridgeTargetRegistration::class)->register(
+            'wp-lease', 'WP Lease', 'https://wp-lease.example.test',
+        );
+        $connection = app(WpAiBridgeTargetConnectionService::class);
+        parse_str((string) parse_url($connection->begin($target), PHP_URL_QUERY), $query);
+        $connection->completeCallback((string) $query['state'], 'lease-code', 'https://wp-lease.example.test', null);
+        $request = HttpRequest::create('/admin/target-batches', 'POST');
+        $request->setUserResolver(static fn (): User => $user);
+        $origin = app(DeferredBatchAuthority::class)->captureWeb($user, $request);
+        $core = app(TargetBatchCoordinator::class);
+        $preview = $core->preview($user, $origin, 'wordpress.bridge.info', [$target->target_id], []);
+        $this->expireOnInitialize = $core->create($user, $origin, (string) Str::uuid(),
+            'wordpress.bridge.info', [$target->target_id], [], $preview['preview_token'])['batch_id'];
+        $worked = app(TargetBatchWorker::class)->workOnce();
+        self::assertSame('dispatch_lease_expired', $worked['error_code']);
+        self::assertSame([], $this->abilityCalls);
+        $child = DB::table('target_batch_items')->where('batch_id', $this->expireOnInitialize)->sole();
+        self::assertTrue((bool) $child->effect_admitted);
+        $result = $core->status($user, $origin, $this->expireOnInitialize)['items'][0]['result'];
+        self::assertSame('gateway_admission', $result['diagnostics']['failure_origin']);
         self::assertNull(app(TargetBatchWorker::class)->workOnce());
     }
 
@@ -294,6 +354,11 @@ final class TargetBatchWordpressFakeFixtureTest extends TestCase
         if ($path === '/wp-json/wp-ai-bridge/v1/mcp' && $request->method() === 'POST') {
             $data = $request->data();
             if (($data['method'] ?? null) === 'initialize') {
+                if ($this->expireOnInitialize !== null) {
+                    DB::table('target_batch_items')->where('batch_id', $this->expireOnInitialize)
+                        ->update(['lease_expires_at' => now()->subSecond()]);
+                }
+
                 return Http::response(['jsonrpc' => '2.0', 'id' => 1,
                     'result' => ['protocolVersion' => '2025-11-25', 'capabilities' => (object) []],
                 ], 200, ['Mcp-Session-Id' => 'batch-test-session']);
