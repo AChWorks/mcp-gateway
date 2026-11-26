@@ -35,13 +35,7 @@ final readonly class TargetTransportBinding
     {
         // A route edit is independent of credential rotation, OAuth flows
         // and connector health. Fence only the exact Target and route.
-        return hash('sha256', json_encode([
-            (string) $target->getKey(),
-            $target->getAttribute('relay_record_id'),
-            $target->reverse_listener_port,
-            $target->reverse_tunnel_identity,
-            (int) $target->transport_revision,
-        ], JSON_THROW_ON_ERROR));
+        return $target->transportAuthorityFingerprint();
     }
 
     public function change(Target $target, string $revision, ?string $relayId): bool

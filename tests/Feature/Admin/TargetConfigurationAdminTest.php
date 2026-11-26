@@ -122,6 +122,68 @@ final class TargetConfigurationAdminTest extends TestCase
         $this->get('/admin/targets/ssh-demo')->assertOk()->assertSee('deploy@1.1.1.1:2222');
     }
 
+    public function test_ssh_edit_revision_survives_later_verify_but_not_credential_replacement(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $target = $this->ssh();
+        $config = SshTargetConfig::query()->sole();
+        $credential = TargetCredential::query()->sole();
+        $revision = $this->editRevision('ssh-demo');
+        $authority = $credential->authorityFingerprint();
+        $material = $credential->materialFingerprint();
+        $vault = app(SshTargetVault::class);
+        $secret = $vault->open($target, $config, $credential);
+        $credential->forceFill(['encrypted_payload' => $vault->seal(
+            $target, $config, $secret['secret'], $secret['passphrase'],
+        )])->save();
+        self::assertSame($authority, $credential->authorityFingerprint());
+        self::assertNotSame($material, $credential->materialFingerprint());
+        self::assertSame($revision, $this->editRevision('ssh-demo'));
+        $verification = app(SshVerificationState::class);
+        $attempt = $verification->begin($target, $config, $credential);
+        self::assertSame($revision, $this->editRevision('ssh-demo'));
+        $verification->succeeded($target, $config, $credential, $attempt, '1.1.1.1');
+        self::assertSame($revision, $this->editRevision('ssh-demo'));
+        $this->put('/admin/targets/ssh-demo/configuration', $this->sshUpdate($revision, [
+            'ssh_password' => 'intentional-replacement',
+        ]))->assertAdminRedirect('/admin/targets/ssh-demo')->assertSessionHasNoErrors();
+        self::assertNotSame($revision, $this->editRevision('ssh-demo'));
+        self::assertSame($credential->getKey(), $credential->fresh()->getKey());
+        self::assertSame(1, $credential->fresh()->authority_revision);
+        self::assertNotSame($authority, $credential->fresh()->authorityFingerprint());
+        $this->put('/admin/targets/ssh-demo/configuration', $this->sshUpdate($revision, [
+            'ssh_password' => 'stale-replacement',
+        ]))->assertSessionHasErrors('configuration_revision');
+        self::assertSame('intentional-replacement', app(SshTargetVault::class)->open(
+            $target->fresh(), $config->fresh(), $credential->fresh(),
+        )['secret']);
+    }
+
+    public function test_wordpress_origin_edit_revision_survives_metadata_observation_without_weakening_authority(): void
+    {
+        $this->actingAs($this->user('owner'));
+        $this->post('/admin/targets', [
+            'connector_type' => 'wp_ai_bridge', 'target_id' => 'wp-demo',
+            'display_name' => 'WP Demo', 'base_url' => 'https://old.example.test',
+        ])->assertAdminRedirect('/admin/targets/wp-demo');
+        $target = Target::query()->where('target_id', 'wp-demo')->sole();
+        $config = WpAiBridgeTargetConfig::query()->sole();
+        $revision = $this->editRevision('wp-demo');
+        $config->forceFill(['metadata_checked_at' => now()->addMinute(), 'metadata_reachable' => false])->save();
+        $target->forceFill([
+            'display_name' => 'Renamed independently',
+            'connection_state' => TargetConnectionState::Error,
+            'last_tested_at' => now(),
+        ])->save();
+        self::assertSame($revision, $this->editRevision('wp-demo'));
+        $this->put('/admin/targets/wp-demo/configuration', $this->wpUpdate($revision, 'https://new.example.test'))
+            ->assertAdminRedirect('/admin/targets/wp-demo')->assertSessionHasNoErrors();
+        self::assertSame('https://new.example.test', $config->fresh()->base_url);
+        self::assertNotSame($revision, $this->editRevision('wp-demo'));
+        $this->put('/admin/targets/wp-demo/configuration', $this->wpUpdate($revision, 'https://old.example.test'))
+            ->assertSessionHasErrors('configuration_revision');
+    }
+
     public function test_owner_rotates_password_then_switches_to_key_and_switch_requires_new_credential(): void
     {
         $this->actingAs($this->user('owner'));

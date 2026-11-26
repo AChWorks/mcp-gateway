@@ -31,12 +31,6 @@ final class SshTargetVault
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
     }
 
-    /** Exact, non-secret material snapshot for one in-flight operation. */
-    public static function materialFingerprint(TargetCredential $credential): string
-    {
-        return hash('sha256', (string) $credential->getKey()."\0".(string) $credential->encrypted_payload);
-    }
-
     /** @return array{secret:string,passphrase:?string} */
     public function open(Target $target, SshTargetConfig $config, TargetCredential $credential): array
     {
@@ -82,10 +76,7 @@ final class SshTargetVault
     {
         $pin = SshHostKeyPin::fromLine($config->pinned_host_key);
 
-        $parts = [
-            (string) $target->getKey(), $target->target_id, $config->host,
-            (string) $config->port, $config->username, $config->auth_method, $pin->canonicalLine(),
-        ];
+        $parts = SshTargetBinding::endpointParts($target, $config, $pin->canonicalLine());
 
         // Login ownership is bound to the actual endpoint, account and
         // verified host key, never to a Gateway transport or a job epoch.

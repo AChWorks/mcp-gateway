@@ -18,6 +18,8 @@ use Throwable;
  */
 final class WpAiBridgeTargetVault
 {
+    public const PURPOSE = 'wordpress_oauth';
+
     /** @param array{client_id:string,redirect_uri:string,resource_url:string,issuer_url:string,token_url:string,revocation_url:string,code_verifier:string} $context */
     public function sealFlow(Target $target, string $stateHash, array $context, int $expiresAt): string
     {
@@ -76,7 +78,7 @@ final class WpAiBridgeTargetVault
             'target_record_id' => (string) $target->getKey(),
             'target_id' => $target->target_id,
             'connector_type' => 'wp_ai_bridge',
-            'purpose' => 'wordpress_oauth',
+            'purpose' => self::PURPOSE,
             'client_id' => $clientId,
             'resource_url' => $resourceUrl,
             'access_token' => $accessToken,
@@ -91,7 +93,7 @@ final class WpAiBridgeTargetVault
     {
         if ((string) $credential->target_record_id !== (string) $target->getKey()
             || $credential->connector_type !== 'wp_ai_bridge'
-            || $credential->purpose !== 'wordpress_oauth') {
+            || $credential->purpose !== self::PURPOSE) {
             throw new RuntimeException('Credential ownership or purpose is invalid.');
         }
 
@@ -106,7 +108,7 @@ final class WpAiBridgeTargetVault
         $resourceUrl = (string) $metadata->resource_url;
         $binding = hash('sha256', (string) $target->getKey()."\0".$target->target_id."\0".$clientId."\0".$resourceUrl);
         if (! $this->matchesTarget($target, $payload)
-            || ($payload['purpose'] ?? null) !== 'wordpress_oauth'
+            || ($payload['purpose'] ?? null) !== self::PURPOSE
             || ! hash_equals($binding, (string) $metadata->binding_hash)
             || ! hash_equals($clientId, (string) ($payload['client_id'] ?? ''))
             || ! hash_equals($resourceUrl, (string) ($payload['resource_url'] ?? ''))) {

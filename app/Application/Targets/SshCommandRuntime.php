@@ -41,7 +41,7 @@ final readonly class SshCommandRuntime
         User $user, Target $target, string $command, int $timeoutSeconds = 10,
         ?string $expectedTargetBinding = null,
         ?Closure $beforeRemoteEffect = null,
-        ?string $expectedCredentialMaterial = null,
+        ?string $expectedCredentialDispatch = null,
     ): array {
         if ($target->connector_type !== 'ssh_direct') {
             throw new SshTargetConnectionException('unsupported_connector');
@@ -63,7 +63,7 @@ final readonly class SshCommandRuntime
             throw new SshTargetConnectionException('timeout_unsupported');
         }
 
-        return $this->admission->run((string) $target->getKey(), function () use ($user, $target, $command, $timeoutSeconds, $expectedTargetBinding, $beforeRemoteEffect, $expectedCredentialMaterial): array {
+        return $this->admission->run((string) $target->getKey(), function () use ($user, $target, $command, $timeoutSeconds, $expectedTargetBinding, $beforeRemoteEffect, $expectedCredentialDispatch): array {
             $fresh = Target::query()->whereKey($target->getKey())->first();
             $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
             if ($fresh instanceof Target && $fresh->operations_paused) {
@@ -81,8 +81,8 @@ final readonly class SshCommandRuntime
             }
             if (($expectedTargetBinding !== null
                 && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($fresh, $config)))
-                || ($expectedCredentialMaterial !== null
-                    && ! hash_equals($expectedCredentialMaterial, SshTargetVault::materialFingerprint($credential)))) {
+                || ($expectedCredentialDispatch !== null
+                    && ! hash_equals($expectedCredentialDispatch, $credential->dispatchFingerprint()))) {
                 throw new SshTargetConnectionException('target_changed');
             }
             try {
@@ -92,6 +92,7 @@ final readonly class SshCommandRuntime
                 throw new SshTargetConnectionException('credential_unavailable');
             }
 
+            $execution = SshTargetBinding::executionFingerprint($fresh, $config, $credential);
             $route = $this->reverseRoutes->forTarget($fresh);
             $relay = $this->relayRoutes->sshRouteForTarget($fresh);
             $started = microtime(true);
@@ -100,7 +101,7 @@ final readonly class SshCommandRuntime
                 $config->endpoint(), $pin, $config->auth_method,
                 $material['secret'], $material['passphrase'],
                 function (SSH2 $ssh, string $peerIp) use (
-                    $user, $target, $fresh, $config, $credential, $command, $timeoutSeconds, $started, $expectedTargetBinding, $beforeRemoteEffect,
+                    $user, $target, $fresh, $config, $credential, $command, $timeoutSeconds, $started, $execution, $beforeRemoteEffect,
                 ): array {
                     // Credential disconnect or permission revocation during KEX/login
                     // must not authorize a NEW exec after the revocation.
@@ -117,15 +118,7 @@ final readonly class SshCommandRuntime
                         || ! $currentUser instanceof User
                         || ! $currentCredential instanceof TargetCredential
                         || ! $currentConfig instanceof SshTargetConfig
-                        || ! hash_equals((string) $credential->encrypted_payload, (string) $currentCredential->encrypted_payload)
-                        || ! hash_equals((string) $config->pinned_host_key, (string) $currentConfig->pinned_host_key)
-                        || ! hash_equals((string) $config->host, (string) $currentConfig->host)
-                        || $config->port !== $currentConfig->port
-                        || ! hash_equals((string) $config->username, (string) $currentConfig->username)
-                        || ! hash_equals((string) $config->auth_method, (string) $currentConfig->auth_method)
-                        || ! hash_equals(SshTargetBinding::hash($fresh, $config), SshTargetBinding::hash($currentTarget, $currentConfig))
-                        || ($expectedTargetBinding !== null
-                            && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($currentTarget, $currentConfig)))
+                        || ! hash_equals($execution, SshTargetBinding::executionFingerprint($currentTarget, $currentConfig, $currentCredential))
                         || ! $this->access->allows($currentUser, GatewayPermission::SshCommandRun, $currentTarget)
                         || ! $this->dispatchAdmission->allows($currentUser)) {
                         throw new SshTargetConnectionException('target_changed');

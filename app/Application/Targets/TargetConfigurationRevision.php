@@ -3,29 +3,23 @@
 namespace App\Application\Targets;
 
 use App\Domain\Targets\Target;
-use App\Domain\Targets\TargetCredential;
 
 /**
- * Opaque optimistic concurrency token. Never expose or persist a login secret.
- * Changes to the connector configuration OR credential invalidate an old form.
+ * Opaque optimistic concurrency token for the actual mutation scope.
+ * Callers project only the editable fields and genuinely coupled authority.
+ * Observations, timestamps and unrelated metadata are never implicit inputs.
  */
 final class TargetConfigurationRevision
 {
     /** @param array<string, mixed> $configuration */
-    public static function make(Target $target, array $configuration, ?TargetCredential $credential): string
+    public static function make(Target $target, array $configuration, ?string $credentialBinding): string
     {
         return hash('sha256', json_encode([
             (string) $target->getKey(),
             $target->target_id,
             $target->connector_type,
-            $target->getRawOriginal('connection_state'),
-            $target->getAttribute('relay_record_id'),
-            $target->reverse_listener_port,
-            $target->reverse_tunnel_identity,
-            (int) ($target->getAttribute('transport_revision') ?? 0),
             $configuration,
-            $credential?->getKey(),
-            $credential?->encrypted_payload,
+            $credentialBinding,
         ], JSON_THROW_ON_ERROR));
     }
 }

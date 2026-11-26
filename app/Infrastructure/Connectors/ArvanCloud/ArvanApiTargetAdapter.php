@@ -152,17 +152,16 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
 
     public function configurationRevision(Target $target): string
     {
-        // Include the persisted DB-default connection state even immediately
-        // after Target creation (an in-memory model may not have hydrated it).
-        $stored = Target::query()->whereKey($target->getKey())->firstOrFail();
-        $config = $this->config($stored);
-        $credential = $this->credential($stored);
+        return $this->editableRevision($target, $this->config($target), $this->credential($target));
+    }
 
-        return TargetConfigurationRevision::make($stored, [
+    private function editableRevision(Target $target, ArvanApiTargetConfig $config, ?TargetCredential $credential): string
+    {
+        return TargetConfigurationRevision::make($target, [
             'base_url' => $config->base_url,
             'spec_url' => $config->spec_url,
             'probe_path' => $config->probe_path,
-        ], $credential);
+        ], $credential?->authorityFingerprint());
     }
 
     public function updateConfiguration(Target $target, array $input): TargetConnectorResult
@@ -176,7 +175,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                 $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
                 $config = $this->config($locked);
                 $credential = $this->credential($locked);
-                if (! hash_equals($this->configurationRevision($locked), (string) $input['configuration_revision'])) {
+                if (! hash_equals($this->editableRevision($locked, $config, $credential), (string) $input['configuration_revision'])) {
                     throw new InvalidArgumentException('Target configuration changed. Reload to avoid overwriting current credentials.');
                 }
                 $changedBase = ! hash_equals($config->base_url, $base);
@@ -192,7 +191,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                 if ($newKey !== '') {
                     $sealed = $this->validatedSeal($locked, $config, $newKey);
                     if ($credential instanceof TargetCredential) {
-                        $credential->forceFill(['encrypted_payload' => $sealed])->save();
+                        $credential->supersedeAuthority($sealed);
                     } else {
                         TargetCredential::query()->create([
                             'target_record_id' => $locked->getKey(),
@@ -364,8 +363,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                     || $config->probe_path !== $currentConfig->probe_path
                     || $config->spec_url !== $currentConfig->spec_url
                     || ! $currentCredential instanceof TargetCredential
-                    || ! hash_equals((string) $credential->getKey(), (string) $currentCredential->getKey())
-                    || ! hash_equals((string) $credential->encrypted_payload, (string) $currentCredential->encrypted_payload)) {
+                    || ! hash_equals($credential->dispatchFingerprint(), $currentCredential->dispatchFingerprint())) {
                     throw new TargetConnectorFailure(
                         __('The API configuration, route or key changed during the probe. Reload and verify the current credentials.'),
                         null, 'probe_stale',

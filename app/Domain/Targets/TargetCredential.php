@@ -22,6 +22,13 @@ final class TargetCredential extends Model
     /** @var list<string> */
     protected $hidden = ['encrypted_payload'];
 
+    protected $attributes = ['authority_revision' => 0];
+
+    protected function casts(): array
+    {
+        return ['authority_revision' => 'integer'];
+    }
+
     protected static function booted(): void
     {
         self::saving(static function (self $credential): void {
@@ -38,6 +45,44 @@ final class TargetCredential extends Model
                 throw new DomainException('Credential connector type must match the exact registered Target.');
             }
         });
+    }
+
+    /**
+     * Exact record/material snapshot for in-flight checks.
+     * This is not a semantic grant identity; ordinary reseal/refresh may change it.
+     */
+    public function materialFingerprint(): string
+    {
+        return hash('sha256', (string) $this->getKey()."\0".(string) $this->encrypted_payload);
+    }
+
+    /** Semantic grant identity, independent of ordinary refresh/reseal. */
+    public function authorityFingerprint(): string
+    {
+        return hash('sha256', (string) $this->getKey()."\0".(string) $this->authority_revision);
+    }
+
+    /** Exact authority AND material used for a new authenticated dispatch. */
+    public function dispatchFingerprint(): string
+    {
+        return hash('sha256', $this->authorityFingerprint()."\0".$this->materialFingerprint());
+    }
+
+    /**
+     * Supersede new-work authority on explicit replacement or local revoke
+     * intent. Call under the existing Target mutation lock. Do not use for
+     * routine material refresh, reseal or outcome settlement.
+     */
+    public function supersedeAuthority(?string $replacementCiphertext = null): void
+    {
+        $revision = $this->authority_revision;
+        if ($revision === PHP_INT_MAX) {
+            throw new DomainException('Credential authority revision cannot advance.');
+        }
+        $this->forceFill([
+            'authority_revision' => $revision + 1,
+            ...($replacementCiphertext === null ? [] : ['encrypted_payload' => $replacementCiphertext]),
+        ])->save();
     }
 
     /** @return BelongsTo<Target, $this> */

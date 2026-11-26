@@ -143,8 +143,20 @@ final class TargetTransportMigrationTest extends TestCase
         self::assertSame($converted, DB::table('target_credentials')->where('id', $record['credential'])->value('encrypted_payload'));
         (require database_path('migrations/0001_01_01_000005_move_reverse_to_target_transport.php'))->up();
 
-        $current = app(TargetBatchBinding::class)->hash(Target::query()->findOrFail($record['id']));
-        self::assertSame($current, $convertedHash);
+        $target = Target::query()->findOrFail($record['id']);
+        $p0 = hash('sha256', implode("\0", [
+            $record['id'], $target->target_id, 'ssh_direct', '', (string) $target->transport_revision,
+            SshTargetBinding::hash($target, $target->sshConfig), $record['credential'], 'ssh_auth', hash('sha256', $converted),
+        ]));
+        self::assertSame($p0, $convertedHash);
+        (require database_path('migrations/0001_01_01_000006_add_credential_authority_revision.php'))->up();
+        $migration = require database_path('migrations/0001_01_01_000007_bind_queued_batches_to_credential_authority.php');
+        $migration->up();
+        $current = app(TargetBatchBinding::class)->hash($target->fresh());
+        self::assertIsString($current);
+        self::assertNotSame($p0, $current);
+        $migration->up();
+        self::assertSame($converted, DB::table('target_credentials')->where('id', $record['credential'])->value('encrypted_payload'));
         self::assertSame($current, DB::table('target_batch_items')->where('id', $items[0])->value('target_binding_hash'));
         self::assertSame($stale, DB::table('target_batch_items')->where('id', $items[1])->value('target_binding_hash'));
         self::assertSame($binding, DB::table('target_batch_items')->where('id', $items[2])->value('target_binding_hash'));
@@ -167,6 +179,42 @@ final class TargetTransportMigrationTest extends TestCase
         self::assertSame($before, DB::table('target_credentials')->where('id', $valid['credential'])->value('encrypted_payload'));
         self::assertSame(2, DB::table('target_credentials')->count());
         self::assertTrue(Schema::hasColumn('targets', 'relay_binding_revision'));
+    }
+
+    public function test_credential_authority_upgrade_preserves_material_and_pending_disconnect_evidence_on_restart(): void
+    {
+        $this->upgrade();
+        $credentials = [];
+        foreach (['connected', 'error'] as $state) {
+            $id = (string) Str::ulid();
+            $credential = (string) Str::ulid();
+            $cipher = Crypt::encryptString('retained-fixture-'.$state);
+            DB::table('targets')->insert([
+                'id' => $id, 'target_id' => 'wp-'.$state, 'display_name' => 'WP fixture',
+                'connector_type' => 'wp_ai_bridge', 'connection_state' => $state,
+            ]);
+            DB::table('target_credentials')->insert([
+                'id' => $credential, 'target_record_id' => $id, 'connector_type' => 'wp_ai_bridge',
+                'purpose' => 'oauth', 'encrypted_payload' => $cipher,
+            ]);
+            $credentials[$state] = ['id' => $credential, 'cipher' => $cipher];
+            if ($state === 'error') {
+                DB::table('wp_ai_bridge_revocation_intents')->insert([
+                    'id' => (string) Str::ulid(), 'target_record_id' => $id,
+                    'kind' => 'disconnect', 'created_at' => now(), 'updated_at' => now(),
+                ]);
+            }
+        }
+        $intent = (array) DB::table('wp_ai_bridge_revocation_intents')->sole();
+        $migration = require database_path('migrations/0001_01_01_000006_add_credential_authority_revision.php');
+        $migration->up();
+        $migration->up();
+        foreach ($credentials as $state => $expected) {
+            $row = DB::table('target_credentials')->where('id', $expected['id'])->sole();
+            self::assertSame($expected['cipher'], $row->encrypted_payload);
+            self::assertSame($state === 'error' ? 1 : 0, (int) $row->authority_revision);
+        }
+        self::assertSame($intent, (array) DB::table('wp_ai_bridge_revocation_intents')->sole());
     }
 
     public function test_fixed_reverse_path_does_not_silently_fall_back_for_an_http_connector(): void

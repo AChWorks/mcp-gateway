@@ -87,6 +87,22 @@ final class Target extends Model
         return $this->usesReverseRoute() ? 'reverse' : ($this->getAttribute('relay_record_id') !== null ? 'relay' : 'direct');
     }
 
+    /**
+     * Effective selected-path authority, independent of the downstream
+     * peer, credential and health. Provider lifecycle mutations advance the
+     * materialized revision atomically with availability changes.
+     */
+    public function transportAuthorityFingerprint(): string
+    {
+        return hash('sha256', json_encode([
+            (string) $this->getKey(),
+            $this->getAttribute('relay_record_id'),
+            $this->reverse_listener_port,
+            $this->reverse_tunnel_identity,
+            (int) $this->transport_revision,
+        ], JSON_THROW_ON_ERROR));
+    }
+
     /** @return HasOne<SshTargetConfig, $this> */
     public function sshConfig(): HasOne
     {

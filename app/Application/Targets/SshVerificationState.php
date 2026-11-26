@@ -140,15 +140,13 @@ final readonly class SshVerificationState
             && $locked->connector_type === 'ssh_direct'
             && $currentCredential instanceof TargetCredential
             && $currentConfig instanceof SshTargetConfig
-            && (string) $currentCredential->target_record_id === (string) $target->getKey()
-            && $currentCredential->connector_type === 'ssh_direct'
-            && $currentCredential->purpose === SshTargetVault::PURPOSE
-            && (string) $currentConfig->target_record_id === (string) $target->getKey()
-            && hash_equals((string) $credential->encrypted_payload, (string) $currentCredential->encrypted_payload)
-            && hash_equals((string) $config->pinned_host_key, (string) $currentConfig->pinned_host_key)
+            && (string) $credential->target_record_id === (string) $target->getKey()
+            && $credential->connector_type === 'ssh_direct'
+            && $credential->purpose === SshTargetVault::PURPOSE
+            && (string) $config->target_record_id === (string) $target->getKey()
             && hash_equals(
-                SshTargetBinding::hash($target, $config),
-                SshTargetBinding::hash($locked, $currentConfig),
+                SshTargetBinding::executionFingerprint($target, $config, $credential),
+                SshTargetBinding::executionFingerprint($locked, $currentConfig, $currentCredential),
             );
     }
 }

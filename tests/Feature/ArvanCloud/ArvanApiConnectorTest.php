@@ -511,6 +511,53 @@ final class ArvanApiConnectorTest extends TestCase
         self::assertTrue((bool) $target->fresh()->operations_paused);
     }
 
+    public function test_configuration_revision_ignores_later_probe_and_separate_route_but_fences_key_changes(): void
+    {
+        [$target] = $this->fixture();
+        $adapter = app(ArvanApiTargetAdapter::class);
+        $revision = $adapter->configurationRevision($target);
+        $credential = TargetCredential::query()->sole();
+        $config = ArvanApiTargetConfig::query()->sole();
+        $vault = app(ArvanApiTargetVault::class);
+        $authority = $credential->authorityFingerprint();
+        $material = $credential->materialFingerprint();
+        $credential->forceFill(['encrypted_payload' => $vault->seal(
+            $target, $config, $vault->open($target, $config, $credential),
+        )])->save();
+        self::assertSame($authority, $credential->authorityFingerprint());
+        self::assertNotSame($material, $credential->materialFingerprint());
+        self::assertSame($revision, $adapter->configurationRevision($target));
+        Http::fake(static fn () => Http::response(['ok' => true], 200));
+        $adapter->test($target);
+        self::assertSame('connected', $target->fresh()->getRawOriginal('connection_state'));
+        self::assertSame($revision, $adapter->configurationRevision($target->fresh()));
+        // A local API configuration edit does not use the selected route.
+        // The separate route mutation fence is checked at dispatch.
+        DB::table('targets')->where('id', $target->getKey())->increment('transport_revision');
+        self::assertSame($revision, $adapter->configurationRevision($target->fresh()));
+        $payload = [
+            'configuration_revision' => $revision,
+            'api_base_url' => 'https://api.example.test/cdn/4.0',
+            'api_spec_url' => 'https://spec.example.test/openapi.yaml',
+            'api_probe_path' => '/domains',
+            'api_key' => 'replacement-synthetic-key',
+        ];
+        $adapter->updateConfiguration($target, $payload);
+        self::assertSame(1, $credential->fresh()->authority_revision);
+        self::assertNotSame($authority, $credential->fresh()->authorityFingerprint());
+        self::assertNotSame($revision, $adapter->configurationRevision($target->fresh()));
+        try {
+            $adapter->updateConfiguration($target, [...$payload, 'api_key' => 'stale-synthetic-key']);
+            self::fail('An old form cannot replace a newer credential.');
+        } catch (TargetConnectorFailure $exception) {
+            self::assertSame('configuration_revision', $exception->field);
+        }
+        self::assertSame('replacement-synthetic-key', app(ArvanApiTargetVault::class)->open(
+            $target->fresh(), ArvanApiTargetConfig::query()->sole(), TargetCredential::query()->sole(),
+        ));
+        Http::assertSentCount(1);
+    }
+
     public function test_arvan_configuration_errors_identify_correct_fields_and_probe_changes_clear_old_verification(): void
     {
         [$target] = $this->fixture();
@@ -985,6 +1032,33 @@ YAML, 200);
         self::assertSame('disconnected', $target->fresh()->getRawOriginal('connection_state'));
         self::assertNull($target->fresh()->connected_at);
         self::assertSame(0, TargetCredential::query()->count());
+        Http::assertSentCount(1);
+    }
+
+    public function test_probe_reply_cannot_verify_superseded_grant_with_unchanged_material(): void
+    {
+        [$target] = $this->fixture();
+        $adapter = app(ArvanApiTargetAdapter::class);
+        $credential = TargetCredential::query()->sole();
+        $material = $credential->materialFingerprint();
+        Http::fake(function (Request $request) use ($target, $credential) {
+            self::assertTrue($request->hasHeader('Authorization', 'Apikey '.self::KEY));
+            DB::transaction(function () use ($target, $credential): void {
+                Target::query()->whereKey($target->getKey())->lockForUpdate()->sole();
+                $credential->fresh()->supersedeAuthority();
+            });
+
+            return Http::response(['status' => true], 200);
+        });
+        try {
+            $adapter->test($target);
+            self::fail('A superseded grant must not receive current verification.');
+        } catch (TargetConnectorFailure $exception) {
+            self::assertSame('probe_stale', $exception->reason);
+        }
+        self::assertSame($material, $credential->fresh()->materialFingerprint());
+        self::assertNotSame($credential->authorityFingerprint(), $credential->fresh()->authorityFingerprint());
+        self::assertNull($target->fresh()->last_tested_at);
         Http::assertSentCount(1);
     }
 

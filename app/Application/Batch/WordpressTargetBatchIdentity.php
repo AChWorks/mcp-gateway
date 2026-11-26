@@ -3,7 +3,9 @@
 namespace App\Application\Batch;
 
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use Illuminate\Support\Facades\DB;
 
 /** OAuth consent/client binding survives legitimate access/refresh rotation. */
@@ -19,11 +21,15 @@ final class WordpressTargetBatchIdentity
         }
         $ids = array_map(static fn (Target $target): string => (string) $target->getKey(), $targets);
         $configs = WpAiBridgeTargetConfig::query()->whereIn('target_record_id', $ids)->get()->keyBy('target_record_id');
-        $credentials = DB::table('target_credentials')->whereIn('target_record_id', $ids)
-            ->orderBy('purpose')->orderBy('id')
-            ->get(['id', 'target_record_id', 'purpose', 'connector_type'])
-            ->groupBy('target_record_id');
-        $credentialIds = $credentials->flatten(1)->pluck('id')->all();
+        $credentials = TargetCredential::query()->whereIn('target_record_id', $ids)
+            ->whereNotExists(static function ($query): void {
+                $query->selectRaw('1')->from('wp_ai_bridge_revocation_intents')
+                    ->whereColumn('wp_ai_bridge_revocation_intents.target_record_id', 'target_credentials.target_record_id');
+            })
+            ->where('connector_type', 'wp_ai_bridge')->where('purpose', WpAiBridgeTargetVault::PURPOSE)
+            ->get(['id', 'target_record_id', 'purpose', 'authority_revision'])
+            ->keyBy('target_record_id');
+        $credentialIds = $credentials->pluck('id')->all();
         $metadata = collect();
         foreach (array_chunk($credentialIds, 250) as $page) {
             foreach (DB::table('wp_ai_bridge_credential_metadata')->whereIn('credential_id', $page)->get() as $row) {
@@ -35,8 +41,15 @@ final class WordpressTargetBatchIdentity
         foreach ($targets as $target) {
             $id = (string) $target->getKey();
             $config = $configs->get($id);
-            $rows = $credentials->get($id);
-            if (! $config instanceof WpAiBridgeTargetConfig || $rows === null || $rows->isEmpty()) {
+            $credential = $credentials->get($id);
+            if (! $config instanceof WpAiBridgeTargetConfig || ! $credential instanceof TargetCredential) {
+                $bindings[$id] = null;
+
+                continue;
+            }
+            $credentialMeta = $metadata->get($credential->id);
+            if ($credentialMeta === null || $credentialMeta->resource_url !== $config->mcp_resource_url
+                || ! is_string($credentialMeta->binding_hash) || $credentialMeta->binding_hash === '') {
                 $bindings[$id] = null;
 
                 continue;
@@ -45,22 +58,8 @@ final class WordpressTargetBatchIdentity
             foreach (['base_url', 'mcp_resource_url', 'oauth_issuer_url', 'oauth_token_url'] as $key) {
                 $parts[] = (string) $config->getAttribute($key);
             }
-            foreach ($rows as $credential) {
-                $credentialMeta = $metadata->get($credential->id);
-                if ($credential->connector_type !== 'wp_ai_bridge'
-                    || $credentialMeta === null
-                    || $credentialMeta->resource_url !== $config->mcp_resource_url
-                    || ! is_string($credentialMeta->binding_hash) || $credentialMeta->binding_hash === '') {
-                    $parts = [];
-                    break;
-                }
-                $parts[] = (string) $credential->id;
-                $parts[] = (string) $credential->purpose;
-                $parts[] = (string) $credentialMeta->client_id;
-                $parts[] = (string) $credentialMeta->resource_url;
-                $parts[] = (string) $credentialMeta->binding_hash;
-            }
-            $bindings[$id] = $parts === [] ? null : $parts;
+            $bindings[$id] = [...$parts, (string) $credential->purpose, $credential->authorityFingerprint(),
+                (string) $credentialMeta->client_id, (string) $credentialMeta->resource_url, (string) $credentialMeta->binding_hash];
         }
 
         return $bindings;

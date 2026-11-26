@@ -32,7 +32,7 @@ final readonly class SshTargetReconfiguration
     {
         $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->firstOrFail();
 
-        return TargetConfigurationRevision::make($target, $config->getAttributes(), $this->credential($target));
+        return $this->configurationRevision($target, $config, $this->credential($target));
     }
 
     /** @param array<string,mixed> $input */
@@ -112,7 +112,7 @@ final readonly class SshTargetReconfiguration
             if ($locked->connector_type !== 'ssh_direct'
                 || ! hash_equals(
                     (string) $input['configuration_revision'],
-                    TargetConfigurationRevision::make($locked, $config->getAttributes(), $credential),
+                    $this->configurationRevision($locked, $config, $credential),
                 )) {
                 throw new TargetConnectorFailure(__('The SSH Target changed since this form was opened. Reload and review the current settings.'), 'configuration_revision');
             }
@@ -196,7 +196,13 @@ final readonly class SshTargetReconfiguration
                 }
 
                 if ($credential instanceof TargetCredential) {
-                    $credential->forceFill(['encrypted_payload' => $encrypted])->save();
+                    if ($replacement !== null) {
+                        $credential->supersedeAuthority($encrypted);
+                    } else {
+                        // Same verified account and host key: rebind the
+                        // envelope, not the grant. Peer revision is separate.
+                        $credential->forceFill(['encrypted_payload' => $encrypted])->save();
+                    }
                 } else {
                     TargetCredential::query()->create([
                         'target_record_id' => $locked->getKey(),
@@ -245,6 +251,20 @@ final readonly class SshTargetReconfiguration
 
             return true;
         });
+    }
+
+    private function configurationRevision(Target $target, SshTargetConfig $config, ?TargetCredential $credential): string
+    {
+        return TargetConfigurationRevision::make($target, [
+            'host' => $config->host,
+            'port' => $config->port,
+            'username' => $config->username,
+            'auth_method' => $config->auth_method,
+            'pinned_host_key' => $config->pinned_host_key,
+            'binding_revision' => $config->binding_revision,
+            // This form also edits the selected manual Reverse route.
+            'route' => $this->transportBindings->revision($target),
+        ], $credential?->authorityFingerprint());
     }
 
     private function credential(Target $target, bool $lock = false): ?TargetCredential

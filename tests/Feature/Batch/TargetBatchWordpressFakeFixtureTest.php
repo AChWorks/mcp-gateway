@@ -7,9 +7,11 @@ use App\Application\Batch\TargetBatchBinding;
 use App\Application\Batch\TargetBatchCoordinator;
 use App\Application\Batch\TargetBatchWorker;
 use App\Application\Batch\WordpressBridgeInfoBatchProvider;
+use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Http\DnsResolver;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -153,6 +155,54 @@ final class TargetBatchWordpressFakeFixtureTest extends TestCase
             'wp-ai-bridge/abilities-read', 'wp-ai-bridge/bridge-info',
         ], $this->abilityCalls);
         self::assertNull($worker->workOnce());
+    }
+
+    public function test_committed_disconnect_fences_queued_authority_even_when_remote_revocation_fails(): void
+    {
+        $user = User::query()->create([
+            'name' => 'WP Batch Owner', 'email' => 'wp-batch-revoke@example.test',
+            'password' => 'StrongPassword!234', 'role' => 'owner',
+            'target_scope_mode' => 'all', 'access_enabled' => true, 'ai_access_enabled' => true,
+        ]);
+        $target = app(WpAiBridgeTargetRegistration::class)->register(
+            'wp-batch-revoke', 'WP Revoke', 'https://wp-batch-revoke.example.test',
+        );
+        $connection = app(WpAiBridgeTargetConnectionService::class);
+        parse_str((string) parse_url($connection->begin($target), PHP_URL_QUERY), $query);
+        $connection->completeCallback((string) $query['state'], 'wp-code', 'https://wp-batch-revoke.example.test', null);
+        $target->refresh();
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
+        $material = $credential->materialFingerprint();
+        $grant = $credential->authorityFingerprint();
+        $request = HttpRequest::create('/admin/target-batches', 'POST');
+        $request->setUserResolver(static fn (): User => $user);
+        $origin = app(DeferredBatchAuthority::class)->captureWeb($user, $request);
+        $core = app(TargetBatchCoordinator::class);
+        $preview = $core->preview($user, $origin, 'wordpress.bridge.info', [$target->target_id], []);
+        self::assertSame(1, $preview['eligible_count']);
+        $created = $core->create($user, $origin, (string) Str::uuid(),
+            'wordpress.bridge.info', [$target->target_id], [], $preview['preview_token']);
+        // The fixture rejects the revocation endpoint, so the real service
+        // commits the local intent but cannot claim successful remote revoke.
+        try {
+            $connection->disconnect($target);
+            self::fail('Revocation must not claim remote confirmation.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('revocation_failed', $exception->reason);
+        }
+        self::assertSame($material, $credential->fresh()->materialFingerprint());
+        self::assertNotSame($grant, $credential->fresh()->authorityFingerprint());
+        self::assertSame(1, $credential->fresh()->authority_revision);
+        self::assertNotNull(DB::table('wp_ai_bridge_revocation_intents')->where('target_record_id', $target->getKey())->first());
+        self::assertNull(app(TargetBatchBinding::class)->hash($target->fresh()));
+        // Even the pre-disconnect connected model cannot supply a grant
+        // after the durable intent was created.
+        self::assertNull(app(TargetBatchBinding::class)->hash($target));
+        $outcome = app(TargetBatchWorker::class)->workOnce();
+        self::assertSame('blocked', $outcome['status']);
+        self::assertSame('authorization_revoked', $outcome['error_code']);
+        self::assertSame([], $this->abilityCalls);
+        self::assertSame('blocked', $core->status($user, $origin, $created['batch_id'])['items'][0]['status']);
     }
 
     public function test_failed_wordpress_provider_preserves_native_cause_and_original_reference_in_batch_activity(): void

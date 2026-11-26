@@ -53,10 +53,14 @@ final readonly class TargetBatchBinding
                     }
                     $common = [
                         $recordId, $id, (string) $target->connector_type,
-                        (string) $target->getAttribute('relay_record_id'),
-                        (string) (int) ($target->getAttribute('transport_revision') ?? 0),
+                        $target->transportAuthorityFingerprint(),
                     ];
-                    $hashes[$id] = hash('sha256', implode("\0", [...$common, ...$connectorParts]));
+                    // Versioned exact composition. Only the migration may
+                    // translate a proven old queued identity; no runtime
+                    // fallback can resurrect an obsolete authorization.
+                    $hashes[$id] = hash('sha256', json_encode([
+                        'target_batch_authority_v2', ...$common, ...$connectorParts,
+                    ], JSON_THROW_ON_ERROR));
                 }
             }
         }
