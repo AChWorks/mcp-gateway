@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\ArvanCloud;
 
+use App\Application\Access\OperationAdmission;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Targets\ArvanApiOperations;
 use App\Application\Targets\ConnectionRelayAdministration;
@@ -17,6 +18,7 @@ use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetVault;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Http\DnsResolver;
 use App\Models\User;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
@@ -1496,6 +1498,45 @@ YAML, 200);
         self::assertSame('provider-numeric-key', $context['api_operation']['provider_request_id']);
         self::assertStringNotContainsString($key, (string) $event->diagnostic_context);
         Http::assertSentCount(1);
+    }
+
+    public function test_disconnect_rechecks_control_after_target_mutation_lock(): void
+    {
+        [$target, $owner] = $this->fixture();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $administrator = $this->user('administrator');
+        DB::table('user_target_access')->insert([
+            'user_id' => $administrator->getKey(), 'target_record_id' => $target->getKey(), 'allowed' => true,
+        ]);
+        $before = TargetCredential::query()->sole()->dispatchFingerprint();
+        $boundary = false;
+        DB::listen(static function (QueryExecuted $query) use ($administrator, &$boundary): void {
+            $sql = str_replace(['"', chr(96)], '', strtolower($query->sql));
+            $frames = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
+            if ($boundary || ! str_contains($sql, 'from targets where targets.id = ?')
+                || ! in_array('disconnect', array_column($frames, 'function'), true)
+                || in_array(OperationAdmission::class, array_column($frames, 'class'), true)) {
+                return;
+            }
+            $boundary = true;
+            // Withdraw the grant as the locked Target becomes available.
+            DB::table('user_permission_denials')->insert([
+                'user_id' => $administrator->getKey(), 'permission' => GatewayPermission::TargetsDisconnect->value,
+            ]);
+        });
+        Http::fake();
+        $this->actingAs($administrator)->post('/admin/targets/arvan-cdn/disconnect')
+            ->assertSessionHasErrors('target')->assertSessionHas('diagnostic_code', 'forbidden');
+        self::assertTrue($boundary);
+        self::assertSame($before, TargetCredential::query()->sole()->dispatchFingerprint());
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        $this->assertDatabaseMissing('activity_events', [
+            'operation' => 'arvan-target-disconnect', 'outcome' => 'success',
+        ]);
+        $this->actingAs($owner)->post('/admin/targets/arvan-cdn/disconnect')->assertSessionHas('status');
+        self::assertSame(0, TargetCredential::query()->count());
+        self::assertSame(TargetConnectionState::Disconnected, $target->refresh()->connection_state);
+        Http::assertNothingSent();
     }
 
     public function test_authentication_probe_is_real_readonly_get_and_disconnect_only_erases_local_credential(): void

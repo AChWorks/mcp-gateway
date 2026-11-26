@@ -3,6 +3,7 @@
 namespace Tests\Feature\Admin;
 
 use App\Application\Access\AccessControl;
+use App\Application\Access\OperationAdmission;
 use App\Application\Access\UserAccessManager;
 use App\Application\Targets\TargetInventory;
 use App\Domain\Access\GatewayPermission;
@@ -13,6 +14,7 @@ use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Models\User;
 use GuzzleHttp\Promise\PromiseInterface;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
@@ -1161,6 +1163,50 @@ A second line.', $target->refresh()->ai_guidance);
         self::assertSame(0, Target::query()->whereKey($paused->getKey())->count());
         self::assertSame(2, DB::table('activity_events')
             ->where('operation', 'target-forget-local')->count());
+        Http::assertNothingSent();
+    }
+
+    public function test_local_forget_rechecks_permission_after_target_lock(): void
+    {
+        $target = $this->target('forget-admission', 'wp_ai_bridge');
+        $target->forceFill(['connection_state' => 'error'])->save();
+        $id = (string) $target->getKey();
+        TargetCredential::query()->create([
+            'target_record_id' => $id,
+            'connector_type' => 'wp_ai_bridge',
+            'purpose' => 'wordpress_oauth',
+            'encrypted_payload' => 'unopened-admission-fixture',
+        ]);
+        $admin = $this->user('administrator', 'all');
+        $boundary = false;
+        DB::listen(static function (QueryExecuted $query) use ($admin, &$boundary): void {
+            $sql = str_replace(['"', chr(96)], '', strtolower($query->sql));
+            $frames = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
+            if ($boundary || ! str_contains($sql, 'from targets where targets.id = ?')
+                || ! in_array('forget', array_column($frames, 'function'), true)
+                || in_array(AccessControl::class, array_column($frames, 'class'), true)
+                || in_array(OperationAdmission::class, array_column($frames, 'class'), true)) {
+                return;
+            }
+            $boundary = true;
+            DB::table('user_permission_denials')->insert([
+                'user_id' => $admin->getKey(), 'permission' => GatewayPermission::TargetsRemove->value,
+            ]);
+        });
+        $payload = [
+            'confirm_target_id' => 'forget-admission', 'confirm_local_only' => 'yes',
+            'confirm_remote_revocation_unknown' => 'yes', 'current_password' => 'ThisIsATestSecret!234',
+        ];
+        $path = '/admin/targets/forget-admission/forget';
+        $this->actingAs($admin)->delete($path, $payload)->assertForbidden();
+        self::assertTrue($boundary);
+        $this->assertDatabaseHas('targets', ['id' => $id]);
+        $this->assertDatabaseHas('target_credentials', ['target_record_id' => $id]);
+        $this->assertDatabaseMissing('activity_events', ['target_id' => 'forget-admission', 'operation' => 'target-forget-local']);
+        $this->actingAs($this->user('owner', 'all'))->delete($path, $payload)
+            ->assertAdminRedirect('/admin/targets');
+        $this->assertDatabaseMissing('targets', ['id' => $id]);
+        $this->assertDatabaseMissing('target_credentials', ['target_record_id' => $id]);
         Http::assertNothingSent();
     }
 

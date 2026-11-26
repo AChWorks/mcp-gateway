@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Application\Targets\WpAiBridgeRefreshIdentity;
 use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Domain\Targets\Target;
@@ -10,7 +11,6 @@ use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Sleep;
 use Throwable;
 
 final class MaintainWordpressTargetCredentials extends Command
@@ -72,7 +72,7 @@ final class MaintainWordpressTargetCredentials extends Command
         $success = 0;
         $failures = 0;
         $recovered = 0;
-        /** @var list<array{record_id:string,target_id:string}> $recoveries */
+        /** @var list<array{identity:WpAiBridgeRefreshIdentity,target_id:string}> $recoveries */
         $recoveries = [];
         $last = null;
         foreach ($due as $selected) {
@@ -90,14 +90,14 @@ final class MaintainWordpressTargetCredentials extends Command
                 $connections->routingContext($target, renewIfDue: true);
                 $success++;
             } catch (WpAiBridgeTargetConnectionException $exception) {
-                if ($exception->reason === 'refresh_ambiguous') {
+                if ($exception->reason === 'refresh_ambiguous' && $exception->refreshIdentity !== null) {
                     // A first rotating-token response can be lost. Bridge
                     // supports ONE same-client/Target old-token recovery for
                     // 60 seconds; the underlying service fences attempts and
                     // revocation. A minute-based cron cannot wait for a new
                     // tick and still reliably meet that deadline.
                     $recoveries[] = [
-                        'record_id' => (string) $target->getKey(),
+                        'identity' => $exception->refreshIdentity,
                         'target_id' => (string) $target->target_id,
                     ];
 
@@ -135,7 +135,7 @@ final class MaintainWordpressTargetCredentials extends Command
      * invocation. No workers, retrying stale/terminal refresh, or replay
      * past the single-use WordPress recovery window.
      *
-     * @param  list<array{record_id:string,target_id:string}>  $pending
+     * @param  list<array{identity:WpAiBridgeRefreshIdentity,target_id:string}>  $pending
      */
     private function recoverPending(
         array &$pending,
@@ -147,42 +147,27 @@ final class MaintainWordpressTargetCredentials extends Command
     ): void {
         while ($pending !== []) {
             $current = $pending[0];
+            $identity = $current['identity'];
             $intent = DB::table('wp_ai_bridge_refresh_intents')
-                ->where('target_record_id', $current['record_id'])
-                ->first(['created_at', 'attempts', 'request_timeout_seconds']);
-            $minimumAge = $intent === null ? 45 : $connections->refreshRecoveryMinimumAge($intent);
-            $createdAt = $intent !== null ? strtotime((string) $intent->created_at) : false;
-            $age = $createdAt === false ? 45 : time() - $createdAt;
-            if ($intent === null || (int) $intent->attempts !== 1
-                || $createdAt === false || $age < 0 || $age >= 45 || $minimumAge >= 45) {
-                $failures++;
-                Log::warning('WordPress Target automatic refresh recovery is unavailable.', [
-                    'target_id' => $current['target_id'],
-                    'reason' => 'refresh_recovery_window_unavailable',
-                ]);
-                array_shift($pending);
-
-                continue;
-            }
-            if ($age < $minimumAge && ! $waitForReady) {
-                // Let the remaining due Targets proceed while this exact
-                // prior HTTP request settles, without a per-Target sleep.
-                return;
+                ->where('target_record_id', $identity->targetId)->first();
+            // Scheduling is only an optimization. The service rechecks this
+            // exact identity under lock and never creates new refresh work.
+            if ($intent !== null && $identity->matchesIntent($intent) && ! $waitForReady) {
+                $createdAt = strtotime((string) $intent->created_at);
+                $age = $createdAt === false ? 45 : time() - $createdAt;
+                $minimumAge = $connections->refreshRecoveryMinimumAge($intent);
+                if ((int) $intent->attempts === 1 && $age >= 0 && $age < $minimumAge && $minimumAge < 45) {
+                    return;
+                }
             }
 
-            if ($age < $minimumAge) {
-                Sleep::sleep($minimumAge - $age);
-            }
-            $target = Target::query()->find($current['record_id']);
+            $target = Target::query()->find($identity->targetId);
             try {
                 if (! $target instanceof Target) {
                     throw new WpAiBridgeTargetConnectionException(
                         'target_not_found', 'The WordPress Target is no longer available.');
                 }
-                // Re-reads fresh DB intent/generation/permissions and enforces
-                // only one recovery attempt; no untrusted URL or stored token
-                // is ever exposed to this maintenance command.
-                $connections->recoverAmbiguousRefresh($target);
+                $connections->recoverAmbiguousRefresh($target, $identity);
                 $success++;
                 $recovered++;
             } catch (WpAiBridgeTargetConnectionException $exception) {

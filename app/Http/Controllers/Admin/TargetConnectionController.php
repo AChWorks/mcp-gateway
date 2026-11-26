@@ -132,6 +132,7 @@ final class TargetConnectionController extends Controller
                 static fn (Target $locked) => $activity->recordRequired(
                     CorrelationId::current(), 'wordpress-disconnect-cancel-verified', 'success', $locked,
                 ),
+                $authorize,
             );
 
             return redirect()->route('admin.targets.show', ['target' => $target->target_id])
@@ -171,6 +172,7 @@ final class TargetConnectionController extends Controller
                     CorrelationId::current(), 'wordpress-disconnect-remote-revocation-attested',
                     'operator-attested', $locked,
                 ),
+                $this->controlGuard($target, 'disconnect'),
             );
 
             return redirect()->route('admin.targets.show', ['target' => $target->target_id])
@@ -215,6 +217,7 @@ final class TargetConnectionController extends Controller
                         $locked,
                     );
                 },
+                $this->controlGuard($target, 'disconnect'),
             );
 
             return redirect()->route('admin.targets.show', ['target' => $target->target_id])

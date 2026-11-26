@@ -237,10 +237,10 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
     public function disconnect(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
         DB::transaction(function () use ($target, $authorize): void {
-            $this->assertControlAuthority($authorize);
             // All changes that invalidate a probe take the same Target row
             // lock used for conditional probe settlement, never across I/O.
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
+            $this->assertControlAuthority($authorize);
             TargetCredential::query()->where('target_record_id', $locked->getKey())
                 ->where('connector_type', $this->type())
                 ->where('purpose', ArvanApiTargetVault::PURPOSE)->delete();
