@@ -127,7 +127,7 @@ final readonly class WordpressTargetOperations
     public function execute(User $user, string $target_id, string $ability, array $input, bool $readonlyOnly = false, bool $requiresAiAccess = false, ?Closure $beforeRemoteEffect = null, ?WordpressExecutionScope $scope = null, ?Closure $admitRemoteEffect = null, ?WordpressOperationEvidence $evidence = null): array
     {
         $operation = 'wordpress-ability-execute';
-        $reference = $evidence?->reference ?? CorrelationId::current();
+        $reference = $evidence->reference ?? CorrelationId::current();
         $context = $scope->context ?? $this->admission->capture($user, $beforeRemoteEffect);
         $timing = OperationTiming::forWordpress();
         $lookedUpAt = $timing?->stamp() ?? 0;
@@ -413,7 +413,7 @@ final readonly class WordpressTargetOperations
      */
     private function failed(string $operation, ?Target $target, string $code, string $message, array $diagnostics = [], ?WordpressOperationEvidence $evidence = null): array
     {
-        $reference = $evidence?->reference ?? CorrelationId::current();
+        $reference = $evidence->reference ?? CorrelationId::current();
         $evidence?->failure($code, $diagnostics);
         // Preserve error.code compatibility, while recording a remote Tool
         // rejection with unconfirmed effects as unknown, never confirmed safe.

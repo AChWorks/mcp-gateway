@@ -66,7 +66,7 @@ final class RaceTestBatchProvider implements TargetBatchOperationProvider
     public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess, Closure $admitRemoteEffect, ActivityAttribution $attribution): array
     {
         if (self::$holdBeforeAdmission) {
-            $this->awaitReconciliation();
+            $this->awaitReconciliation('waiting');
         }
         if (! $beforeRemoteEffect() || ! $admitRemoteEffect(static function (): void {})) {
             return ['ok' => false, 'status' => 'blocked', 'error_code' => 'authorization_revoked'];
@@ -75,7 +75,7 @@ final class RaceTestBatchProvider implements TargetBatchOperationProvider
             'target_id' => $target->target_id, 'pid' => getmypid(), 'created_at' => now(),
         ]);
         if (! self::$holdBeforeAdmission) {
-            $this->awaitReconciliation();
+            $this->awaitReconciliation('dispatched');
         }
         // Keep the claim visibly in-flight while the sibling worker enters.
         usleep(30000);
@@ -83,12 +83,12 @@ final class RaceTestBatchProvider implements TargetBatchOperationProvider
         return ['ok' => true, 'status' => 'completed', 'result' => ['target_id' => $target->target_id]];
     }
 
-    private function awaitReconciliation(): void
+    private function awaitReconciliation(string $phase): void
     {
         if (self::$lateResultBarrier === null) {
             return;
         }
-        touch(self::$lateResultBarrier.'-waiting');
+        touch(self::$lateResultBarrier.'-'.$phase);
         $deadline = microtime(true) + 12;
         while (! is_file(self::$lateResultBarrier.'-release') && microtime(true) < $deadline) {
             usleep(10000);
@@ -202,11 +202,12 @@ final class TargetBatchMariaDbConcurrencyTest extends TestCase
         try {
             DB::disconnect();
             DB::reconnect();
+            $phase = $beforeAdmission ? 'waiting' : 'dispatched';
             $deadline = microtime(true) + 12;
-            while (! is_file($barrier.'-waiting') && microtime(true) < $deadline) {
+            while (! is_file($barrier.'-'.$phase) && microtime(true) < $deadline) {
                 usleep(10000);
             }
-            self::assertFileExists($barrier.'-waiting');
+            self::assertFileExists($barrier.'-'.$phase);
             DB::table('target_batch_items')->where('batch_id', $id)->update([
                 'lease_expires_at' => now()->subMinute(),
             ]);

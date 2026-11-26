@@ -89,6 +89,12 @@ final class BatchAttemptAdmission
         }, 3);
     }
 
+    /** @phpstan-impure Reads the current time on every invocation. */
+    private function leaseExpired(object $item): bool
+    {
+        return $item->lease_expires_at === null || now()->gte($item->lease_expires_at);
+    }
+
     private function reason(?object $batch, ?object $item): ?string
     {
         if ($batch === null || $item === null || $item->batch_id !== $batch->id
@@ -98,7 +104,7 @@ final class BatchAttemptAdmission
         if ($batch->cancel_requested_at !== null || in_array($item->status, ['cancel_requested', 'canceled'], true)) {
             return 'batch_canceled';
         }
-        if ($item->lease_expires_at === null || now()->gte($item->lease_expires_at)) {
+        if ($this->leaseExpired($item)) {
             return 'dispatch_lease_expired';
         }
         if ($item->status !== 'dispatching' || $batch->finished_at !== null) {
@@ -129,6 +135,6 @@ final class BatchAttemptAdmission
             return 'target_changed';
         }
 
-        return now()->gte($item->lease_expires_at) ? 'dispatch_lease_expired' : null;
+        return $this->leaseExpired($item) ? 'dispatch_lease_expired' : null;
     }
 }
