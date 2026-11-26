@@ -21,6 +21,7 @@ use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Models\User;
 use App\Support\OperationDiagnostics;
+use Closure;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
@@ -171,7 +172,7 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
         }
     }
 
-    public function register(array $input, ?User $creator = null): Target
+    public function register(array $input, ?User $creator = null, ?Closure $authorize = null): Target
     {
         $method = (string) $input['ssh_auth_method'];
 
@@ -192,6 +193,7 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
                 $input['ssh_tunnel_identity'] ?? null,
                 $input['connection_relay_id'] ?? null,
                 $creator,
+                $authorize,
             );
         } catch (ConnectionRelayUnavailable) {
             throw new TargetConnectorFailure(__('The selected Connection Relay is disabled or no longer exists. Select an enabled Relay in Connectivity.'), 'connection_relay_id', 'relay_unavailable');
@@ -297,19 +299,19 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
         return $this->container->make(SshTargetReconfiguration::class)->revision($target);
     }
 
-    public function updateConfiguration(Target $target, array $input): TargetConnectorResult
+    public function updateConfiguration(Target $target, array $input, ?Closure $authorize = null): TargetConnectorResult
     {
-        $changed = $this->container->make(SshTargetReconfiguration::class)->update($target, $input);
+        $changed = $this->container->make(SshTargetReconfiguration::class)->update($target, $input, $authorize);
 
         return new TargetConnectorResult(statusMessage: $changed
             ? __('SSH settings saved with encrypted credentials. Previous verification cleared; verify the new endpoint, pinned key and login before using this Target.')
             : __('No SSH configuration change was necessary.'));
     }
 
-    public function connect(Target $target): TargetConnectorResult
+    public function connect(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
         try {
-            $this->container->make(SshTargetConnectionService::class)->test($target);
+            $this->container->make(SshTargetConnectionService::class)->test($target, $authorize);
 
             return new TargetConnectorResult(statusMessage: $this->verifiedConnectionMessage($target, true));
         } catch (SshTargetConnectionException $exception) {
@@ -317,10 +319,10 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
         }
     }
 
-    public function reconnect(Target $target): TargetConnectorResult
+    public function reconnect(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
         try {
-            $this->container->make(SshTargetConnectionService::class)->test($target);
+            $this->container->make(SshTargetConnectionService::class)->test($target, $authorize);
 
             return new TargetConnectorResult(statusMessage: $this->verifiedConnectionMessage($target, false));
         } catch (SshTargetConnectionException $exception) {
@@ -328,10 +330,10 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
         }
     }
 
-    public function disconnect(Target $target): TargetConnectorResult
+    public function disconnect(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
         try {
-            $this->container->make(SshTargetConnectionService::class)->disconnect($target);
+            $this->container->make(SshTargetConnectionService::class)->disconnect($target, $authorize);
 
             return new TargetConnectorResult(statusMessage: __('SSH credential deleted from this Gateway. This does NOT revoke the remote Unix account or terminate external sessions.'));
         } catch (SshTargetConnectionException $exception) {
@@ -339,10 +341,10 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
         }
     }
 
-    public function test(Target $target): TargetConnectorResult
+    public function test(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
         try {
-            $this->container->make(SshTargetConnectionService::class)->test($target);
+            $this->container->make(SshTargetConnectionService::class)->test($target, $authorize);
 
             return new TargetConnectorResult(statusMessage: $this->verifiedConnectionMessage($target, false));
         } catch (SshTargetConnectionException $exception) {

@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Activity;
 
+use App\Application\Access\VerifiedExecutionContext;
 use App\Domain\Targets\Target;
 use App\Support\OperationDiagnostics;
 use Illuminate\Support\Facades\DB;
@@ -139,8 +140,10 @@ final class ActivityRecorder
             ? $this->actor()
             : [$attribution->actorType, $attribution->actorId, $attribution->clientHash];
         $request = app()->bound('request') ? app('request') : null;
+        $context = $request?->attributes->get(VerifiedExecutionContext::REQUEST_ATTRIBUTE);
         $profileKey = $attribution !== null
-            ? $attribution->clientProfileKey : $request?->attributes->get('oauth_client_profile_key');
+            ? $attribution->clientProfileKey
+            : ($context instanceof VerifiedExecutionContext ? $context->profileKey : $request?->attributes->get('oauth_client_profile_key'));
 
         DB::table('activity_events')->insert([
             'id' => (string) Str::ulid(),
@@ -171,6 +174,11 @@ final class ActivityRecorder
         }
 
         $request = app('request');
+        $context = $request->attributes->get(VerifiedExecutionContext::REQUEST_ATTRIBUTE);
+        if ($context instanceof VerifiedExecutionContext) {
+            return [$context->channel === 'mcp' ? 'oauth_user' : 'administrator',
+                (string) $context->actorId, $context->clientId === null ? null : hash('sha256', $context->clientId)];
+        }
         $clientId = $request->attributes->get('oauth_client_id');
         $clientHash = is_string($clientId) && $clientId !== ''
             ? hash('sha256', $clientId)

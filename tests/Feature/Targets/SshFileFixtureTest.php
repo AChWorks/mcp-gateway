@@ -21,6 +21,7 @@ use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
+use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Http\DnsResolver;
 use App\Infrastructure\OAuth\League\Entities\ClientEntity;
 use App\Infrastructure\OAuth\League\Entities\ScopeEntity;
@@ -818,6 +819,56 @@ final class SshFileFixtureTest extends TestCase
         self::assertSame($expected, stream_get_contents($sink));
         // Caller must discard this private sink after a failed digest check.
         fclose($sink);
+    }
+
+    public function test_real_ssh_login_boundary_denies_actor_revoked_during_dial_resolution(): void
+    {
+        $owner = $this->owner();
+        $target = $this->target('password');
+        // If login occurs before the guard, the actual fixture rejects this
+        // intentionally invalid password with authentication_failed.
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->sole();
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
+        $original = $credential->encrypted_payload;
+        $credential->supersedeAuthority(app(SshTargetVault::class)->seal($target, $config, 'invalid-fixture-password', null));
+
+        $resolver = new class($owner->getKey()) implements SshDialAddressPolicy
+        {
+            public bool $resolved = false;
+
+            public function __construct(private readonly int $actorId) {}
+
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                $this->resolved = true;
+                User::query()->whereKey($this->actorId)->update(['access_enabled' => false]);
+
+                return ['127.0.0.1'];
+            }
+        };
+        $this->app->instance(SshDialAddressPolicy::class, $resolver);
+
+        try {
+            app(SshCommandRuntime::class)->run($owner, $target, 'printf fixture');
+            self::fail('Revoked actor reached SSH command dispatch.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('forbidden', $exception->reason);
+            self::assertTrue($resolver->resolved);
+        }
+        // Positive control proves the native peer is reachable using the
+        // original material and a currently authorized actor.
+        $credential->refresh()->supersedeAuthority($original);
+        User::query()->whereKey($owner->getKey())->update(['access_enabled' => true]);
+        $this->app->instance(SshDialAddressPolicy::class, new class implements SshDialAddressPolicy
+        {
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                return ['127.0.0.1'];
+            }
+        });
+        $result = app(SshCommandRuntime::class)->run($owner->refresh(), $target, 'printf fixture');
+        self::assertSame('completed', $result['status']);
+        self::assertSame('fixture', $result['stdout']);
     }
 
     public function test_internal_streaming_api_denies_revoked_user_before_remote_login(): void

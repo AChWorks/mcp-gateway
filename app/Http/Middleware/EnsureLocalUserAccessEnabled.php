@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Application\Access\VerifiedExecutionContext;
 use App\Models\User;
 use Closure;
 use Illuminate\Http\Request;
@@ -15,6 +16,10 @@ final class EnsureLocalUserAccessEnabled
         $user = $request->user();
 
         if (! $user instanceof User || $user->access_enabled) {
+            if ($user instanceof User) {
+                $request->attributes->set(VerifiedExecutionContext::REQUEST_ATTRIBUTE, VerifiedExecutionContext::human($user));
+            }
+
             return $next($request);
         }
 

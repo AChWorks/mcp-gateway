@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AccessControl;
 use App\Application\Access\AdministratorPasswordConfirmation;
+use App\Application\Access\OperationAdmission;
 use App\Application\Admin\TargetConnectorAdmin;
 use App\Application\Targets\SshManagedReverseHostReadiness;
 use App\Application\Targets\TargetConnectorAdapter;
@@ -282,7 +283,7 @@ final class TargetController extends Controller
         }
 
         try {
-            $target = $adapter->register($validated, $user);
+            $target = $adapter->register($validated, $user, app(OperationAdmission::class)->globalGuard($user, GatewayPermission::TargetsCreate));
         } catch (TargetConnectorFailure $exception) {
             $code = $exception->reason ?? 'registration_rejected';
             // An adapter can establish whether an outbound request happened;

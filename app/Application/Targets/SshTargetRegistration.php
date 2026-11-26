@@ -13,6 +13,7 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Models\User;
 use App\Support\CorrelationId;
+use Closure;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -31,7 +32,7 @@ final readonly class SshTargetRegistration
         string $username, string $hostPublicKey, string $authMethod,
         string $secret, ?string $passphrase, ?string $aiGuidance = null,
         string $routeMode = 'direct', ?int $reversePort = null, ?string $tunnelIdentity = null,
-        ?string $connectionRelayId = null, ?User $creator = null,
+        ?string $connectionRelayId = null, ?User $creator = null, ?Closure $authorize = null,
     ): Target {
         $targetId = strtolower(trim($targetId));
         $displayName = trim($displayName);
@@ -54,8 +55,11 @@ final readonly class SshTargetRegistration
         try {
             return DB::transaction(function () use (
                 $targetId, $displayName, $aiGuidance, $endpoint, $pin, $authMethod, $secret, $passphrase,
-                $approvedRoute, $connectionRelayId, $creator,
+                $approvedRoute, $connectionRelayId, $creator, $authorize,
             ): Target {
+                if ($authorize !== null && ! $authorize()) {
+                    throw new TargetConnectorFailure(__('This action is unauthorized.'), null, 'forbidden');
+                }
                 $target = Target::query()->forceCreate([
                     'created_by_user_id' => $creator?->getKey(),
                     'target_id' => $targetId,

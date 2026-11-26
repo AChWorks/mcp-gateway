@@ -3,7 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
-use App\Application\Mcp\McpDispatchAdmission;
+use App\Application\Access\OperationAdmission;
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\Concerns\StreamsSshFiles;
 use App\Domain\Access\GatewayPermission;
@@ -46,7 +46,8 @@ final readonly class SshFileRuntime
         private SshFileAdmission $admission,
         private AccessControl $access,
         private OperationalSettings $settings,
-        private McpDispatchAdmission $dispatchAdmission,
+        private OperationAdmission $operationAdmission,
+        private SshExecutionAdmission $executionAdmission,
         private SshReverseRoutePolicy $reverseRoutes,
         private ConnectionRelayRoutes $relayRoutes,
     ) {}
@@ -577,7 +578,7 @@ final readonly class SshFileRuntime
     private function operate(
         User $user, Target $target, GatewayPermission $permission,
         Closure $operation, ?int $deadlineNs = null, ?string $expectedTargetBinding = null,
-        ?string $expectedCredentialDispatch = null,
+        ?string $expectedCredentialDispatch = null, ?string $expectedExecution = null,
     ): array {
         // This is an end-to-end budget, including admission and credential
         // lookups, not a fresh timeout for each SFTP packet or path operation.
@@ -588,23 +589,26 @@ final readonly class SshFileRuntime
             throw new SshTargetConnectionException('unsupported_connector');
         }
 
+        $context = $this->operationAdmission->capture($user);
+        if (! $this->access->allows($user, $permission, $target)) {
+            throw new SshTargetConnectionException('target_not_found');
+        }
+
         return $this->admission->run((string) $target->getKey(), function () use (
-            $user, $target, $permission, $operation, $deadlineNs, $expectedTargetBinding, $expectedCredentialDispatch,
+            $context, $user, $target, $permission, $operation, $deadlineNs, $expectedTargetBinding, $expectedCredentialDispatch, $expectedExecution,
         ): array {
             $this->ensureFileDeadline($deadlineNs);
             $fresh = Target::query()->whereKey($target->getKey())->first();
             if ($fresh instanceof Target && $fresh->operations_paused) {
                 throw new SshTargetConnectionException('target_paused');
             }
-            $freshUser = User::query()->whereKey($user->getKey())->first();
             // Internal streamed callers do not pass through the public MCP
             // dispatcher. Denied/revoked principals must be rejected BEFORE
             // opening SSH credentials or contacting a remote Target.
             if (! $fresh instanceof Target || $fresh->connector_type !== 'ssh_direct'
                 || $fresh->getAttribute('connection_state') !== TargetConnectionState::Connected
                 || ! hash_equals((string) $target->target_id, (string) $fresh->target_id)
-                || ! $freshUser instanceof User
-                || ! $this->access->allows($freshUser, $permission, $fresh)) {
+                || ! $this->operationAdmission->allows($context, $user, $fresh, $permission)) {
                 throw new SshTargetConnectionException('target_not_found');
             }
 
@@ -616,16 +620,12 @@ final readonly class SshFileRuntime
             if (! $config instanceof SshTargetConfig || ! $credential instanceof TargetCredential) {
                 throw new SshTargetConnectionException('credential_unavailable');
             }
-            // Freeze scalar identity from the exact configuration and encrypted
-            // credential used for login. Later model refreshes or reconnects
-            // must never rebase an already-authenticated SFTP session.
-            $configId = (string) $config->getKey();
-            $credentialId = (string) $credential->getKey();
-            $execution = SshTargetBinding::executionFingerprint($fresh, $config, $credential);
             if (($expectedTargetBinding !== null
                 && ! hash_equals($expectedTargetBinding, SshTargetBinding::hash($fresh, $config)))
                 || ($expectedCredentialDispatch !== null
-                    && ! hash_equals($expectedCredentialDispatch, $credential->dispatchFingerprint()))) {
+                    && ! hash_equals($expectedCredentialDispatch, $credential->dispatchFingerprint()))
+                || ($expectedExecution !== null
+                    && ! hash_equals($expectedExecution, SshTargetBinding::executionFingerprint($fresh, $config, $credential)))) {
                 throw new SshTargetConnectionException('target_changed');
             }
 
@@ -636,6 +636,7 @@ final readonly class SshFileRuntime
                 throw new SshTargetConnectionException('credential_unavailable');
             }
 
+            $guard = $this->executionAdmission->guard($context, $user, $fresh, $permission, $config, $credential);
             $route = $this->reverseRoutes->forTarget($fresh);
             $relay = $this->relayRoutes->sshRouteForTarget($fresh);
             $this->ensureFileDeadline($deadlineNs);
@@ -644,26 +645,9 @@ final readonly class SshFileRuntime
                 $config->endpoint(), $pin, $config->auth_method,
                 $material['secret'], $material['passphrase'],
                 function (SFTP $sftp, string $ip) use (
-                    $user, $target, $permission, $config, $operation, $deadlineNs,
-                    $execution, $configId, $credentialId, $fresh,
+                    $guard, $config, $operation, $deadlineNs, $fresh,
                 ): array {
-                    $currentTarget = Target::query()->whereKey($target->getKey())->first();
-                    if ($currentTarget instanceof Target && $currentTarget->operations_paused) {
-                        throw new SshTargetConnectionException('target_paused');
-                    }
-                    $currentUser = User::query()->whereKey($user->getKey())->first();
-                    if (! $currentTarget instanceof Target || $currentTarget->connector_type !== 'ssh_direct'
-                        || $currentTarget->getAttribute('connection_state') !== TargetConnectionState::Connected
-                        || ! hash_equals((string) $target->target_id, (string) $currentTarget->target_id)
-                        || ! $currentUser instanceof User
-                        || ! $this->sameAuthenticatedConnection(
-                            $currentTarget, $execution, $configId, $credentialId,
-                        )
-                        || ! $this->access->allows($currentUser, $permission, $currentTarget)
-                        || ! $this->dispatchAdmission->allows($currentUser)) {
-                        throw new SshTargetConnectionException('target_changed');
-                    }
-
+                    $guard();
                     $this->ensureFileDeadline($deadlineNs);
                     $sftp->setTimeout(12);
 
@@ -671,80 +655,14 @@ final readonly class SshFileRuntime
                         throw new SshTargetConnectionException('sftp_unavailable');
                     }
 
-                    $assertWriteAuthority = function () use (
-                        $user, $target, $execution, $configId, $credentialId,
-                    ): void {
-                        $this->assertCurrentFileWriteAuthority(
-                            $user, $target, $execution, $configId, $credentialId,
-                        );
-                    };
-
                     return $sftp->withTransferDeadline(
-                        $deadlineNs, fn (): array => $operation($sftp, $ip, $config, $assertWriteAuthority, $fresh->transportKind()),
+                        $deadlineNs, fn (): array => $operation($sftp, $ip, $config, $guard, $fresh->transportKind()),
                     );
                 },
                 $deadlineNs,
-                $route, $relay,
+                $route, $relay, $guard,
             );
         }, $deadlineNs);
-    }
-
-    /**
-     * Do not treat a still-valid OAuth channel (or human session) as a
-     * continuing Target-scoped write grant. SFTP staging and verification
-     * can outlive an Owner's permission, group, or Pause changes. Re-read
-     * both principals, the Target and the original authenticated connection
-     * at every write/publication boundary. A newly Connected replacement
-     * binding cannot authorize effects on the old live SFTP connection.
-     */
-    private function assertCurrentFileWriteAuthority(
-        User $user, Target $target, string $execution, string $configId,
-        string $credentialId,
-    ): void {
-        $currentTarget = Target::query()->whereKey($target->getKey())->first();
-        if ($currentTarget instanceof Target && $currentTarget->operations_paused) {
-            throw new SshTargetConnectionException('target_paused');
-        }
-
-        $currentUser = User::query()->whereKey($user->getKey())->first();
-        if (! $currentTarget instanceof Target || $currentTarget->connector_type !== 'ssh_direct'
-            || $currentTarget->getAttribute('connection_state') !== TargetConnectionState::Connected
-            || ! hash_equals((string) $target->target_id, (string) $currentTarget->target_id)
-            || ! $currentUser instanceof User
-            || ! $this->access->allows($currentUser, GatewayPermission::SshFileWrite, $currentTarget)
-            || ! $this->dispatchAdmission->allows($currentUser)) {
-            throw new SshTargetConnectionException('forbidden');
-        }
-
-        if (! $this->sameAuthenticatedConnection(
-            $currentTarget, $execution, $configId, $credentialId,
-        )) {
-            throw new SshTargetConnectionException('target_changed');
-        }
-    }
-
-    /**
-     * Reuse the same trust check after login and at staged-write boundaries.
-     * Compare encrypted identity without decrypting secrets per stream block
-     * or holding a database lock across remote I/O.
-     */
-    private function sameAuthenticatedConnection(
-        Target $target, string $execution, string $configId, string $credentialId,
-    ): bool {
-        $config = SshTargetConfig::query()->whereKey($configId)->first();
-        $credential = TargetCredential::query()->whereKey($credentialId)->first();
-
-        $stillBound = $config instanceof SshTargetConfig
-            && $credential instanceof TargetCredential
-            && hash_equals($execution, SshTargetBinding::executionFingerprint($target, $config, $credential));
-        if ($stillBound) {
-            // Re-approve at each post-login and staged-write authority fence,
-            // not only before opening the socket. No extra DB reads required.
-            $this->reverseRoutes->forTarget($target);
-            $this->relayRoutes->sshRouteForTarget($target);
-        }
-
-        return $stillBound;
     }
 
     /**

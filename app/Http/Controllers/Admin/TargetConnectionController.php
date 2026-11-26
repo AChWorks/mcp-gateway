@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AdministratorPasswordConfirmation;
+use App\Application\Access\OperationAdmission;
 use App\Application\Targets\ExternalAuthorizationDestination;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorRegistry;
@@ -17,8 +18,10 @@ use App\Infrastructure\Activity\ActivityRecorder;
 use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetAdapter;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpClient;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetAdapter;
+use App\Models\User;
 use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
+use Closure;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -29,6 +32,8 @@ use Throwable;
 
 final class TargetConnectionController extends Controller
 {
+    public function __construct(private readonly OperationAdmission $admission) {}
+
     private const HANDOFF_SESSION_KEY = 'admin.external_authorization_handoffs';
 
     private const HANDOFF_TTL_SECONDS = 120;
@@ -38,7 +43,7 @@ final class TargetConnectionController extends Controller
         Gate::authorize(GatewayPermission::TargetsConnect->value, $target);
 
         try {
-            return $this->result($target, $connectors->forTarget($target)->connect($target), 'connect');
+            return $this->result($target, $connectors->forTarget($target)->connect($target, $this->controlGuard($target, 'connect')), 'connect');
         } catch (TargetConnectorFailure $exception) {
             return $this->failed($target, $exception->getMessage(), 'target-connect', $exception->reason ?? 'connector_failure', $exception->diagnostics);
         } catch (Throwable $exception) {
@@ -53,7 +58,7 @@ final class TargetConnectionController extends Controller
         Gate::authorize(GatewayPermission::TargetsConnect->value, $target);
 
         try {
-            return $this->result($target, $connectors->forTarget($target)->reconnect($target), 'reconnect');
+            return $this->result($target, $connectors->forTarget($target)->reconnect($target, $this->controlGuard($target, 'reconnect')), 'reconnect');
         } catch (TargetConnectorFailure $exception) {
             return $this->failed($target, $exception->getMessage(), 'target-reconnect', $exception->reason ?? 'connector_failure', $exception->diagnostics);
         } catch (Throwable $exception) {
@@ -65,7 +70,7 @@ final class TargetConnectionController extends Controller
     {
         Gate::authorize(GatewayPermission::TargetsDisconnect->value, $target);
         try {
-            return $this->result($target, $connectors->forTarget($target)->disconnect($target), 'disconnect');
+            return $this->result($target, $connectors->forTarget($target)->disconnect($target, $this->controlGuard($target, 'disconnect')), 'disconnect');
         } catch (TargetConnectorFailure $exception) {
             return $this->failed($target, $exception->getMessage(), 'target-disconnect', $exception->reason ?? 'connector_failure', $exception->diagnostics);
         } catch (Throwable $exception) {
@@ -83,7 +88,7 @@ final class TargetConnectionController extends Controller
         $validated = $request->validate(['intent_id' => ['required', 'ulid']]);
 
         try {
-            $connections->disconnect($target, (string) $validated['intent_id']);
+            $connections->disconnect($target, (string) $validated['intent_id'], $this->controlGuard($target, 'disconnect'));
 
             return redirect()->route('admin.targets.show', ['target' => $target->target_id])
                 ->with('status', __('Disconnect confirmed. The old authorization is removed locally; you can now authorize WordPress again.'));
@@ -115,11 +120,15 @@ final class TargetConnectionController extends Controller
         }
         $confirmation->confirm($request);
 
+        $actor = $request->user();
+        abort_unless($actor instanceof User, 403);
+        $authorize = $this->admission->targetGuard($actor, $target,
+            [GatewayPermission::TargetsDisconnect, GatewayPermission::TargetsConnect]);
         try {
             $connections->cancelNeverSentDisconnect(
                 $target,
                 (string) $validated['intent_id'],
-                static fn (array $routing) => $bridge->verifyExistingAuthorization($routing, CorrelationId::current()),
+                static fn (array $routing) => $bridge->verifyExistingAuthorization($routing, CorrelationId::current(), $authorize),
                 static fn (Target $locked) => $activity->recordRequired(
                     CorrelationId::current(), 'wordpress-disconnect-cancel-verified', 'success', $locked,
                 ),
@@ -235,8 +244,9 @@ final class TargetConnectionController extends Controller
 
         try {
             $adapter = $connectors->forTarget($target);
+            $authorize = $this->controlGuard($target, 'test');
             $check = $mode === 'endpoint' && $adapter instanceof ArvanApiTargetAdapter
-                ? $adapter->checkReachability($target) : $adapter->test($target);
+                ? $adapter->checkReachability($target, $authorize) : $adapter->test($target, $authorize);
 
             return $this->result($target, $check, 'test');
         } catch (TargetConnectorFailure $exception) {
@@ -339,6 +349,18 @@ final class TargetConnectionController extends Controller
 
         return redirect()->route('admin.targets.show', ['target' => $target->target_id])
             ->with('status', $result->statusMessage);
+    }
+
+    /** @return Closure():bool */
+    private function controlGuard(Target $target, string $operation): Closure
+    {
+        $actor = request()->user();
+        abort_unless($actor instanceof User, 403);
+        $guard = $this->admission->targetGuard($actor, $target, self::requiredPermissions($operation));
+
+        return $operation === 'test'
+            ? fn (): bool => $guard() && Target::query()->whereKey($target->getKey())->where('operations_paused', false)->exists()
+            : $guard;
     }
 
     /** @return list<GatewayPermission> */

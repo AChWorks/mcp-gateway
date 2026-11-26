@@ -6,6 +6,7 @@ use App\Infrastructure\Connectors\Relay\LocalSocks5Route;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\SafeHttpResponse;
+use Closure;
 
 /**
  * Connector-neutral fixed-endpoint REST transport. Never accepts a
@@ -25,7 +26,7 @@ final readonly class ApiHttpTransport
         string $registeredBase, string $method, string $relativePath, array $query = [],
         ?string $jsonBody = null, array $trustedHeaders = [],
         ?string $bodyText = null, ?string $contentType = null,
-        array $formFields = [], array $formFiles = [], ?string $accept = null, ?LocalSocks5Route $relay = null,
+        array $formFields = [], array $formFiles = [], ?string $accept = null, ?LocalSocks5Route $relay = null, ?Closure $beforeDispatch = null,
     ): SafeHttpResponse {
         if ($relativePath === '' || ! str_starts_with($relativePath, '/')
             || str_starts_with($relativePath, '//')
@@ -157,7 +158,7 @@ final readonly class ApiHttpTransport
         return $this->http->requestApi(
             $method, $url, $trustedHeaders, $query,
             rawBody: $rawBody, contentType: $rawType,
-            formFields: $encodedFields, multipartParts: $multipartParts, relay: $relay,
+            formFields: $encodedFields, multipartParts: $multipartParts, relay: $relay, beforeDispatch: $beforeDispatch,
         );
     }
 

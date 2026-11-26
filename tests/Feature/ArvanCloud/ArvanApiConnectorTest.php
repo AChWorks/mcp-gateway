@@ -834,6 +834,42 @@ YAML, 200);
         self::assertStringNotContainsString('kind: ConfigMap', $activity);
     }
 
+    public function test_final_http_boundary_denies_actor_or_grant_changed_during_dns(): void
+    {
+        [$target, $owner] = $this->fixture();
+        Http::fake(fn () => Http::response(['ok' => true], 200));
+        $resolver = new class implements DnsResolver
+        {
+            public ?\Closure $barrier = null;
+
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                $callback = $this->barrier;
+                $this->barrier = null;
+                $callback?->__invoke();
+
+                return ['1.1.1.1'];
+            }
+        };
+        $this->app->instance(DnsResolver::class, $resolver);
+        $api = app(ArvanApiOperations::class);
+
+        $resolver->barrier = fn () => User::query()->whereKey($owner->getKey())->update(['access_enabled' => false]);
+        $catalog = $api->catalog($owner, $target->target_id);
+        self::assertSame('forbidden', $catalog['error']['code'] ?? null);
+        Http::assertNothingSent();
+
+        $owner->forceFill(['access_enabled' => true])->save();
+        User::query()->whereKey($owner->getKey())->update(['access_enabled' => true]);
+        $resolver->barrier = fn () => TargetCredential::query()->sole()->supersedeAuthority();
+        $result = $api->execute($owner, $target->target_id, 'POST', '/domains', ['name' => 'fixture']);
+        self::assertSame('target_changed', $result['error']['code'] ?? null);
+        Http::assertNothingSent();
+
+        self::assertTrue($api->execute($owner, $target->target_id, 'GET', '/domains')['ok']);
+        Http::assertSentCount(1);
+    }
+
     public function test_permissions_pause_origin_traversal_and_key_lifecycle_prevent_unauthorized_effects(): void
     {
         [$target, $owner] = $this->fixture();

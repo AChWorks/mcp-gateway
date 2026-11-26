@@ -3,11 +3,13 @@
 namespace Tests\Feature\Mcp;
 
 use App\Application\Access\UserAccessManager;
+use App\Application\Access\VerifiedExecutionContext;
 use App\Application\Mcp\ChatGptFileToolAvailability;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\SshFileMcpToolHandlers;
 use App\Application\Mcp\TargetFileInputMcpToolHandlers;
 use App\Application\Operations\OperationalSettings;
+use App\Application\Targets\SshExecutionAdmission;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
@@ -21,8 +23,10 @@ use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
+use App\Infrastructure\Http\DnsResolver;
 use App\Models\User;
 use App\Support\OperationDiagnostics;
+use Closure;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
@@ -219,14 +223,12 @@ final class SshFileMcpTest extends TestCase
         // Deliberately use the ORIGINAL, stale Eloquent instances at every
         // invocation. The new gate must re-read DB state before SFTP effects,
         // including for the non-MCP human channel.
-        $guard = new \ReflectionMethod(SshFileRuntime::class, 'assertCurrentFileWriteAuthority');
-        $runtime = app(SshFileRuntime::class);
-        $identity = $this->fileConnectionIdentity($target);
-        $guard->invoke($runtime, $operator, $target, ...$identity);
+        $guard = $this->fileEffectGuard($operator, $target);
+        $guard();
 
-        $assertDenied = static function (string $reason) use ($guard, $runtime, $operator, $target, $identity): void {
+        $assertDenied = static function (string $reason) use ($guard): void {
             try {
-                $guard->invoke($runtime, $operator, $target, ...$identity);
+                $guard();
                 self::fail('Stale actor or Target state cannot authorize a new SFTP effect.');
             } catch (SshTargetConnectionException $exception) {
                 self::assertSame($reason, $exception->reason);
@@ -281,7 +283,7 @@ final class SshFileMcpTest extends TestCase
         DB::table('targets')->where('id', $target->getKey())
             ->update(['connection_state' => TargetConnectionState::Connected->value]);
 
-        $guard->invoke($runtime, $operator, $target, ...$identity);
+        $guard();
     }
 
     /** @return array<string, array{string, string, string|int|null}> */
@@ -311,9 +313,8 @@ final class SshFileMcpTest extends TestCase
         $target = $this->target();
         $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
         $identity = $this->fileConnectionIdentity($target);
-        $runtime = app(SshFileRuntime::class);
-        $guard = new \ReflectionMethod(SshFileRuntime::class, 'assertCurrentFileWriteAuthority');
-        $guard->invoke($runtime, $owner, $target, ...$identity);
+        $guard = $this->fileEffectGuard($owner, $target);
+        $guard();
 
         // The same public Target can become Connected again while an old
         // session is still alive. Preserve its original scalar snapshot.
@@ -335,7 +336,7 @@ final class SshFileMcpTest extends TestCase
             ->update(['connection_state' => TargetConnectionState::Connected->value]);
 
         try {
-            $guard->invoke($runtime, $owner, $target, ...$identity);
+            $guard();
             self::fail('A reconnected Target cannot authorize the superseded SFTP session.');
         } catch (SshTargetConnectionException $exception) {
             self::assertSame('target_changed', $exception->reason);
@@ -348,14 +349,13 @@ final class SshFileMcpTest extends TestCase
         $target = $this->target();
         $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
         $identity = $this->fileConnectionIdentity($target);
-        $guard = new \ReflectionMethod(SshFileRuntime::class, 'assertCurrentFileWriteAuthority');
-        $runtime = app(SshFileRuntime::class);
+        $guard = $this->fileEffectGuard($owner, $target);
 
         DB::table('ssh_direct_target_configs')->where('id', $identity[1])->update([
             'observed_peer_ip' => '127.0.0.1', 'observed_at' => now(),
             'verification_attempt_id' => (string) Str::ulid(),
         ]);
-        $guard->invoke($runtime, $owner, $target, ...$identity);
+        $guard();
 
         $config = SshTargetConfig::query()->whereKey($identity[1])->firstOrFail();
         $credential = TargetCredential::query()->whereKey($identity[2])->firstOrFail();
@@ -364,7 +364,7 @@ final class SshFileMcpTest extends TestCase
         $credential->forceFill(['encrypted_payload' => app(SshTargetVault::class)
             ->seal($target, $config, 'fixture-only-password', null)])->save();
         try {
-            $guard->invoke($runtime, $owner, $target, ...$identity);
+            $guard();
             self::fail('Credential rotation must invalidate the original authenticated connection.');
         } catch (SshTargetConnectionException $exception) {
             self::assertSame('target_changed', $exception->reason);
@@ -374,7 +374,7 @@ final class SshFileMcpTest extends TestCase
         $currentIdentity = $this->fileConnectionIdentity($target);
         self::assertNotSame($identity[0], $currentIdentity[0]);
         self::assertSame(array_slice($identity, 1), array_slice($currentIdentity, 1));
-        $guard->invoke($runtime, $owner, $target, ...$currentIdentity);
+        $this->fileEffectGuard($owner, $target)();
     }
 
     public function test_chatgpt_ssh_file_input_denies_ungranted_paused_and_revoked_targets_before_signed_download(): void
@@ -405,6 +405,34 @@ final class SshFileMcpTest extends TestCase
         $owner->forceFill(['access_enabled' => false])->save();
         $revoked = $handler->receive($owner, $target->target_id, $file, 'ssh_sftp_upload', $destination);
         self::assertSame('target_not_found', $revoked['error']['code']);
+        Http::assertNothingSent();
+    }
+
+    public function test_chatgpt_signed_source_cannot_be_fetched_after_ssh_grant_changes_during_dns(): void
+    {
+        config()->set('ssh.file_transfer.enabled', true);
+        $owner = $this->user('owner');
+        $target = $this->target();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        $this->app->instance(DnsResolver::class, new class implements DnsResolver
+        {
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                TargetCredential::query()->sole()->supersedeAuthority();
+
+                return ['1.1.1.1'];
+            }
+        });
+        Http::preventStrayRequests();
+        Http::fake(static fn () => Http::response('must-not-fetch', 200));
+        $result = app(TargetFileInputMcpToolHandlers::class)->receive($owner, $target->target_id, [
+            'download_url' => 'https://files.oaiusercontent.com/private/fixture?sig=opaque',
+            'file_id' => 'fixture',
+        ], 'ssh_sftp_upload', [
+            'path' => '/home/deploy/test.bin',
+            'private_staging_dir' => '/home/deploy/.private',
+        ]);
+        self::assertSame('target_changed', $result['error']['code'] ?? null);
         Http::assertNothingSent();
     }
 
@@ -627,6 +655,16 @@ final class SshFileMcpTest extends TestCase
         // Internal stream buffers and aggregate SSH whole-file size retain
         // their independent budgets despite the enlarged inline window.
         self::assertSame(8388608, app(OperationalSettings::class)->sshTransferLimits()['max_bytes']);
+    }
+
+    private function fileEffectGuard(User $user, Target $target): Closure
+    {
+        $config = $target->sshConfig()->firstOrFail();
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())
+            ->where('connector_type', 'ssh_direct')->where('purpose', SshTargetVault::PURPOSE)->firstOrFail();
+
+        return app(SshExecutionAdmission::class)->guard(VerifiedExecutionContext::local($user), $user,
+            $target, GatewayPermission::SshFileWrite, $config, $credential);
     }
 
     /** @return array{string, string, string} */

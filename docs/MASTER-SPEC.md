@@ -47,6 +47,8 @@ An Admin operation must not depend on calling Gateway's own public MCP endpoint.
 
 Extract shared code only from real common behavior and preserve small, replaceable adapters. Do not pre-build an unrelated workflow platform, duplicate authorization/credential stores or introduce one new remote transport/worker for every connector.
 
+**Effect-time admission.** Entry adapters establish server-owned execution context: a human request, an exact MCP bearer/consent/client/profile, trusted local invocation, or an explicitly revalidated durable attempt. An operation's entry permission decisions are a ceiling; each new protected effect also requires a current positive grant through the same `AccessControl` policy. The connector proves the selected immutable Target, current route, its semantic grant and the actual usable material or exact recovery intent. Check after potentially delaying preparation (including DNS and SSH key exchange) and immediately before the application request, login, command or new staging/publication effect. Do not hold database locks across remote I/O or claim distributed atomicity. A local revocation intent retires new-work authority; it does not prove the provider revoked its credential. Closing an already-created session and explicitly authorized reconciliation of an existing effect are distinct from admitting new work. Durable consent is not a live bearer or session requirement.
+
 ## 4. Capabilities and extensibility
 
 Keep **three separate evolution boundaries**:

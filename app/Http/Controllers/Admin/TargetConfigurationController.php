@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Application\Access\AdministratorPasswordConfirmation;
+use App\Application\Access\OperationAdmission;
 use App\Application\Admin\TargetConnectorAdmin;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
@@ -10,6 +11,7 @@ use App\Application\Targets\TargetConnectorRegistry;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use App\Support\OperationDiagnostics;
 use App\Support\TargetFormInput;
 use Illuminate\Http\RedirectResponse;
@@ -41,7 +43,11 @@ final class TargetConfigurationController extends Controller
                 $definition->validationAttributes ?? [],
             );
             $confirmation->confirm($request);
-            $result = $adapter->updateConfiguration($target, $validated);
+            $actor = $request->user();
+            abort_unless($actor instanceof User, 403);
+            $result = $adapter->updateConfiguration($target, $validated, app(OperationAdmission::class)->targetGuard(
+                $actor, $target, [GatewayPermission::TargetsConfigure],
+            ));
         } catch (ValidationException $exception) {
             if ($request->expectsJson()) {
                 throw $exception;

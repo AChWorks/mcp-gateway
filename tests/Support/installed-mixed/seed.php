@@ -12,17 +12,17 @@ use App\Application\Access\UserAccessManager;
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\SshTargetRegistration;
+use App\Application\Targets\WordpressTargetOperations;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
-use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpClient;
-use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeMcpException;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\League\Entities\ClientEntity;
 use App\Infrastructure\OAuth\League\Entities\ScopeEntity;
 use App\Infrastructure\OAuth\League\Repositories\AccessTokenRepository;
 use App\Infrastructure\OAuth\OAuthAuthorizationStore;
+use App\Models\User;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
 use League\OAuth2\Server\CryptKey;
@@ -151,15 +151,13 @@ if ($mode === 'init') {
 } elseif ($mode === 'diagnose') {
     $state = $read();
     $target = Target::query()->where('target_id', $state['wp_target'])->firstOrFail();
-    try {
-        $catalog = app(WpAiBridgeMcpClient::class)
-            ->readAbilities($target, bin2hex(random_bytes(16)), 'wp-ai-bridge/bridge-info');
-        echo 'Real downstream catalog probe: '.json_encode(['item_count' => count($catalog['items'] ?? [])], JSON_THROW_ON_ERROR)."\n";
-    } catch (WpAiBridgeMcpException $exception) {
-        fwrite(STDERR, 'Real downstream diagnostic: reason='.$exception->reason
-            .' stage='.$exception->getMessage()."\n");
+    $owner = User::query()->findOrFail($state['owner_id']);
+    $result = app(WordpressTargetOperations::class)->read($owner, $target->target_id, 'wp-ai-bridge/bridge-info');
+    if (! $result['ok']) {
+        fwrite(STDERR, 'Real downstream diagnostic: '.json_encode($result['error'], JSON_THROW_ON_ERROR)."\n");
         exit(3);
     }
+    echo 'Real downstream catalog probe: '.json_encode(['item_count' => count($result['catalog']['items'] ?? [])], JSON_THROW_ON_ERROR)."\n";
 } elseif ($mode === 'report') {
     $state = $read();
     $summary = [

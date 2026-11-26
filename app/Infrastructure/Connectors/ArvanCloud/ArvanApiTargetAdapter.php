@@ -23,6 +23,7 @@ use App\Infrastructure\Http\OutboundTargetPolicy;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Models\User;
 use App\Support\CorrelationId;
+use Closure;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -82,7 +83,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         }
     }
 
-    public function register(array $input, ?User $creator = null): Target
+    public function register(array $input, ?User $creator = null, ?Closure $authorize = null): Target
     {
         try {
             $base = $this->canonical((string) $input['api_base_url']);
@@ -90,7 +91,10 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
             $probe = $this->validatedProbe($input['api_probe_path'] ?? null);
             $key = (string) $input['api_key'];
 
-            return DB::transaction(function () use ($input, $base, $spec, $probe, $key, $creator): Target {
+            return DB::transaction(function () use ($input, $base, $spec, $probe, $key, $creator, $authorize): Target {
+                if ($authorize !== null && ! $authorize()) {
+                    throw new TargetConnectorFailure(__('This action is unauthorized.'), null, 'forbidden');
+                }
                 $target = Target::query()->forceCreate([
                     'created_by_user_id' => $creator?->getKey(),
                     'target_id' => (string) $input['target_id'],
@@ -164,15 +168,18 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         ], $credential?->authorityFingerprint());
     }
 
-    public function updateConfiguration(Target $target, array $input): TargetConnectorResult
+    public function updateConfiguration(Target $target, array $input, ?Closure $authorize = null): TargetConnectorResult
     {
         try {
             $base = $this->canonical((string) $input['api_base_url']);
             $spec = $this->validatedSpec($input['api_spec_url'] ?? null);
             $probe = $this->validatedProbe($input['api_probe_path'] ?? null);
 
-            DB::transaction(function () use ($target, $input, $base, $spec, $probe): void {
+            DB::transaction(function () use ($target, $input, $base, $spec, $probe, $authorize): void {
                 $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
+                if ($authorize !== null && ! $authorize()) {
+                    throw new TargetConnectorFailure(__('This action is unauthorized.'), null, 'forbidden');
+                }
                 $config = $this->config($locked);
                 $credential = $this->credential($locked);
                 if (! hash_equals($this->editableRevision($locked, $config, $credential), (string) $input['configuration_revision'])) {
@@ -217,19 +224,20 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         }
     }
 
-    public function connect(Target $target): TargetConnectorResult
+    public function connect(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
-        return $this->test($target);
+        return $this->test($target, $authorize);
     }
 
-    public function reconnect(Target $target): TargetConnectorResult
+    public function reconnect(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
-        return $this->test($target);
+        return $this->test($target, $authorize);
     }
 
-    public function disconnect(Target $target): TargetConnectorResult
+    public function disconnect(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
-        DB::transaction(function () use ($target): void {
+        DB::transaction(function () use ($target, $authorize): void {
+            $this->assertControlAuthority($authorize);
             // All changes that invalidate a probe take the same Target row
             // lock used for conditional probe settlement, never across I/O.
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
@@ -249,14 +257,20 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
      * peer responded, but NEVER authenticates the Machine User or updates the
      * stored connection state. No operator-supplied method/path is executed.
      */
-    public function checkReachability(Target $target): TargetConnectorResult
+    public function checkReachability(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
         $this->requireUnpaused($target);
         $base = $this->config($target)->base_url;
 
         try {
             $this->requireUnpaused($target);
-            $response = $this->transport->request($base, 'HEAD', '/', relay: $this->relays->httpRouteForTarget($target));
+            $relay = $this->relays->httpRouteForTarget($target);
+            $response = $this->transport->request($base, 'HEAD', '/', relay: $relay,
+                beforeDispatch: function () use ($target, $base, $authorize, $relay): void {
+                    $this->assertControlAuthority($authorize);
+                    $this->assertReachabilityStillCurrent($target, $base);
+                    $this->relays->httpRouteAtEpoch((string) $target->getKey(), (int) $target->transport_revision, $relay, true);
+                });
 
             // A concurrent Pause, removal or API-root replacement invalidates
             // even this read-only observation before it can be displayed.
@@ -311,7 +325,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         }
     }
 
-    public function test(Target $target): TargetConnectorResult
+    public function test(Target $target, ?Closure $authorize = null): TargetConnectorResult
     {
         // Connect, Reconnect and Test must share ONE fresh per-dispatch pause
         // boundary. Local Disconnect/credential recovery remains available.
@@ -330,10 +344,17 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
             // Recheck immediately before invoking the transport. A pause or
             // removal after the initial form load cannot dispatch a new probe.
             $this->requireUnpaused($target);
+            $relay = $this->relays->httpRouteForTarget($target);
             $response = $this->transport->request(
                 $config->base_url, 'GET', $config->probe_path, [],
                 null, ['Authorization' => 'Apikey '.$key],
-                relay: $this->relays->httpRouteForTarget($target),
+                relay: $relay,
+                beforeDispatch: function () use ($target, $config, $credential, $authorize, $relay): void {
+                    $this->assertControlAuthority($authorize);
+                    $this->requireUnpaused($target);
+                    $this->assertProbeIdentity($target, $config, $credential);
+                    $this->relays->httpRouteAtEpoch((string) $target->getKey(), (int) $target->transport_revision, $relay, true);
+                },
             );
             if ($response->status < 200 || $response->status >= 300) {
                 $message = match ($response->status) {
@@ -356,19 +377,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                         null, 'probe_stale',
                     );
                 }
-                $currentConfig = $this->config($locked);
-                $currentCredential = $this->credential($locked);
-                if ((int) $locked->transport_revision !== (int) $target->transport_revision
-                    || ! hash_equals($config->base_url, $currentConfig->base_url)
-                    || $config->probe_path !== $currentConfig->probe_path
-                    || $config->spec_url !== $currentConfig->spec_url
-                    || ! $currentCredential instanceof TargetCredential
-                    || ! hash_equals($credential->dispatchFingerprint(), $currentCredential->dispatchFingerprint())) {
-                    throw new TargetConnectorFailure(
-                        __('The API configuration, route or key changed during the probe. Reload and verify the current credentials.'),
-                        null, 'probe_stale',
-                    );
-                }
+                $this->assertProbeIdentity($target, $config, $credential);
 
                 $locked->forceFill([
                     'connection_state' => TargetConnectionState::Connected,
@@ -393,6 +402,35 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                 null, 'credential_unavailable', [],
             );
         }
+    }
+
+    private function assertControlAuthority(?Closure $authorize): void
+    {
+        if ($authorize !== null && ! $authorize()) {
+            throw new TargetConnectorFailure(__('Operation is not authorized.'), null, 'forbidden');
+        }
+    }
+
+    private function assertProbeIdentity(Target $target, ArvanApiTargetConfig $config, TargetCredential $credential): void
+    {
+        $current = Target::query()->find($target->getKey());
+        if (! $current instanceof Target) {
+            throw new TargetConnectorFailure(__('The API configuration, route or key changed during the probe. Reload and verify the current credentials.'), null, 'probe_stale');
+        }
+        $currentConfig = $this->config($current);
+        $currentCredential = $this->credential($current);
+        if ((int) $current->transport_revision !== (int) $target->transport_revision
+            || ! hash_equals($config->base_url, $currentConfig->base_url)
+            || $config->probe_path !== $currentConfig->probe_path
+            || $config->spec_url !== $currentConfig->spec_url
+            || ! $currentCredential instanceof TargetCredential
+            || ! hash_equals($credential->dispatchFingerprint(), $currentCredential->dispatchFingerprint())) {
+            throw new TargetConnectorFailure(
+                __('The API configuration, route or key changed during the probe. Reload and verify the current credentials.'),
+                null, 'probe_stale',
+            );
+        }
+
     }
 
     private function requireUnpaused(Target $target): void

@@ -16,6 +16,7 @@ use App\Infrastructure\Http\OutboundTargetPolicy;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Support\CorrelationId;
 use App\Support\OperationDiagnostics;
+use Closure;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
@@ -38,7 +39,7 @@ final readonly class WpAiBridgeTargetReconfiguration
     }
 
     /** @param array<string,mixed> $input */
-    public function update(Target $target, array $input): bool
+    public function update(Target $target, array $input, ?Closure $authorize = null): bool
     {
         try {
             $url = $this->policy->canonicalBaseUrl((string) $input['base_url']);
@@ -71,7 +72,16 @@ final readonly class WpAiBridgeTargetReconfiguration
         // Public HTTPS metadata discovery deliberately happens without a DB
         // lock; the same strict SSRF, DNS and origin checks as registration.
         try {
-            $discovered = $this->discovery->discover($url, fn () => $this->relays->httpRouteForTarget($target));
+            $discovered = $this->discovery->discover($url, fn () => $this->relays->httpRouteForTarget($target), function () use ($target, $input, $authorize): void {
+                if ($authorize !== null && ! $authorize()) {
+                    throw new TargetConnectorFailure(__('This action is unauthorized.'), null, 'forbidden');
+                }
+                $fresh = Target::query()->find($target->getKey());
+                if (! $fresh instanceof Target || ! hash_equals((string) $input['configuration_revision'], $this->revision($fresh))
+                    || ! $this->canChangeOrigin($fresh)) {
+                    throw new TargetConnectorFailure(__('The WordPress Target changed during validation. Reload it.'), 'configuration_revision');
+                }
+            });
         } catch (OutboundRequestException $exception) {
             throw new TargetConnectorFailure(
                 __('The selected Connection Relay is unavailable; no WordPress origin change was saved.'),
@@ -87,8 +97,11 @@ final readonly class WpAiBridgeTargetReconfiguration
         }
 
         try {
-            return DB::transaction(function () use ($target, $input, $discovered): bool {
+            return DB::transaction(function () use ($target, $input, $discovered, $authorize): bool {
                 $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
+                if ($authorize !== null && ! $authorize()) {
+                    throw new TargetConnectorFailure(__('This action is unauthorized.'), null, 'forbidden');
+                }
                 $config = WpAiBridgeTargetConfig::query()
                     ->where('target_record_id', $locked->getKey())->lockForUpdate()->firstOrFail();
                 $credential = $this->credential($locked, lock: true);

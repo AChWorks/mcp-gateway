@@ -3,7 +3,9 @@
 namespace App\Application\Files;
 
 use App\Application\Access\AccessControl;
+use App\Application\Access\OperationAdmission;
 use App\Application\Operations\OperationalSettings;
+use App\Application\Targets\SshExecutionAdmission;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\TargetOperationGate;
@@ -12,10 +14,12 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Models\User;
 use App\Support\CorrelationId;
+use Closure;
 use Throwable;
 
 /**
@@ -33,6 +37,8 @@ final readonly class SshWholeFileTransfer
         private ActivityRecorder $activity,
         private OperationalSettings $settings,
         private SshTargetVault $vault,
+        private OperationAdmission $admission,
+        private SshExecutionAdmission $executionAdmission,
     ) {}
 
     public function target(User $user, string $id, GatewayPermission $permission): Target
@@ -61,7 +67,8 @@ final readonly class SshWholeFileTransfer
      * confidential source bytes for disconnected or missing-credential Targets.
      * The effect-time SFTP engine still performs its independent live gates.
      */
-    public function readyForChatgptFile(User $user, string $id): Target
+    /** @return array{target:Target,execution:string,guard:Closure():void} */
+    public function readyForChatgptFile(User $user, string $id): array
     {
         $target = $this->target($user, $id, GatewayPermission::SshFileWrite);
         if ($target->getAttribute('connection_state') !== TargetConnectionState::Connected) {
@@ -92,7 +99,11 @@ final readonly class SshWholeFileTransfer
             throw new SshTargetConnectionException('target_not_found');
         }
 
-        return $target;
+        $guard = $this->executionAdmission->guard($this->admission->capture($user), $user, $target,
+            GatewayPermission::SshFileWrite, $config, $credential);
+        $guard();
+
+        return ['target' => $target, 'execution' => SshTargetBinding::executionFingerprint($target, $config, $credential), 'guard' => $guard];
     }
 
     /** The wire is an optional, explicitly configured SSH transfer profile. */
@@ -107,7 +118,7 @@ final readonly class SshWholeFileTransfer
      * @param  array<string,mixed>  $metadata
      * @return array<string,mixed>
      */
-    public function upload(User $user, Target $target, string $path, mixed $input, array $metadata, ?int $overallDeadlineNs = null): array
+    public function upload(User $user, Target $target, string $path, mixed $input, array $metadata, ?int $overallDeadlineNs = null, ?string $expectedExecution = null): array
     {
         $this->validatePath($path);
         $this->validatePath($metadata['private_staging_dir']);
@@ -123,7 +134,7 @@ final readonly class SshWholeFileTransfer
                 $user, $target, $path, $stream, $metadata['size'], $metadata['sha256'],
                 $budget['max_bytes'], $remaining, $metadata['private_staging_dir'],
                 $metadata['overwrite'], $metadata['expected_size'] ?? null, $metadata['expected_mtime'] ?? null,
-                overallDeadlineNs: $deadline,
+                overallDeadlineNs: $deadline, expectedExecution: $expectedExecution,
             );
             $this->record($target, 'mcp-file-upload', ($result['status'] ?? '') === 'outcome_unknown' ? 'unknown' : 'success',
                 ($result['status'] ?? '') === 'outcome_unknown' ? 'outcome_unknown' : null);

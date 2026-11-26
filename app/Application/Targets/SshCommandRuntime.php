@@ -3,7 +3,7 @@
 namespace App\Application\Targets;
 
 use App\Application\Access\AccessControl;
-use App\Application\Mcp\McpDispatchAdmission;
+use App\Application\Access\OperationAdmission;
 use App\Application\Operations\OperationalSettings;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -31,7 +31,8 @@ final readonly class SshCommandRuntime
         private SshCommandAdmission $admission,
         private AccessControl $access,
         private OperationalSettings $settings,
-        private McpDispatchAdmission $dispatchAdmission,
+        private OperationAdmission $operationAdmission,
+        private SshExecutionAdmission $executionAdmission,
         private SshReverseRoutePolicy $reverseRoutes,
         private ConnectionRelayRoutes $relayRoutes,
     ) {}
@@ -63,7 +64,12 @@ final readonly class SshCommandRuntime
             throw new SshTargetConnectionException('timeout_unsupported');
         }
 
-        return $this->admission->run((string) $target->getKey(), function () use ($user, $target, $command, $timeoutSeconds, $expectedTargetBinding, $beforeRemoteEffect, $expectedCredentialDispatch): array {
+        $context = $this->operationAdmission->capture($user, $beforeRemoteEffect);
+        if (! $this->access->allows($user, GatewayPermission::SshCommandRun, $target)) {
+            throw new SshTargetConnectionException('forbidden');
+        }
+
+        return $this->admission->run((string) $target->getKey(), function () use ($context, $user, $target, $command, $timeoutSeconds, $expectedTargetBinding, $expectedCredentialDispatch): array {
             $fresh = Target::query()->whereKey($target->getKey())->first();
             $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
             if ($fresh instanceof Target && $fresh->operations_paused) {
@@ -92,7 +98,8 @@ final readonly class SshCommandRuntime
                 throw new SshTargetConnectionException('credential_unavailable');
             }
 
-            $execution = SshTargetBinding::executionFingerprint($fresh, $config, $credential);
+            $guard = $this->executionAdmission->guard($context, $user, $fresh, GatewayPermission::SshCommandRun, $config, $credential);
+            $guard();
             $route = $this->reverseRoutes->forTarget($fresh);
             $relay = $this->relayRoutes->sshRouteForTarget($fresh);
             $started = microtime(true);
@@ -101,40 +108,13 @@ final readonly class SshCommandRuntime
                 $config->endpoint(), $pin, $config->auth_method,
                 $material['secret'], $material['passphrase'],
                 function (SSH2 $ssh, string $peerIp) use (
-                    $user, $target, $fresh, $config, $credential, $command, $timeoutSeconds, $started, $execution, $beforeRemoteEffect,
+                    $guard, $fresh, $config, $command, $timeoutSeconds, $started,
                 ): array {
-                    // Credential disconnect or permission revocation during KEX/login
-                    // must not authorize a NEW exec after the revocation.
-                    $currentTarget = Target::query()->whereKey($target->getKey())->first();
-                    $currentUser = User::query()->whereKey($user->getKey())->first();
-                    $currentCredential = TargetCredential::query()->whereKey($credential->getKey())->first();
-                    $currentConfig = SshTargetConfig::query()->whereKey($config->getKey())->first();
-                    if ($currentTarget instanceof Target && $currentTarget->operations_paused) {
-                        throw new SshTargetConnectionException('target_paused');
-                    }
-                    if (! $currentTarget instanceof Target || $currentTarget->connector_type !== 'ssh_direct'
-                        || $currentTarget->getAttribute('connection_state') !== TargetConnectionState::Connected
-                        || ! hash_equals((string) $target->target_id, (string) $currentTarget->target_id)
-                        || ! $currentUser instanceof User
-                        || ! $currentCredential instanceof TargetCredential
-                        || ! $currentConfig instanceof SshTargetConfig
-                        || ! hash_equals($execution, SshTargetBinding::executionFingerprint($currentTarget, $currentConfig, $currentCredential))
-                        || ! $this->access->allows($currentUser, GatewayPermission::SshCommandRun, $currentTarget)
-                        || ! $this->dispatchAdmission->allows($currentUser)) {
-                        throw new SshTargetConnectionException('target_changed');
-                    }
-                    // The NL operator might revoke this listener while the
-                    // pinned end-host KEX/login is in progress. Recheck before
-                    // sending even one effectful command.
-                    $this->reverseRoutes->forTarget($currentTarget);
-                    $this->relayRoutes->sshRouteForTarget($currentTarget);
-                    if ($beforeRemoteEffect instanceof Closure && ! $beforeRemoteEffect()) {
-                        throw new SshTargetConnectionException('authorization_revoked');
-                    }
+                    $guard();
 
                     return $this->executeOnce($ssh, $command, $timeoutSeconds, $peerIp, $config, $started, $fresh->transportKind());
                 },
-                $route, $relay,
+                $route, $relay, $guard,
             );
         }, $timeoutSeconds);
     }

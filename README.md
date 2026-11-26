@@ -104,6 +104,8 @@ Before changing a running host, preserve a **verified-restorable database backup
 
 **Authorization:** roles set the maximum permission ceiling. Direct/Group/Global **Deny** and selected Target scope can further restrict it. OAuth Client approval, AI access, Target access and remote user credentials are separate requirements; Target Pause blocks **new** Gateway effects, not a remote operation already dispatched. Owner-sensitive forms require current-password confirmation. [User/Group workflows](docs/ADMIN-ACCESS-WORKFLOWS.md).
 
+Source execution rechecks current authorization and the admitted connector binding before new protected HTTP/SSH effects. Local disconnect intent blocks normal new work without claiming remote credential revocation; durable queued consent is distinct from a live access token. See the [architecture](docs/ARCHITECTURE.md) and [Remote I/O contract](docs/REMOTE-IO-CONTRACT.md) for boundaries and recovery.
+
 **Diagnostics:** use a response `diagnostic_reference` in **Admin → Activity** or `operation-diagnostics-read`. Preserve actual stage/cause and distinguish blocked, failed and uncertain remote effects; never blindly repeat an uncertain write.
 
 ## Troubleshooting and references

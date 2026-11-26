@@ -77,6 +77,8 @@ Never put the API key, `Authorization` header or a full URL in tool arguments. M
 
 ## Permissions, effects and safety
 
+The shared admission checks the current effective permission at each final HTTP boundary after DNS. Public catalog fetches remain credential-free; authenticated probes and REST operations additionally fence the exact stored credential dispatch fingerprint, registered API binding and selected route. A denied pre-dispatch operation is not evidence of a remote API error or successful key verification.
+
 These are additional **Target-scoped** permissions. All still require a role ceiling, effective selected/group Target scope, explicit deny precedence, AI-access/OAuth client authorization, and a non-paused Target:
 
 | Permission | HTTP methods |

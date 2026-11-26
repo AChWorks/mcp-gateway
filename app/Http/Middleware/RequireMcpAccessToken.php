@@ -2,7 +2,9 @@
 
 namespace App\Http\Middleware;
 
+use App\Application\Access\VerifiedExecutionContext;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
+use App\Infrastructure\OAuth\League\Repositories\AccessTokenRepository;
 use App\Infrastructure\OAuth\OAuthHttpBridge;
 use App\Infrastructure\OAuth\OAuthServerManager;
 use App\Models\User;
@@ -17,6 +19,7 @@ final readonly class RequireMcpAccessToken
         private OAuthServerManager $servers,
         private OAuthHttpBridge $bridge,
         private ClientProfileRegistry $profiles,
+        private AccessTokenRepository $tokens,
     ) {}
 
     public function handle(Request $request, Closure $next): Response
@@ -66,12 +69,22 @@ final readonly class RequireMcpAccessToken
             return $this->challenge(401, 'invalid_token');
         }
 
+        $tokenId = $validated->getAttribute('oauth_access_token_id');
+        if (! is_string($tokenId) || $tokenId === '') {
+            return $this->challenge(401, 'invalid_token');
+        }
+        $authorizationId = $this->tokens->dispatchAuthorizationId($tokenId, (int) $user->getKey(), $clientId, $profile['key'], $profile['generation']);
+        if ($authorizationId === null || $authorizationId === '') {
+            return $this->challenge(401, 'invalid_token');
+        }
+        $request->attributes->set(VerifiedExecutionContext::REQUEST_ATTRIBUTE,
+            VerifiedExecutionContext::mcp($user, $tokenId, $authorizationId, $clientId, $profile['key'], $profile['generation']));
         $request->attributes->set('oauth_client_id', $clientId);
         $request->attributes->set('oauth_client_profile_key', $profile['key']);
         $request->attributes->set('oauth_client_profile_generation', $profile['generation']);
         $request->attributes->set('oauth_user_id', (string) $user->getAuthIdentifier());
         $request->attributes->set('oauth_user', $user);
-        $request->attributes->set('oauth_access_token_id', $validated->getAttribute('oauth_access_token_id'));
+        $request->attributes->set('oauth_access_token_id', $tokenId);
         $request->attributes->set('oauth_scopes', $scopes);
 
         return $next($request);

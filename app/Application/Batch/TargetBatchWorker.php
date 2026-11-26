@@ -240,6 +240,7 @@ final readonly class TargetBatchWorker
             $provider = $this->providers->find((string) $batch->capability_key);
             if ($currentBatch === null || $currentBatch->cancel_requested_at !== null
                 || $currentItem === null || $currentItem->status !== 'dispatching'
+                || $currentItem->lease_expires_at === null || now()->gte($currentItem->lease_expires_at)
                 || ! hash_equals((string) $currentItem->dispatch_attempt_id, $attempt)
                 || $provider === null
                 || ! $currentUser instanceof User || ! $currentTarget instanceof Target

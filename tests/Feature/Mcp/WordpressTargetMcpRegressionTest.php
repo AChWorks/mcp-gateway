@@ -7,6 +7,7 @@ use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\TargetMcpToolHandlers;
 use App\Application\Mcp\WordpressTargetMcpToolHandlers;
 use App\Application\Targets\WordpressTargetOperations;
+use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Access\GatewayPermission;
@@ -1383,6 +1384,97 @@ final class WordpressTargetMcpRegressionTest extends TestCase
         }
     }
 
+    public function test_catalog_cannot_dispatch_after_inbound_token_or_consent_revocation_during_initialize(): void
+    {
+        foreach (['oauth_access_tokens', 'oauth_authorizations'] as $table) {
+            $site = $this->createSite('catalog-'.str_replace('_', '-', $table));
+            $this->pair($site);
+            [$bearer, $tokenId, $authorizationId] = $this->issueMcpBearer($this->principal);
+            $initialized = 0;
+            $sent = 0;
+            $this->fakeBridge(function (Request $request) use ($table, $tokenId, $authorizationId, &$initialized, &$sent) {
+                if (($request->data()['method'] ?? null) === 'initialize') {
+                    $initialized++;
+                    DB::table($table)->where('id', $table === 'oauth_access_tokens' ? $tokenId : $authorizationId)
+                        ->update(['revoked_at' => now()]);
+                }
+                if (($request->data()['method'] ?? null) === 'tools/call') {
+                    $sent++;
+                }
+
+                return $this->bridgeResponse($request);
+            });
+
+            $result = $this->callOverAuthenticatedMcp($bearer, 'wordpress-abilities-read', ['target_id' => $site->target_id]);
+            self::assertSame(1, $initialized);
+            self::assertSame(0, $sent, 'A revoked inbound grant must not dispatch a downstream catalog.');
+            self::assertSame('forbidden', $result['error']['code'] ?? null);
+        }
+    }
+
+    public function test_revoked_inbound_bearer_cannot_send_refresh_after_dns(): void
+    {
+        $site = $this->createSite('refresh-revocation');
+        $this->pair($site);
+        [$bearer, $tokenId] = $this->issueMcpBearer($this->principal);
+        DB::table('wp_ai_bridge_credential_metadata')->whereIn('credential_id', DB::table('target_credentials')->where('target_record_id', $site->getKey())->select('id'))
+            ->update(['access_expires_at' => now()->subMinute()]);
+        $this->fakeBridge();
+        $this->app->instance(DnsResolver::class, new class($tokenId) implements DnsResolver
+        {
+            public function __construct(private readonly string $tokenId) {}
+
+            public function resolve(string $host, ?int $deadlineNs = null): array
+            {
+                DB::table('oauth_access_tokens')->where('id', $this->tokenId)->update(['revoked_at' => now()]);
+
+                return ['1.1.1.1'];
+            }
+        });
+
+        $result = $this->callOverAuthenticatedMcp($bearer, 'wordpress-abilities-read', ['target_id' => $site->target_id]);
+        self::assertSame('forbidden', $result['error']['code'] ?? null);
+        Http::assertNothingSent();
+        self::assertSame(0, DB::table('wp_ai_bridge_refresh_intents')->where('target_record_id', $site->getKey())->count());
+        self::assertSame(1, DB::table('target_credentials')->where('target_record_id', $site->getKey())->count());
+    }
+
+    public function test_pending_downstream_disconnect_during_classification_prevents_new_mutation(): void
+    {
+        $site = $this->createSite('pending-disconnect');
+        $this->pair($site);
+        $disconnected = 0;
+        $sent = 0;
+        $this->fakeBridge(function (Request $request) use ($site, &$disconnected, &$sent) {
+            if (str_ends_with($request->url(), '/oauth/revoke')) {
+                return Http::response('', 503);
+            }
+            if (($request->data()['method'] ?? null) === 'tools/call') {
+                if (($request->data()['params']['arguments']['ability_name'] ?? null) === 'wp-ai-bridge/abilities-read') {
+                    try {
+                        app(WpAiBridgeTargetConnectionService::class)->disconnect($site);
+                        self::fail('Remote revocation must remain unconfirmed.');
+                    } catch (WpAiBridgeTargetConnectionException $exception) {
+                        self::assertSame('revocation_failed', $exception->reason);
+                        $disconnected++;
+                    }
+                } else {
+                    $sent++;
+                }
+            }
+
+            return $this->bridgeResponse($request);
+        });
+
+        $result = app(WordpressTargetMcpToolHandlers::class)->execute($this->principal, $site->target_id, 'demo/write', []);
+        self::assertSame(1, $disconnected);
+        $this->assertDatabaseHas('wp_ai_bridge_revocation_intents', [
+            'target_record_id' => $site->getKey(), 'phase' => 'unknown',
+        ]);
+        self::assertSame(0, $sent, 'Pending local revocation must prevent new remote mutation.');
+        self::assertFalse($result['ok']);
+    }
+
     public function test_publication_namespace_is_stable_and_isolated_across_clients_targets_and_human_channel(): void
     {
         $alpha = $this->createSite('namespace-a');
@@ -1634,22 +1726,30 @@ final class WordpressTargetMcpRegressionTest extends TestCase
     /** @return array<string,mixed> */
     private function publishOverAuthenticatedMcp(string $bearer, string $targetId): array
     {
+        return $this->callOverAuthenticatedMcp($bearer, 'wordpress-content-publish-create', [
+            'target_id' => $targetId,
+            'title' => 'A bounded published post',
+            'content' => '<p>Safe body</p>',
+            'operation_id' => 'test-20261020-0001',
+        ]);
+    }
+
+    /** @param array<string,mixed> $arguments
+     * @return array<string,mixed>
+     */
+    private function callOverAuthenticatedMcp(string $bearer, string $name, array $arguments): array
+    {
         $response = $this->withHeaders([
             'Authorization' => 'Bearer '.$bearer,
             'Host' => (string) parse_url((string) config('oauth.resource'), PHP_URL_HOST),
             'MCP-Protocol-Version' => '2026-07-28',
             'Mcp-Method' => 'tools/call',
-            'Mcp-Name' => 'wordpress-content-publish-create',
+            'Mcp-Name' => $name,
         ])->postJson('/mcp', [
             'jsonrpc' => '2.0', 'id' => 12, 'method' => 'tools/call',
             'params' => [
-                'name' => 'wordpress-content-publish-create',
-                'arguments' => [
-                    'target_id' => $targetId,
-                    'title' => 'A bounded published post',
-                    'content' => '<p>Safe body</p>',
-                    'operation_id' => 'test-20261020-0001',
-                ],
+                'name' => $name,
+                'arguments' => $arguments,
                 '_meta' => [
                     'io.modelcontextprotocol/protocolVersion' => '2026-07-28',
                     'io.modelcontextprotocol/clientCapabilities' => (object) [],

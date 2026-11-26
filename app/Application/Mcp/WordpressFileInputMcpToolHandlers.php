@@ -4,6 +4,8 @@ namespace App\Application\Mcp;
 
 use App\Application\Files\ChatGptFileIngress;
 use App\Application\Operations\OperationalSettings;
+use App\Application\Targets\WordpressExecutionScope;
+use App\Application\Targets\WordpressTargetOperations;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Models\User;
 use Throwable;
@@ -19,7 +21,7 @@ use Throwable;
 final readonly class WordpressFileInputMcpToolHandlers
 {
     public function __construct(
-        private WordpressTargetMcpToolHandlers $wordpress,
+        private WordpressTargetOperations $wordpress,
         private ChatGptFileIngress $ingress,
         private OperationalSettings $settings,
     ) {}
@@ -39,10 +41,15 @@ final readonly class WordpressFileInputMcpToolHandlers
             return self::failed('invalid_filename', 'The supplied Media filename is not valid.');
         }
 
+        $scope = $this->wordpress->fileScope($user, $target_id);
+        if ($scope === null) {
+            return self::downstream('limits', ['ok' => false, 'error' => ['code' => 'target_not_found']], null);
+        }
+
         // The dynamic WordPress private-transfer tool is destructive-class.
         // Its limits probe checks the exact Gateway Target/execution grant,
         // but does NOT prove purpose-specific WordPress permissions.
-        $limits = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/private-transfer', ['action' => 'limits']);
+        $limits = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/private-transfer', ['action' => 'limits'], requiresAiAccess: true, scope: $scope);
         if (($limits['ok'] ?? false) !== true || ! is_array($limits['result'] ?? null)) {
             return self::downstream('limits', $limits, null);
         }
@@ -56,7 +63,7 @@ final readonly class WordpressFileInputMcpToolHandlers
         // even fetching a signed private file. These are individually
         // authenticated, current-user/Target-scoped and readonly-class. If Site
         // Read or the readonly Gateway grant is unavailable, fail closed.
-        $groups = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/bridge-info', []);
+        $groups = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/bridge-info', [], requiresAiAccess: true, scope: $scope);
         if (($groups['ok'] ?? false) !== true || ! is_array($groups['result'] ?? null)) {
             return self::downstream('media_group_preflight', $groups, null);
         }
@@ -65,7 +72,7 @@ final readonly class WordpressFileInputMcpToolHandlers
         }
         $principal = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/site-context', [
             'section' => 'current_user',
-        ]);
+        ], requiresAiAccess: true, scope: $scope);
         if (($principal['ok'] ?? false) !== true || ! is_array($principal['result'] ?? null)) {
             return self::downstream('media_principal_preflight', $principal, null);
         }
@@ -80,7 +87,12 @@ final readonly class WordpressFileInputMcpToolHandlers
         $budget = $this->settings->chatgptWordpressFileLimits();
         $deadline = hrtime(true) + $budget['max_seconds'] * 1_000_000_000;
         try {
-            $download = $this->ingress->download($file, $budget['max_bytes'], $budget['max_seconds'], 'wordpress');
+            $download = $this->ingress->download($file, $budget['max_bytes'], $budget['max_seconds'], 'wordpress',
+                function () use ($user, $scope): void {
+                    if (! $this->wordpress->fileSourceAuthorized($user, $scope)) {
+                        throw new OutboundRequestException('forbidden', 'File source authorization changed.', [], true);
+                    }
+                });
         } catch (OutboundRequestException $exception) {
             if (in_array($exception->reason, ['file_capacity_exceeded', 'file_capacity_unavailable'], true)) {
                 return self::failed($exception->reason,
@@ -95,7 +107,7 @@ final readonly class WordpressFileInputMcpToolHandlers
         $stream = $download['stream'];
         try {
             return $this->stage($user, $target_id, $stream, $download['bytes'],
-                $download['sha256'], $deadline);
+                $download['sha256'], $deadline, $scope);
         } finally {
             try {
                 fclose($stream);
@@ -110,14 +122,14 @@ final readonly class WordpressFileInputMcpToolHandlers
      * @return array<string,mixed>
      */
     private function stage(User $user, string $target_id, mixed $stream, int $bytes,
-        string $sha256, int $deadline): array
+        string $sha256, int $deadline, WordpressExecutionScope $scope): array
     {
         if (hrtime(true) >= $deadline) {
             return self::failed('file_transfer_timed_out', 'The file-input transfer exceeded its deadline.');
         }
         $begin = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/private-transfer', [
             'action' => 'begin', 'purpose' => 'media', 'total_bytes' => $bytes, 'sha256' => $sha256,
-        ]);
+        ], requiresAiAccess: true, scope: $scope);
         if (($begin['ok'] ?? false) !== true || ! is_array($begin['result'] ?? null)) {
             return self::downstream('begin', $begin, null);
         }
@@ -152,7 +164,7 @@ final readonly class WordpressFileInputMcpToolHandlers
             $append = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/private-transfer', [
                 'action' => 'append', 'transfer_id' => $transferId, 'offset' => $offset,
                 'content_base64' => base64_encode($part),
-            ]);
+            ], requiresAiAccess: true, scope: $scope);
             if (($append['ok'] ?? false) !== true) {
                 return self::downstream('append', $append, $transferId);
             }
@@ -174,7 +186,7 @@ final readonly class WordpressFileInputMcpToolHandlers
         }
         $verify = $this->wordpress->execute($user, $target_id, 'wp-ai-bridge/private-transfer', [
             'action' => 'verify', 'transfer_id' => $transferId,
-        ]);
+        ], requiresAiAccess: true, scope: $scope);
         if (($verify['ok'] ?? false) !== true) {
             return self::downstream('verify', $verify, $transferId);
         }

@@ -1,15 +1,13 @@
 <?php
 
-namespace App\Application\Batch;
+namespace App\Infrastructure\Connectors\WpAiBridge;
 
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
-use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
-use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use Illuminate\Support\Facades\DB;
 
 /** OAuth consent/client binding survives legitimate access/refresh rotation. */
-final class WordpressTargetBatchIdentity
+final class WpAiBridgeTargetAuthority
 {
     /** @param list<Target> $targets
      * @return array<string, list<string>|null>

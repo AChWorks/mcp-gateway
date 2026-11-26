@@ -61,7 +61,7 @@ final readonly class TargetFileInputMcpToolHandlers
         // Target/grant/Pause must be checked BEFORE retrieving the bearer-like
         // signed file URL. The SFTP upload itself rechecks the live gate.
         try {
-            $this->ssh->readyForChatgptFile($user, $target_id);
+            $admitted = $this->ssh->readyForChatgptFile($user, $target_id);
         } catch (SshTargetConnectionException $exception) {
             return self::failure($exception->reason);
         } catch (Throwable) {
@@ -71,7 +71,13 @@ final readonly class TargetFileInputMcpToolHandlers
         $budget = $this->ssh->limits();
         $deadline = hrtime(true) + $budget['max_seconds'] * 1_000_000_000;
         try {
-            $download = $this->ingress->download($file, $budget['max_bytes'], $budget['max_seconds'], 'ssh');
+            $download = $this->ingress->download($file, $budget['max_bytes'], $budget['max_seconds'], 'ssh', function () use ($admitted): void {
+                try {
+                    $admitted['guard']();
+                } catch (SshTargetConnectionException $exception) {
+                    throw new OutboundRequestException($exception->reason, 'SSH transfer authority changed.', [], true);
+                }
+            });
         } catch (OutboundRequestException $exception) {
             return self::failure($exception->reason);
         } catch (Throwable) {
@@ -86,7 +92,8 @@ final readonly class TargetFileInputMcpToolHandlers
             // Refresh authorization against the current DB revision after the
             // possibly long download; never trust a cached Target snapshot.
             try {
-                $target = $this->ssh->readyForChatgptFile($user, $target_id);
+                $admitted['guard']();
+                $target = $admitted['target'];
             } catch (SshTargetConnectionException $exception) {
                 // No remote SFTP dispatch has occurred after the download;
                 // a changed Target is a definite pre-effect denial.
@@ -98,7 +105,7 @@ final readonly class TargetFileInputMcpToolHandlers
                 'private_staging_dir' => $ssh_destination['private_staging_dir'],
                 'overwrite' => $ssh_destination['overwrite'] ?? false,
                 ...array_intersect_key($ssh_destination, array_flip(['expected_size', 'expected_mtime'])),
-            ], $deadline);
+            ], $deadline, $admitted['execution']);
             if (($result['status'] ?? null) === 'outcome_unknown') {
                 return self::failure('outcome_unknown', true);
             }

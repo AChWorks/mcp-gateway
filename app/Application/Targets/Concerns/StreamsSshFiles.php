@@ -125,7 +125,7 @@ trait StreamsSshFiles
         string $expectedSha256, int $maxBytes, int $maxSeconds, string $privateStagingDir,
         bool $overwrite = false, ?int $expectedSize = null, ?int $expectedMtime = null,
         ?string $expectedTargetBinding = null, ?int $overallDeadlineNs = null,
-        ?string $expectedCredentialDispatch = null,
+        ?string $expectedCredentialDispatch = null, ?string $expectedExecution = null,
     ): array {
         $this->validatePath($path);
         $this->validatePath($privateStagingDir);
@@ -371,7 +371,7 @@ trait StreamsSshFiles
                     'overwrote' => $overwrite,
                     'published_mode' => sprintf('%04o', $publishedMode),
                 ];
-            }, $deadline, expectedTargetBinding: $expectedTargetBinding, expectedCredentialDispatch: $expectedCredentialDispatch);
+            }, $deadline, expectedTargetBinding: $expectedTargetBinding, expectedCredentialDispatch: $expectedCredentialDispatch, expectedExecution: $expectedExecution);
     }
 
     private function validateTransferLimit(int $maxBytes): void

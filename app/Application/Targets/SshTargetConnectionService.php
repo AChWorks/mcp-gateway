@@ -15,6 +15,7 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\SshDirect\SshVerifiedTransport;
 use App\Support\CorrelationId;
+use Closure;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
@@ -31,7 +32,7 @@ final readonly class SshTargetConnectionService
     ) {}
 
     /** Authenticates a single pinned connection without running any command. */
-    public function test(Target $target): string
+    public function test(Target $target, ?Closure $authorize = null): string
     {
         if ($target->connector_type !== 'ssh_direct') {
             throw new SshTargetConnectionException('unsupported_connector');
@@ -51,7 +52,7 @@ final readonly class SshTargetConnectionService
         $attemptId = null;
         try {
             $ip = $this->admission->run((string) $target->getKey(), function () use (
-                $target, $config, $credential, &$attemptId,
+                $target, $config, $credential, &$attemptId, $authorize,
             ): string {
                 $attemptId = $this->verification->begin($target, $config, $credential);
                 $material = $this->vault->open($target, $config, $credential);
@@ -61,10 +62,20 @@ final readonly class SshTargetConnectionService
                 return $this->transport->authenticate(
                     $config->endpoint(), SshHostKeyPin::fromLine($config->pinned_host_key),
                     $config->auth_method, $material['secret'], $material['passphrase'], $route, $relay,
+                    function () use ($target, $config, $credential, $attemptId, $authorize): void {
+                        if ($authorize !== null && ! $authorize()) {
+                            throw new SshTargetConnectionException('forbidden');
+                        }
+                        $this->verification->assertCurrentAttempt($target, $config, $credential, $attemptId);
+                        $this->reverseRoutes->forTarget($target);
+                        $this->relayRoutes->sshRouteForTarget($target);
+                    },
                 );
             });
         } catch (SshTargetConnectionException $exception) {
-            if ($attemptId !== null && ! in_array($exception->reason, [
+            if ($attemptId !== null && $exception->reason === 'forbidden') {
+                $this->verification->abandon($target, $config, $credential, $attemptId);
+            } elseif ($attemptId !== null && ! in_array($exception->reason, [
                 'connection_busy', 'rate_limited', 'admission_unavailable',
             ], true)) {
                 $this->verification->failed($target, $config, $credential, $attemptId, $exception->reason);
@@ -100,13 +111,16 @@ final readonly class SshTargetConnectionService
     }
 
     /** Local credential deletion; it does not revoke a remote Unix login. */
-    public function disconnect(Target $target): void
+    public function disconnect(Target $target, ?Closure $authorize = null): void
     {
         if ($target->connector_type !== 'ssh_direct') {
             throw new SshTargetConnectionException('unsupported_connector');
         }
-        DB::transaction(function () use ($target): void {
+        DB::transaction(function () use ($target, $authorize): void {
             $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
+            if ($authorize !== null && ! $authorize()) {
+                throw new SshTargetConnectionException('forbidden');
+            }
             TargetCredential::query()->where('target_record_id', $locked->getKey())
                 ->where('connector_type', 'ssh_direct')->delete();
             // A pending bootstrap must not re-install a retired login key.

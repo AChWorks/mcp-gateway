@@ -4,6 +4,7 @@ namespace App\Infrastructure\Connectors\WpAiBridge;
 
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\TargetOperationGate;
+use App\Application\Targets\WpAiBridgeTargetConnectionException;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Domain\Access\AbilityExecutionClass;
 use App\Domain\Targets\Target;
@@ -13,7 +14,9 @@ use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\Http\SafeHttpResponse;
 use App\Support\OperationTiming;
+use Closure;
 
+/** @phpstan-import-type RoutingSnapshot from WpAiBridgeTargetConnectionService */
 final readonly class WpAiBridgeMcpClient
 {
     private const PROTOCOL_VERSION = '2025-11-25';
@@ -33,6 +36,7 @@ final readonly class WpAiBridgeMcpClient
     public function readAbilities(
         Target $target,
         string $correlationId,
+        Closure $authorize,
         ?string $ability = null,
         int $page = 1,
         int $perPage = 10,
@@ -50,7 +54,7 @@ final readonly class WpAiBridgeMcpClient
                 'search' => $search,
             ], static fn (mixed $value): bool => $value !== null);
 
-        $result = $this->callAbility($target, self::CATALOG_ABILITY, $parameters, false, $correlationId, $timing);
+        $result = $this->callAbilityOnRouting($this->routingContext($target, $timing, $authorize), $parameters, $correlationId, $authorize, $timing);
         if (! is_array($result)) {
             throw new WpAiBridgeMcpException('protocol_error', 'WP AI Bridge returned an invalid ability catalog result.');
         }
@@ -63,50 +67,17 @@ final readonly class WpAiBridgeMcpClient
      * MCP catalog without invoking credential refresh or generation rotation.
      * Metadata reachability alone is never accepted as authorization proof.
      *
-     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,transport_revision:int}  $routing
+     * @param  RoutingSnapshot  $routing
      */
-    public function verifyExistingAuthorization(array $routing, string $correlationId): void
+    public function verifyExistingAuthorization(array $routing, string $correlationId, Closure $authorize): void
     {
         $catalog = $this->callAbilityOnRouting(
-            $routing, self::CATALOG_ABILITY,
-            ['action' => 'list', 'page' => 1, 'per_page' => 1],
-            false, $correlationId,
+            $routing, ['action' => 'list', 'page' => 1, 'per_page' => 1],
+            $correlationId, $authorize,
         );
         if (! is_array($catalog) || ! is_array($catalog['items'] ?? null)) {
             throw new WpAiBridgeMcpException('protocol_error', 'Authenticated WordPress catalog confirmation is invalid.');
         }
-    }
-
-    public function classifyAbility(
-        Target $target,
-        string $ability,
-        string $correlationId,
-    ): AbilityExecutionClass {
-        return $this->abilityExecutionClass(
-            $this->routingContext($target),
-            $ability,
-            $correlationId,
-        );
-    }
-
-    /** @param array<string, mixed> $input */
-    public function executeAbility(
-        Target $target,
-        string $ability,
-        array $input,
-        string $correlationId,
-        ?AbilityExecutionClass $executionClass = null,
-    ): mixed {
-        $routing = $this->routingContext($target);
-        $executionClass ??= $this->abilityExecutionClass($routing, $ability, $correlationId);
-
-        return $this->callAbilityOnRouting(
-            $routing,
-            $ability,
-            $input,
-            $executionClass->hasMutationRisk(),
-            $correlationId,
-        );
     }
 
     /**
@@ -123,18 +94,18 @@ final readonly class WpAiBridgeMcpClient
         string $ability,
         array $input,
         string $correlationId,
+        Closure $authorize,
         callable $authorizeClass,
         ?OperationTiming $timing = null,
         ?callable $verifyContract = null,
     ): mixed {
-        $routing = $this->routingContext($target, $timing);
+        $routing = $this->routingContext($target, $timing, $authorize);
 
-        return $this->withLegacySession($routing, $correlationId, function (string $url, array $headers) use ($target, $routing, $ability, $input, $correlationId, $authorizeClass, $verifyContract, $timing): mixed {
+        return $this->withSession($routing, $correlationId, $authorize, function (string $url, array $headers) use ($target, $routing, $ability, $input, $authorize, $authorizeClass, $verifyContract, $timing): mixed {
             $classifiedAt = $timing?->stamp() ?? 0;
             try {
-                $this->assertCurrentRouting($routing);
                 $contract = null;
-                $executionClass = $this->abilityExecutionClass($routing, $ability, $correlationId, $headers, $timing, $contract);
+                $executionClass = $this->abilityExecutionClass($routing, $ability, $headers, $authorize, $timing, $contract);
             } finally {
                 $timing?->finish('mcp_classification_ms', $classifiedAt);
             }
@@ -143,10 +114,6 @@ final readonly class WpAiBridgeMcpClient
             if ($verifyContract !== null && ! $verifyContract($contract, $executionClass)) {
                 throw new WpAiBridgeMcpException('forbidden', 'The required WordPress provider contract is unavailable.');
             }
-            if (! $authorizeClass($executionClass)) {
-                throw new WpAiBridgeMcpException('forbidden', 'The classified WordPress Ability is not authorized.');
-            }
-
             if (TargetOperationGate::isPaused($target)) {
                 throw new WpAiBridgeMcpException('target_paused', 'Gateway Target operations were paused before execution.');
             }
@@ -154,10 +121,10 @@ final readonly class WpAiBridgeMcpClient
             // Classification can take long enough for an Owner to disable,
             // detach or rebind a Relay. Recheck the exact epoch before any
             // effectful request is dispatched on a retained MCP session.
-            $this->assertCurrentRouting($routing);
             $dispatchedAt = $timing?->stamp() ?? 0;
             try {
-                return $this->callTool($url, $headers, $ability, $input, $executionClass->hasMutationRisk(), 3, $timing, $routing['relay']);
+                return $this->callTool($url, $headers, $ability, $input, $executionClass->hasMutationRisk(), 3, $timing, $routing['relay'],
+                    $this->guard($routing, fn (): bool => $authorizeClass($executionClass)));
             } finally {
                 $timing?->finish('mcp_execute_ms', $dispatchedAt);
             }
@@ -165,8 +132,8 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /**
-     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,transport_revision:int}  $routing
-     * @param  array<string,string>|null  $sessionHeaders
+     * @param  RoutingSnapshot  $routing
+     * @param  array<string,string>  $sessionHeaders
      * @param  array<mixed,mixed>|null  $contract
      *
      * @param-out array<mixed,mixed>|null $contract
@@ -174,22 +141,13 @@ final readonly class WpAiBridgeMcpClient
     private function abilityExecutionClass(
         array $routing,
         string $ability,
-        string $correlationId,
-        ?array $sessionHeaders = null,
+        array $sessionHeaders,
+        Closure $authorize,
         ?OperationTiming $timing = null,
         ?array &$contract = null,
     ): AbilityExecutionClass {
-        $catalog = $sessionHeaders === null
-            ? $this->callAbilityOnRouting(
-                $routing,
-                self::CATALOG_ABILITY,
-                ['action' => 'get', 'name' => $ability],
-                false,
-                $correlationId,
-                null,
-                $timing,
-            )
-            : $this->callTool($routing['resource_url'], $sessionHeaders, self::CATALOG_ABILITY, ['action' => 'get', 'name' => $ability], false, 2, $timing, $routing['relay']);
+        $catalog = $this->callTool($routing['resource_url'], $sessionHeaders, self::CATALOG_ABILITY,
+            ['action' => 'get', 'name' => $ability], false, 2, $timing, $routing['relay'], $this->guard($routing, $authorize));
 
         // A failed catalog lookup is NOT an unclassified Ability. Preserve
         // the downstream error (network, auth, protocol, etc.) and do not
@@ -235,58 +193,30 @@ final readonly class WpAiBridgeMcpClient
         return AbilityExecutionClass::Unclassified;
     }
 
-    /** @param array<string, mixed> $input */
-    private function callAbility(Target $target, string $ability, array $input, bool $mutationRisk, string $correlationId, ?OperationTiming $timing = null): mixed
-    {
-        return $this->callAbilityOnRouting(
-            $this->routingContext($target, $timing),
-            $ability,
-            $input,
-            $mutationRisk,
-            $correlationId,
-            $target,
-            $timing,
-        );
-    }
-
     /**
-     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,transport_revision:int}  $routing
-     * @param  array<string, mixed>  $input
+     * @param  RoutingSnapshot  $routing
+     * @param  array<string,mixed>  $input
+     * @param  Closure():bool  $authorize
      */
-    private function callAbilityOnRouting(
-        array $routing,
-        string $ability,
-        array $input,
-        bool $mutationRisk,
-        string $correlationId,
-        ?Target $target = null,
-        ?OperationTiming $timing = null,
-    ): mixed {
-        return $this->withLegacySession(
-            $routing,
-            $correlationId,
-            function (string $url, array $headers) use ($routing, $target, $ability, $input, $mutationRisk, $timing): mixed {
-                if ($target instanceof Target && TargetOperationGate::isPaused($target)) {
-                    throw new WpAiBridgeMcpException('target_paused', 'Gateway Target operations were paused before dispatch.');
-                }
-
-                $this->assertCurrentRouting($routing);
+    private function callAbilityOnRouting(array $routing, array $input, string $correlationId, Closure $authorize, ?OperationTiming $timing = null): mixed
+    {
+        return $this->withSession($routing, $correlationId, $authorize,
+            function (string $url, array $headers) use ($routing, $input, $authorize, $timing): mixed {
                 $calledAt = $timing?->stamp() ?? 0;
                 try {
-                    return $this->callTool($url, $headers, $ability, $input, $mutationRisk, 2, $timing, $routing['relay']);
+                    return $this->callTool($url, $headers, self::CATALOG_ABILITY, $input, false, 2, $timing, $routing['relay'], $this->guard($routing, $authorize));
                 } finally {
-                    $timing?->finish($ability === self::CATALOG_ABILITY ? 'mcp_catalog_ms' : 'mcp_execute_ms', $calledAt);
+                    $timing?->finish('mcp_catalog_ms', $calledAt);
                 }
-            },
-            $timing,
-        );
+            }, $timing);
     }
 
     /**
-     * @param  array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,transport_revision:int}  $routing
+     * @param  RoutingSnapshot  $routing
+     * @param  Closure():bool  $authorize
      * @param  callable(string,array<string,string>):mixed  $operation
      */
-    private function withLegacySession(array $routing, string $correlationId, callable $operation, ?OperationTiming $timing = null): mixed
+    private function withSession(array $routing, string $correlationId, Closure $authorize, callable $operation, ?OperationTiming $timing = null): mixed
     {
         $headers = [
             'Authorization' => 'Bearer '.$routing['access_token'],
@@ -294,11 +224,9 @@ final readonly class WpAiBridgeMcpClient
             'MCP-Protocol-Version' => self::PROTOCOL_VERSION,
             'X-MCP-Gateway-Correlation-ID' => $correlationId,
         ];
-
-        $this->assertCurrentRouting($routing);
         $initializedAt = $timing?->stamp() ?? 0;
         try {
-            $sessionId = $this->initialize($routing['resource_url'], $headers, $timing, $routing['relay']);
+            $sessionId = $this->initialize($routing['resource_url'], $headers, $timing, $routing['relay'], $this->guard($routing, $authorize));
         } finally {
             $timing?->finish('mcp_initialize_ms', $initializedAt);
         }
@@ -309,20 +237,37 @@ final readonly class WpAiBridgeMcpClient
         } finally {
             $closedAt = $timing?->stamp() ?? 0;
             try {
-                try {
-                    $this->assertCurrentRouting($routing);
-                    $this->closeSession($routing['resource_url'], $headers, $timing, $routing['relay']);
-                } catch (WpAiBridgeMcpException) {
-                    // A retired route must not receive another request with
-                    // its old bearer, even for best-effort session cleanup.
-                }
+                // Close only the exact session opened by this request. This
+                // is reconciliation, not new tool authority. A retired route
+                // or credential must not receive even a cleanup request.
+                $this->closeSession($routing['resource_url'], $headers, $timing, $routing['relay'], $this->guard($routing, null, true));
+            } catch (WpAiBridgeMcpException|WpAiBridgeTargetConnectionException) {
+                // Best effort; never replace the authoritative tool result.
             } finally {
                 $timing?->finish('mcp_close_ms', $closedAt);
             }
         }
     }
 
-    /** @param array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,transport_revision:int} $routing */
+    /**
+     * @param  RoutingSnapshot  $routing
+     * @param  (Closure():bool)|null  $authorize
+     * @return Closure():void
+     */
+    private function guard(array $routing, ?Closure $authorize, bool $cleanup = false): Closure
+    {
+        return function () use ($routing, $authorize, $cleanup): void {
+            if ($authorize !== null && ! $authorize()) {
+                throw new WpAiBridgeMcpException('forbidden', 'WordPress operation authority changed before dispatch.', null, [
+                    'failure_origin' => 'gateway_admission', 'failure_stage' => 'admission', 'request_not_sent' => true,
+                ]);
+            }
+            $this->assertCurrentRouting($routing);
+            $this->targetConnections->assertCurrentMcpCredential($routing, $cleanup);
+        };
+    }
+
+    /** @param RoutingSnapshot $routing */
     private function assertCurrentRouting(array $routing): void
     {
         try {
@@ -338,8 +283,8 @@ final readonly class WpAiBridgeMcpClient
         }
     }
 
-    /** @return array{resource_url:string,access_token:string,relay:?LocalSocks5Route,target_record_id:string,transport_revision:int} */
-    private function routingContext(Target $target, ?OperationTiming $timing = null): array
+    /** @return RoutingSnapshot */
+    private function routingContext(Target $target, ?OperationTiming $timing, Closure $authorize): array
     {
         if ($target->connector_type !== 'wp_ai_bridge') {
             throw new WpAiBridgeMcpException(
@@ -355,7 +300,7 @@ final readonly class WpAiBridgeMcpClient
         $credentialAt = $timing?->stamp() ?? 0;
         try {
             try {
-                return $this->targetConnections->routingContextWithRecovery($target);
+                return $this->targetConnections->routingContextWithRecovery($target, authorize: $authorize);
             } catch (OutboundRequestException $exception) {
                 throw new WpAiBridgeMcpException($exception->reason, 'Selected Target Relay could not be reached.', $exception, $exception->details);
             }
@@ -365,7 +310,7 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /** @param array<string, string> $headers */
-    private function initialize(string $resourceUrl, array $headers, ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null): string
+    private function initialize(string $resourceUrl, array $headers, ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null, ?Closure $beforeDispatch = null): string
     {
         try {
             $response = $this->http->postJson($resourceUrl, [
@@ -378,7 +323,7 @@ final readonly class WpAiBridgeMcpClient
                     'capabilities' => (object) [],
                     'clientInfo' => ['name' => 'mcp-gateway', 'version' => '0.1.0'],
                 ],
-            ], $headers, null, $timing, $relay);
+            ], $headers, null, $timing, $relay, $beforeDispatch);
         } catch (OutboundRequestException $exception) {
             throw new WpAiBridgeMcpException($exception->reason, 'WP AI Bridge MCP initialization failed.', $exception, $exception->details);
         }
@@ -410,7 +355,7 @@ final readonly class WpAiBridgeMcpClient
      * @param  array<string, string>  $headers
      * @param  array<string, mixed>  $input
      */
-    private function callTool(string $resourceUrl, array $headers, string $ability, array $input, bool $mutationRisk, int $requestId = 2, ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null): mixed
+    private function callTool(string $resourceUrl, array $headers, string $ability, array $input, bool $mutationRisk, int $requestId = 2, ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null, ?Closure $beforeDispatch = null): mixed
     {
         try {
             $response = $this->http->postJson($resourceUrl, [
@@ -426,7 +371,7 @@ final readonly class WpAiBridgeMcpClient
                 ],
             ], $headers, $mutationRisk
                 ? null
-                : $this->settings->responseLimitBytes(true), $timing, $relay);
+                : $this->settings->responseLimitBytes(true), $timing, $relay, $beforeDispatch);
         } catch (OutboundRequestException $exception) {
             if (! $mutationRisk && $exception->reason === 'response_too_large') {
                 throw new WpAiBridgeMcpException(
@@ -580,10 +525,10 @@ final readonly class WpAiBridgeMcpClient
     }
 
     /** @param array<string, string> $headers */
-    private function closeSession(string $resourceUrl, array $headers, ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null): void
+    private function closeSession(string $resourceUrl, array $headers, ?OperationTiming $timing = null, ?LocalSocks5Route $relay = null, ?Closure $beforeDispatch = null): void
     {
         try {
-            $this->http->delete($resourceUrl, $headers, $timing, $relay);
+            $this->http->delete($resourceUrl, $headers, $timing, $relay, $beforeDispatch);
         } catch (OutboundRequestException) {
             // Session cleanup is best-effort and never retries or masks the authoritative tool result.
         }
