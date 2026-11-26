@@ -12,6 +12,8 @@ use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\Group;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use Tests\TestCase;
 
 #[Group('database-concurrency')]
@@ -19,6 +21,10 @@ final class TargetBatchAuthorityMigrationTest extends TestCase
 {
     use RefreshDatabase;
 
+    // Migration fixtures must not share Laravel's cached schema state with
+    // independent-process race tests that explicitly rebuild the database.
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
     public function test_only_exact_never_dispatched_queued_authority_is_converted_without_rewriting_history(): void
     {
         $pin = 'ssh-ed25519 '.base64_encode(pack('N', 11).'ssh-ed25519'.pack('N', 32).str_repeat('K', 32));
