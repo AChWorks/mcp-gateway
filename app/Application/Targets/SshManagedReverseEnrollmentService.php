@@ -151,7 +151,8 @@ final readonly class SshManagedReverseEnrollmentService
             $id = DB::transaction(function () use ($enrollmentId, $token, $controlKey): string {
                 $gateway = SshManagedReverseGateway::query()->whereKey(1)->lockForUpdate()->first();
                 $enrollment = SshManagedReverseEnrollment::query()->whereKey($enrollmentId)->lockForUpdate()->first();
-                if (! $gateway?->enabled || ! $enrollment || $enrollment->state !== 'pending'
+                if (! $gateway?->enabled || $gateway->publication_pending
+                    || ! $enrollment || $enrollment->state !== 'pending'
                     || $enrollment->token_expires_at === null
                     || CarbonImmutable::parse($enrollment->token_expires_at)->isPast()
                     || ! is_string($enrollment->token_hash)
@@ -179,9 +180,13 @@ final readonly class SshManagedReverseEnrollmentService
             // "claimed" is durable BEFORE publication. A failed or unknown
             // file/DB finalization remains explicitly reconcilable; the token
             // is never replayable and route admission still denies "claimed".
-            $this->authorizedKeys->sync();
+            $this->authorizedKeys->publishClaim($id);
             $enrollment = SshManagedReverseEnrollment::query()->findOrFail($id);
             $gateway = SshManagedReverseGateway::query()->findOrFail(1);
+            if (! $gateway->enabled || $gateway->publication_pending || $enrollment->state !== 'active'
+                || $enrollment->publication_pending) {
+                throw new RuntimeException('Managed Reverse SSH authority changed during claim publication.');
+            }
 
             return [
                 'control_host' => $gateway->control_host,
@@ -267,7 +272,7 @@ final readonly class SshManagedReverseEnrollmentService
             }, 3);
             // Do not expose the new one-use command until the old control
             // authorization has been reconciled with the host key reader.
-            $this->authorizedKeys->sync();
+            $this->authorizedKeys->reconcileClosures();
 
             return ['enrollment' => $enrollment->fresh(), 'token' => $token];
         });
@@ -275,21 +280,10 @@ final readonly class SshManagedReverseEnrollmentService
 
     public function revoke(SshManagedReverseEnrollment $enrollment): void
     {
-        $committed = false;
-        try {
-            $this->authorizedKeys->withPolicyLock(function () use ($enrollment, &$committed): void {
-                $this->revokeLocal($enrollment);
-                $committed = true;
-                $this->authorizedKeys->sync();
-            });
-        } finally {
-            if (! $committed) {
-                // Failure to acquire the publication lock must NEVER
-                // prevent local route revocation and Job
-                // fencing. A later Owner reconciliation removes host keys.
-                $this->revokeLocal($enrollment);
-            }
-        }
+        // Local revoke, like global Disable, closes application authority
+        // before attempting any filesystem lock or external publication.
+        $this->revokeLocal($enrollment);
+        $this->authorizedKeys->reconcileClosures();
     }
 
     private function revokeLocal(SshManagedReverseEnrollment $enrollment): void

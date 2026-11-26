@@ -76,7 +76,7 @@ final class ConnectionRelayController extends Controller
 
     public function toggle(
         Request $request, ConnectionRelay $relay, AdministratorPasswordConfirmation $password,
-        ConnectionRelayAdministration $administration, ActivityRecorder $activity,
+        ConnectionRelayAdministration $administration,
     ): RedirectResponse {
         Gate::authorize(GatewayPermission::SecurityManage->value);
         $fields = $request->validate([
@@ -86,42 +86,18 @@ final class ConnectionRelayController extends Controller
         $password->confirm($request);
         $revision = (int) $fields['relay_revision'];
 
-        if ($fields['enable'] === '0') {
-            try {
-                $changed = $administration->disable($relay, $revision);
-            } catch (TargetConnectorFailure $exception) {
-                throw ValidationException::withMessages([$exception->field ?? 'relay' => $exception->getMessage()]);
-            }
+        $enabled = $fields['enable'] === '1';
+        try {
+            $changed = $administration->setEnabled($relay, $revision, $enabled);
+        } catch (TargetConnectorFailure $exception) {
+            throw ValidationException::withMessages([$exception->field ?? 'relay' => $exception->getMessage()]);
+        }
 
+        if (! $enabled) {
             return back()->with('status', $changed
                 ? __('Relay disabled. Assigned Targets and their authorization are preserved; re-enable the Relay or change the route to restore network access.')
                 : __('Relay was already disabled.'));
         }
-
-        DB::transaction(static function () use ($relay, $revision, $activity): void {
-            $current = ConnectionRelay::query()->whereKey($relay->getKey())->lockForUpdate()->firstOrFail();
-            if ((int) $current->lifecycle_revision !== $revision) {
-                throw ValidationException::withMessages(['relay_revision' => __('Relay settings changed. Refresh and retry.')]);
-            }
-            if ($current->enabled) {
-                return;
-            }
-            if ((int) $current->lifecycle_revision >= 4294967295) {
-                throw ValidationException::withMessages(['relay_revision' => __('Relay revision is exhausted.')]);
-            }
-            if (DB::table('targets')->where('relay_record_id', $current->getKey())
-                ->where('transport_revision', '>=', 4294967295)->exists()) {
-                throw ValidationException::withMessages([
-                    'relay' => __('Cannot enable this Relay while an assigned Target binding revision is exhausted.'),
-                ]);
-            }
-            DB::table('connection_relays')->where('id', $current->getKey())->update([
-                'enabled' => true,
-                'lifecycle_revision' => (int) $current->lifecycle_revision + 1,
-                'updated_at' => now(),
-            ]);
-            $activity->recordRequired(CorrelationId::current(), 'connection-relay-enable', 'success');
-        }, 3);
 
         return back()->with('status', __('Relay enabled. Test the SSH tunnel and the selected Target normally.'));
     }

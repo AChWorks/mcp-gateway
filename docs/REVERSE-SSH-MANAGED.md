@@ -139,21 +139,37 @@ point-in-time proof, not a heartbeat.
 - Key-reader publication and DB intent are deliberately **not** one
   transaction: a one-use claim commits `claimed + publication_pending`
   before a public-key file is atomically published. Only after the
-  reader bytes are confirmed and a new DB finalization commits does
-  the enrollment become `active`. A failure/crash leaves a durable
+  reader bytes are confirmed against the exact provider revision and a new
+  DB finalization commits does the enrollment become `active` and
+  advance its Target transport revision. A failure/crash leaves a durable
   pending receipt and blocks the managed route until Owner
   reconciliation. The Owner can safely retry **Reconcile restricted
-  public keys**. Activation is never inferred solely from a written file.
+  public keys**. A new one-use claim can activate only its own enrollment,
+  not another failed claim or a pending global Enable. Activation is never
+  inferred solely from a written file.
 - Scoped route revocation atomically commits `revoked` and advances the shared transport revision for retained Job fencing **before** external key-file publication. Existing Target login credentials and authorization remain unchanged. An explicit Target Disconnect is a separate operation.
   The host key-removal stage has a separate durable pending receipt;
-  failures leave a visible/retriable Owner action. Do not describe
-  revocation as fully completed while host policy is still pending.
+  failures leave a visible/retriable action. Scoped revoke/reissue may
+  reconcile key removals, but cannot finalize another enrollment's claim
+  or an unconfirmed global Enable. While global Enable remains pending,
+  a scoped revoke can publish the closed reader policy and confirm its
+  removal without clearing the global pending receipt. Only the
+  Owner-authorized global publication can restore that authority.
+  Do not describe revocation as fully completed while its own host
+  removal receipt is still pending.
   Local delete/forget remains blocked until the host reader is reconciled.
-- Existing PHP processes coordinate policy publication with claim, reissue,
-  revoke and Gateway feature state using a PHP-owned file lock. No PHP
-  request gains OS root access. Disabling Gateway routing remains
-  possible even if the host reader is damaged; the resulting application
-  route then fails closed and host reconciliation is still required. Global disable advances the transport revision of each currently bound managed Target before key publication, without changing its login credential or manual/Direct/Relay paths. Re-enable cannot revive prior admissions. An identical reconciled save does not advance either revision.
+- PHP processes serialize host publication, claim, reissue and Enable
+  with a PHP-owned file lock. No PHP request gains OS root access. Global
+  Disable and scoped revoke first commit local closure under database
+  locks, even when the host reader or publication lock is damaged. A
+  superseded publication receipt cannot finalize a different provider
+  revision, even if its key bytes are identical. Global Disable advances
+  the transport revision of each currently bound managed Target; Enable
+  advances the revision of each newly available route only when publication
+  is confirmed. This fences work and verification from both before and
+  during the disabled/pending interval without changing login credentials
+  or manual/Direct/Relay paths. An identical reconciled save does not
+  advance either revision.
 - The Target installer refuses pre-planted non-root-owned or
   group/world-writable root state directories, malicious lock paths and
   unsafe control-key ownership/mode **before** token consumption. It

@@ -119,7 +119,11 @@ final class SshManagedReverseController extends Controller
                 }
                 if ($current && (bool) $current->enabled !== $enabled) {
                     try {
-                        $bindings->changeManagedReverseAvailability($enabled);
+                        if ($enabled) {
+                            $bindings->assertManagedReverseCanEnable();
+                        } else {
+                            $bindings->disableManagedReverse();
+                        }
                     } catch (TargetConnectorFailure $exception) {
                         throw ValidationException::withMessages([$exception->field ?? 'enabled' => $exception->getMessage()]);
                     }
@@ -138,30 +142,39 @@ final class SshManagedReverseController extends Controller
             }, 3);
         };
 
-        if ($keys->canPublish()) {
-            // Serialize configuration and key-reader policy with claim,
-            // reissue and revoke. Committed disable still fails closed
-            // immediately if the external publication later fails.
-            try {
-                $keys->withPolicyLock(static function () use ($saveIntent, $keys): void {
-                    if ($saveIntent()) {
-                        $keys->sync();
-                    }
-                });
-            } catch (\RuntimeException) {
-                return redirect()->route('admin.reverse-ssh.index')
-                    ->with('reverse_ssh_operation', 'save_publication_failed')
-                    ->withErrors(['site' => __('The settings save may have committed, but restricted key publication was not confirmed. Inspect the saved revision and pending publication state; if pending, use Owner Repair. Do not repeat Save with a stale revision.')]);
+        $committed = false;
+        $intentStarted = false;
+        $commitAndPublish = static function () use ($saveIntent, $keys, $enabled, &$committed, &$intentStarted): void {
+            $intentStarted = true;
+            $committed = $saveIntent();
+            if ($committed) {
+                if ($enabled) {
+                    $keys->reconcileAsOwner();
+                } else {
+                    $keys->reconcileClosures();
+                }
             }
-        } else {
+        };
+
+        try {
             if ($enabled) {
-                throw ValidationException::withMessages([
-                    'enabled' => __('Cannot enable Reverse SSH with an unavailable host key reader.'),
-                ]);
+                // Enable requires a safe host publication lock before intent.
+                $keys->withPolicyLock($commitAndPublish);
+            } else {
+                // Local closure must not depend on obtaining the host lock.
+                // Publication separately reconciles the committed intent.
+                $commitAndPublish();
             }
-            // Disabling must remain available even with a degraded reader:
-            // application route authorization then fails closed immediately.
-            $saveIntent();
+        } catch (\RuntimeException $exception) {
+            if ($intentStarted && ! $committed) {
+                throw $exception;
+            }
+
+            return redirect()->route('admin.reverse-ssh.index')
+                ->with('reverse_ssh_operation', 'save_publication_failed')
+                ->withErrors(['site' => $committed
+                    ? __('The settings save committed locally, but restricted key publication was not confirmed. Inspect the pending publication state and use Owner Repair. Do not repeat Save with a stale revision.')
+                    : __('The settings save did not commit. Inspect the saved revision and host publication prerequisites before retrying.')]);
         }
 
         return redirect()->route('admin.reverse-ssh.index')
@@ -180,7 +193,7 @@ final class SshManagedReverseController extends Controller
             ]);
         }
         try {
-            $keys->sync();
+            $keys->reconcileAsOwner();
         } catch (\RuntimeException) {
             return redirect()->route('admin.reverse-ssh.index')
                 ->with('reverse_ssh_operation', 'repair_failed')

@@ -7,7 +7,10 @@
  */
 declare(strict_types=1);
 
+use App\Application\Batch\DeferredBatchAuthority;
 use App\Application\Batch\TargetBatchBinding;
+use App\Application\Batch\TargetBatchCoordinator;
+use App\Application\Batch\TargetBatchWorker;
 use App\Application\Mcp\SshJobMcpToolHandlers;
 use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshFileRuntime;
@@ -244,18 +247,41 @@ try {
         };
         $commands = app(SshCommandRuntime::class);
         $files = app(SshFileRuntime::class);
+        $request = Request::create('/admin/target-batches', 'POST');
+        $request->setUserResolver(static fn (): User => $owner);
+        $origin = app(DeferredBatchAuthority::class)->captureWeb($owner, $request);
+        $core = app(TargetBatchCoordinator::class);
+        $worker = app(TargetBatchWorker::class);
+        $ids = [$target->target_id];
+        $arguments = ['command' => 'printf managed-real-batch', 'timeout_seconds' => 10];
+        $preview = static fn () => $core->preview($owner, $origin, 'ssh.command.run', $ids, $arguments);
+        $create = static fn (array $approval) => $core->create(
+            $owner, $origin, (string) Str::uuid(), 'ssh.command.run', $ids, $arguments, $approval['preview_token'],
+        );
+        $history = $create($preview());
+        if (($worker->workOnce()['status'] ?? null) !== 'completed') {
+            throw new RuntimeException('Initial real managed Reverse Batch failed.');
+        }
+        $historyRow = (array) DB::table('target_batch_items')->where('batch_id', $history['batch_id'])->sole();
+        $preDisableBatch = $create($preview());
         $disabled = $save(false);
         if (file_get_contents($keyPath) !== '' || $target->fresh()->transport_revision !== $oldEpoch + 1) {
             throw new RuntimeException('Disable did not publish empty control policy and advance route epoch.');
         }
         $deny(fn () => $commands->run($owner, $target, 'true'), 'reverse_route_not_approved');
+        $disabledTarget = $target->fresh();
+        $disabledConfig = $config->fresh();
+        $disabledAttempt = $verification->begin($disabledTarget, $disabledConfig, $credential);
+        $disabledApproval = $preview();
+        $disabledBatch = $create($disabledApproval);
+        $disabledBinding = SshTargetBinding::hash($disabledTarget, $disabledConfig);
         $enabled = $save(true);
         $fresh = $target->fresh();
         $binding = SshTargetBinding::hash($fresh, $config);
         $newBatch = app(TargetBatchBinding::class)->hash($fresh);
         if ($enabled->revision !== $disabled->revision + 1
             || file_get_contents($keyPath) !== $keyPolicy
-            || $fresh->transport_revision !== $oldEpoch + 1
+            || $fresh->transport_revision !== $oldEpoch + 2
             || $fresh->connection_state->value !== 'connected'
             || $fresh->last_tested_at !== null
             || $binding === $oldBinding || $newBatch === null || $newBatch === $oldBatch
@@ -263,11 +289,36 @@ try {
             throw new RuntimeException('Re-enable revived old authority or changed independent login identity.');
         }
         $noOp = $save(true);
-        if ($noOp->revision !== $enabled->revision || $target->fresh()->transport_revision !== $oldEpoch + 1) {
+        if ($noOp->revision !== $enabled->revision || $target->fresh()->transport_revision !== $oldEpoch + 2) {
             throw new RuntimeException('Identical reconciled save must not advance revisions.');
         }
         $deny(fn () => $verification->succeeded($target, $config, $credential, $attempt, '127.0.0.1'), 'target_changed');
+        $verification->failed($disabledTarget, $disabledConfig, $credential, $disabledAttempt, 'tcp_unreachable');
+        $deny(fn () => $verification->succeeded($disabledTarget, $disabledConfig, $credential, $disabledAttempt, '127.0.0.1'), 'target_changed');
+        if ($target->fresh()->last_tested_at !== null || $binding === $disabledBinding) {
+            throw new RuntimeException('Disabled-interval verification or binding survived real activation.');
+        }
+        try {
+            $create($disabledApproval);
+            throw new RuntimeException('Disabled-interval Preview authorized restored authority.');
+        } catch (InvalidArgumentException $e) {
+            if (! str_contains($e->getMessage(), 'Preview again')) {
+                throw $e;
+            }
+        }
+        for ($i = 0; $i < 2; $i++) {
+            $outcome = $worker->workOnce();
+            if (($outcome['status'] ?? null) !== 'blocked' || ($outcome['error_code'] ?? null) !== 'authorization_revoked') {
+                throw new RuntimeException('Old real managed Batch crossed restored authority.');
+            }
+        }
+        foreach ([$preDisableBatch, $disabledBatch] as $batch) {
+            if ($core->status($owner, $origin, $batch['batch_id'])['items'][0]['status'] !== 'blocked') {
+                throw new RuntimeException('Old managed Batch did not retain a blocked outcome.');
+            }
+        }
         $deny(fn () => $commands->run($owner, $target, 'true', expectedTargetBinding: $oldBinding), 'target_changed');
+        $deny(fn () => $commands->run($owner, $target, 'true', expectedTargetBinding: $disabledBinding), 'target_changed');
         $path = '/home/deploy.prod/.mcp-reverse-aba-'.bin2hex(random_bytes(6));
         $deny(fn () => $files->write($owner, $target, $path, base64_encode('stale'), expectedTargetBinding: $oldBinding), 'target_changed');
         $status = app(SshJobMcpToolHandlers::class)->status(
@@ -288,7 +339,14 @@ try {
         if ($result['exit_code'] !== 0 || $result['stdout'] !== 'managed-fresh-authority') {
             throw new RuntimeException('Fresh pinned command did not observe the exact new SFTP bytes.');
         }
-        echo "PASS: real Owner controller disable/re-enable, key publication, stale command/SFTP/Job/Batch/Verify fences and fresh pinned work.\n";
+        $freshBatch = $create($preview());
+        if (($worker->workOnce()['status'] ?? null) !== 'completed'
+            || $core->status($owner, $origin, $freshBatch['batch_id'])['items'][0]['result']['result']['stdout'] !== 'managed-real-batch'
+            || $historyRow !== (array) DB::table('target_batch_items')->where('batch_id', $history['batch_id'])->sole()
+            || $worker->workOnce() !== null) {
+            throw new RuntimeException('Fresh pinned managed Batch failed or historical evidence changed.');
+        }
+        echo "PASS: real Owner controller disable/re-enable, key publication, stale command/SFTP/Job/Batch/Verify fences and fresh pinned work; disabled-interval Preview, durable Worker, history.\n";
         exit(0);
     }
 

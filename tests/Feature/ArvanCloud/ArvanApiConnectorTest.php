@@ -648,7 +648,7 @@ final class ArvanApiConnectorTest extends TestCase
                 self::assertTrue($request->hasHeader('Authorization', 'Apikey '.self::KEY));
             }
             if ($disableDuringProbe) {
-                app(ConnectionRelayAdministration::class)->disable($relay, 1);
+                app(ConnectionRelayAdministration::class)->setEnabled($relay, 1, false);
             }
 
             return Http::response(['ok' => true]);

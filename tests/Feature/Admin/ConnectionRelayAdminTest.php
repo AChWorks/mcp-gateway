@@ -546,7 +546,7 @@ SH
         self::assertNull($target->relay_record_id);
         self::assertTrue($bindings->change($target, $bindings->revision($target), 'iran-1'));
         $target->refresh();
-        app(ConnectionRelayAdministration::class)->disable($relay, 1);
+        app(ConnectionRelayAdministration::class)->setEnabled($relay, 1, false);
         $target->refresh();
         self::assertSame(6, $target->transport_revision);
         self::assertSame('connected', $target->connection_state->value);
@@ -603,7 +603,7 @@ SH
         $original = $routes->httpRouteAtEpoch((string) $target->getKey(), 1);
         self::assertSame(46081, $original?->loopbackPort);
 
-        app(ConnectionRelayAdministration::class)->disable($relay, 1);
+        app(ConnectionRelayAdministration::class)->setEnabled($relay, 1, false);
         try {
             $routes->httpRouteAtEpoch((string) $target->getKey(), 1, $original, true);
             self::fail('An outdated route revision reached the transport.');
@@ -623,7 +623,7 @@ SH
         );
         DB::table('target_credentials')->where('target_record_id', $target->getKey())
             ->update(['encrypted_payload' => 'invalid-fixture-envelope']);
-        self::assertTrue(app(ConnectionRelayAdministration::class)->disable($relay, 1));
+        self::assertTrue(app(ConnectionRelayAdministration::class)->setEnabled($relay, 1, false));
         self::assertFalse($relay->fresh()->enabled);
         self::assertSame(2, $target->fresh()->transport_revision);
         self::assertNull($target->fresh()->last_error_code);
@@ -643,12 +643,12 @@ SH
             'deploy', $this->publicKey(), 'password', 'ssh-secret', null,
             connectionRelayId: 'iran-1',
         );
-        $first = app(ConnectionRelayAdministration::class)->disable($relay, 1);
+        $first = app(ConnectionRelayAdministration::class)->setEnabled($relay, 1, false);
         self::assertTrue($first);
         $epoch = $target->fresh()->transport_revision;
         $encrypted = TargetCredential::query()->where('target_record_id', $target->getKey())
             ->sole()->encrypted_payload;
-        self::assertFalse(app(ConnectionRelayAdministration::class)->disable($relay, 2));
+        self::assertFalse(app(ConnectionRelayAdministration::class)->setEnabled($relay, 2, false));
         self::assertSame($epoch, $target->fresh()->transport_revision);
         self::assertSame($encrypted, TargetCredential::query()
             ->where('target_record_id', $target->getKey())->sole()->encrypted_payload);

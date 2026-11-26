@@ -41,7 +41,7 @@ final readonly class WpAiBridgeTargetRegistration
 
         // Existing discovery enforces HTTPS, DNS pinning, public outbound policy,
         // bounded response sizes, same-origin OAuth URLs and supported protocols.
-        $metadata = $this->discovery->discover($baseUrl, $this->relays->routeForSelection($relayId));
+        $metadata = $this->discovery->discover($baseUrl, fn () => $this->relays->routeForSelection($relayId));
         $hash = hash('sha256', $metadata->baseUrl);
 
         try {

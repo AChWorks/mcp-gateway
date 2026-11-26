@@ -82,7 +82,7 @@ final class ConnectionRelayConcurrencyTest extends TestCase
         $target = $this->target->fresh();
         self::assertSame((string) $this->relay->getKey(), (string) $target->getAttribute('relay_record_id'));
         self::assertSame(1, $target->transport_revision);
-        self::assertTrue(app(ConnectionRelayAdministration::class)->disable($this->relay, 1));
+        self::assertTrue(app(ConnectionRelayAdministration::class)->setEnabled($this->relay, 1, false));
         $target = $this->target->fresh();
         self::assertSame('disconnected', $target->connection_state->value);
         self::assertNull($target->last_error_code);

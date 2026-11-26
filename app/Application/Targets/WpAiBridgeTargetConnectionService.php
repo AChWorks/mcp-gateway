@@ -57,7 +57,7 @@ final readonly class WpAiBridgeTargetConnectionService
         // Discovery is untrusted remote I/O: never hold a database row lock.
         try {
             $discovery = $this->discovery->discover(
-                $configuration->base_url, $this->relays->httpRouteAtEpoch($recordId, $routeEpoch),
+                $configuration->base_url, fn () => $this->relays->httpRouteAtEpoch($recordId, $routeEpoch),
             );
         } catch (OutboundRequestException $exception) {
             $this->recordDiscoveryFailure($recordId, $routeEpoch, (string) $configuration->base_url, $exception->reason);
@@ -1351,7 +1351,7 @@ final readonly class WpAiBridgeTargetConnectionService
         $routeEpoch = (int) $target->transport_revision;
         try {
             $found = $this->discovery->discover(
-                $configuration->base_url, $this->relays->httpRouteAtEpoch($recordId, $routeEpoch),
+                $configuration->base_url, fn () => $this->relays->httpRouteAtEpoch($recordId, $routeEpoch),
             );
             if (! hash_equals((string) $configuration->base_url, $found->baseUrl)) {
                 throw new BridgeDiscoveryException('target_changed', 'Canonical WordPress origin changed.');
