@@ -295,6 +295,7 @@ final class SshFileMcpTest extends TestCase
             'host pin changed' => ['config', 'pinned_host_key', 'different-pinned-host-key'],
             'config record removed' => ['config', 'delete', null],
             'credential changed' => ['credential', 'encrypted_payload', 'replacement-ciphertext'],
+            'credential authority superseded without material change' => ['credential', 'authority_revision', 1],
             'credential record removed' => ['credential', 'delete', null],
             'credential record replaced with identical ciphertext' => ['credential', 'replace', null],
             'credential connector changed' => ['credential', 'connector_type', 'wp_ai_bridge'],
@@ -371,7 +372,8 @@ final class SshFileMcpTest extends TestCase
 
         // A newly authenticated operation owns a fresh identity snapshot.
         $currentIdentity = $this->fileConnectionIdentity($target);
-        self::assertNotSame($identity[3], $currentIdentity[3]);
+        self::assertNotSame($identity[0], $currentIdentity[0]);
+        self::assertSame(array_slice($identity, 1), array_slice($currentIdentity, 1));
         $guard->invoke($runtime, $owner, $target, ...$currentIdentity);
     }
 
@@ -627,7 +629,7 @@ final class SshFileMcpTest extends TestCase
         self::assertSame(8388608, app(OperationalSettings::class)->sshTransferLimits()['max_bytes']);
     }
 
-    /** @return array{string, string, string, string} */
+    /** @return array{string, string, string} */
     private function fileConnectionIdentity(Target $target): array
     {
         $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->firstOrFail();
@@ -635,8 +637,8 @@ final class SshFileMcpTest extends TestCase
             ->where('connector_type', 'ssh_direct')->where('purpose', SshTargetVault::PURPOSE)->firstOrFail();
 
         return [
-            SshTargetBinding::hash($target, $config), (string) $config->getKey(),
-            (string) $credential->getKey(), hash('sha256', (string) $credential->encrypted_payload),
+            SshTargetBinding::executionFingerprint($target, $config, $credential),
+            (string) $config->getKey(), (string) $credential->getKey(),
         ];
     }
 
