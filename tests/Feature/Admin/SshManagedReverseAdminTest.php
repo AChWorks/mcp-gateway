@@ -846,6 +846,139 @@ final class SshManagedReverseAdminTest extends TestCase
         self::assertSame($epoch + 2, $target->fresh()->transport_revision);
     }
 
+    public function test_scoped_revoke_cannot_finalize_pending_global_enable(): void
+    {
+        $this->assertScopedRevocationDoesNotEnable(false);
+    }
+
+    public function test_scoped_revoke_cannot_finalize_global_enable_committed_before_publication_lock(): void
+    {
+        $this->assertScopedRevocationDoesNotEnable(true);
+    }
+
+    private function assertScopedRevocationDoesNotEnable(bool $interleave): void
+    {
+        $owner = $this->user('owner');
+        $admin = $this->user('administrator');
+        $this->actingAs($owner);
+        $url = '/admin/settings/reverse-ssh';
+        $this->put($url, $this->settings(true))->assertSessionHasNoErrors();
+        $this->fixtureLocalReady();
+        $service = app(SshManagedReverseEnrollmentService::class);
+        $a = $service->begin('scope-a', 'Scoped A', '8.8.8.8', 22, 'deploy', $this->publicKey(52));
+        $b = $service->begin('scope-b', 'Scoped B', '8.8.4.4', 22, 'deploy', $this->publicKey(52));
+        $service->claim($a['enrollment']->id, $a['token'], $this->publicKey(61));
+        $service->claim($b['enrollment']->id, $b['token'], $this->publicKey(62));
+        $targetA = $a['enrollment']->target->fresh();
+        $targetB = $b['enrollment']->target->fresh();
+        $epochA = $targetA->transport_revision;
+        $epochB = $targetB->transport_revision;
+        $credentials = DB::table('target_credentials')->orderBy('id')->get()->toArray();
+        $history = DB::table('activity_events')->orderBy('id')->get()->keyBy('id')->all();
+
+        $manager = app(UserAccessManager::class);
+        $manager->updateTargetRule($admin, $targetA, 'allow', [], true, $manager->targetRuleRevision($admin, $targetA));
+        $this->actingAs($admin)->post($url.'/repair', [
+            'current_password' => 'StrongPassword!234',
+        ])->assertForbidden();
+        $this->post('/admin/targets/scope-b/reverse-ssh/revoke', [
+            'confirm_target_id' => 'scope-b', 'current_password' => 'StrongPassword!234',
+        ])->assertForbidden();
+
+        $writer = new class(app(TargetTransportBinding::class)) extends SshManagedReverseAuthorizedKeys
+        {
+            public bool $fail = false;
+
+            public bool $failAfterPublish = false;
+
+            public ?\Closure $beforeLock = null;
+
+            public function withPolicyLock(callable $operation): mixed
+            {
+                $callback = $this->beforeLock;
+                $this->beforeLock = null;
+                $callback?->__invoke();
+
+                return parent::withPolicyLock($operation);
+            }
+
+            protected function publish(string $contents): void
+            {
+                if ($this->fail && ! $this->failAfterPublish) {
+                    throw new RuntimeException('Fixture global Enable publication failure');
+                }
+
+                parent::publish($contents);
+                if ($this->fail) {
+                    throw new RuntimeException('Fixture interrupted after publishing global Enable bytes');
+                }
+            }
+        };
+        app()->instance(SshManagedReverseAuthorizedKeys::class, $writer);
+        $failedEnable = function () use ($writer, $owner, $admin, $url, $interleave): void {
+            $this->actingAs($owner)->put($url, [...$this->settings(false), 'revision' => 1])->assertSessionHasNoErrors();
+            $writer->fail = true;
+            $writer->failAfterPublish = $interleave;
+            $this->put($url, [...$this->settings(true), 'revision' => 2])->assertSessionHasErrors('site');
+            $writer->fail = false;
+            self::assertFalse(SshManagedReverseGateway::active());
+            self::assertTrue(SshManagedReverseGateway::query()->sole()->publication_pending);
+            if ($interleave) {
+                self::assertStringContainsString($this->publicKey(62), file_get_contents($this->keyFile));
+            } else {
+                self::assertSame('', file_get_contents($this->keyFile));
+            }
+            $this->actingAs($admin);
+        };
+        if ($interleave) {
+            // The scoped local revoke commits before the publication lock.
+            // Model an Owner operation that wins that lock before the revoke
+            // publication starts. A pre-lock check cannot authorize activation.
+            $writer->beforeLock = function () use ($a, $failedEnable): void {
+                self::assertSame('revoked', $a['enrollment']->fresh()->state);
+                self::assertTrue($a['enrollment']->fresh()->publication_pending);
+                $failedEnable();
+            };
+        } else {
+            $failedEnable();
+        }
+
+        $this->post('/admin/targets/scope-a/reverse-ssh/revoke', [
+            'confirm_target_id' => 'scope-a', 'current_password' => 'StrongPassword!234',
+        ])->assertAdminRedirect('/admin/targets/scope-a')->assertSessionHasNoErrors();
+
+        $gateway = SshManagedReverseGateway::query()->sole();
+        self::assertSame(3, $gateway->revision);
+        self::assertTrue($gateway->enabled);
+        self::assertTrue($gateway->publication_pending);
+        self::assertFalse(SshManagedReverseGateway::active());
+        self::assertSame('', file_get_contents($this->keyFile));
+        self::assertSame('revoked', $a['enrollment']->fresh()->state);
+        self::assertFalse($a['enrollment']->fresh()->publication_pending);
+        self::assertSame($epochA + ($interleave ? 1 : 2), $targetA->fresh()->transport_revision);
+        self::assertSame($epochB + 1, $targetB->fresh()->transport_revision);
+        try {
+            app(SshReverseRoutePolicy::class)->forTarget($targetB->fresh());
+            self::fail('Scoped revoke restored an unrelated managed route.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('reverse_route_not_approved', $exception->reason);
+        }
+
+        $this->actingAs($owner)->post($url.'/repair', [
+            'current_password' => 'StrongPassword!234',
+        ])->assertSessionHasNoErrors();
+        self::assertTrue(SshManagedReverseGateway::active());
+        self::assertSame(3, $gateway->fresh()->revision);
+        self::assertSame($epochB + 2, $targetB->fresh()->transport_revision);
+        self::assertSame($epochA + ($interleave ? 1 : 2), $targetA->fresh()->transport_revision);
+        self::assertSame('revoked', $a['enrollment']->fresh()->state);
+        self::assertStringNotContainsString($this->publicKey(61), file_get_contents($this->keyFile));
+        self::assertStringContainsString($this->publicKey(62), file_get_contents($this->keyFile));
+        self::assertNotNull(app(SshReverseRoutePolicy::class)->forTarget($targetB->fresh()));
+        self::assertEquals($credentials, DB::table('target_credentials')->orderBy('id')->get()->toArray());
+        self::assertEquals($history, DB::table('activity_events')->whereIn('id', array_keys($history))->orderBy('id')->get()->keyBy('id')->all());
+    }
+
     public function test_global_publication_receipt_requires_owner_reconciliation(): void
     {
         $this->actingAs($this->user('owner'));

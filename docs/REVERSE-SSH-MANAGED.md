@@ -144,11 +144,19 @@ point-in-time proof, not a heartbeat.
   advance its Target transport revision. A failure/crash leaves a durable
   pending receipt and blocks the managed route until Owner
   reconciliation. The Owner can safely retry **Reconcile restricted
-  public keys**. Activation is never inferred solely from a written file.
+  public keys**. A new one-use claim can activate only its own enrollment,
+  not another failed claim or a pending global Enable. Activation is never
+  inferred solely from a written file.
 - Scoped route revocation atomically commits `revoked` and advances the shared transport revision for retained Job fencing **before** external key-file publication. Existing Target login credentials and authorization remain unchanged. An explicit Target Disconnect is a separate operation.
   The host key-removal stage has a separate durable pending receipt;
-  failures leave a visible/retriable Owner action. Do not describe
-  revocation as fully completed while host policy is still pending.
+  failures leave a visible/retriable action. Scoped revoke/reissue may
+  reconcile key removals, but cannot finalize another enrollment's claim
+  or an unconfirmed global Enable. While global Enable remains pending,
+  a scoped revoke can publish the closed reader policy and confirm its
+  removal without clearing the global pending receipt. Only the
+  Owner-authorized global publication can restore that authority.
+  Do not describe revocation as fully completed while its own host
+  removal receipt is still pending.
   Local delete/forget remains blocked until the host reader is reconciled.
 - PHP processes serialize host publication, claim, reissue and Enable
   with a PHP-owned file lock. No PHP request gains OS root access. Global

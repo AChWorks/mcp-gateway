@@ -144,11 +144,15 @@ final class SshManagedReverseController extends Controller
 
         $committed = false;
         $intentStarted = false;
-        $commitAndPublish = static function () use ($saveIntent, $keys, &$committed, &$intentStarted): void {
+        $commitAndPublish = static function () use ($saveIntent, $keys, $enabled, &$committed, &$intentStarted): void {
             $intentStarted = true;
             $committed = $saveIntent();
             if ($committed) {
-                $keys->sync();
+                if ($enabled) {
+                    $keys->reconcileAsOwner();
+                } else {
+                    $keys->reconcileClosures();
+                }
             }
         };
 
@@ -189,7 +193,7 @@ final class SshManagedReverseController extends Controller
             ]);
         }
         try {
-            $keys->sync();
+            $keys->reconcileAsOwner();
         } catch (\RuntimeException) {
             return redirect()->route('admin.reverse-ssh.index')
                 ->with('reverse_ssh_operation', 'repair_failed')

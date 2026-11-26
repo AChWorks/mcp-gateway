@@ -106,19 +106,22 @@ final readonly class TargetTransportBinding
         );
     }
 
-    /** @return EloquentBuilder<Target> */
-    private function managedTargets(bool $activating = false, bool $global = true): EloquentBuilder
+    /**
+     * @param  list<string>|null  $claimedIds  Exact published claim receipts, or null for all bound routes.
+     * @return EloquentBuilder<Target>
+     */
+    private function managedTargets(?array $claimedIds = null, bool $global = false): EloquentBuilder
     {
-        return Target::query()->whereExists(static function (Builder $query) use ($activating, $global): void {
+        return Target::query()->whereExists(static function (Builder $query) use ($claimedIds, $global): void {
             $query->selectRaw('1')->from((new SshManagedReverseEnrollment)->getTable())
                 ->whereColumn('target_record_id', 'targets.id')
                 ->whereColumn('listener_port', 'targets.reverse_listener_port')
                 ->whereColumn('tunnel_identity', 'targets.reverse_tunnel_identity')
                 ->where('state', '!=', 'revoked');
-            if ($activating) {
-                $query->where(static function (Builder $query) use ($global): void {
+            if ($claimedIds !== null) {
+                $query->where(static function (Builder $query) use ($claimedIds, $global): void {
                     $query->where(static fn (Builder $claimed) => $claimed
-                        ->where('state', 'claimed')->where('publication_pending', true));
+                        ->where('state', 'claimed')->where('publication_pending', true)->whereIn('id', $claimedIds));
                     if ($global) {
                         $query->orWhere('state', 'active');
                     }
@@ -147,10 +150,12 @@ final readonly class TargetTransportBinding
      * Only a verified publication receipt restores authority. A global
      * receipt opens active and newly claimed routes; an enrollment-only
      * receipt opens just its claimed routes. No-key pending routes stay closed.
+     *
+     * @param  list<string>  $claimedIds  Exact claims included in the publication receipt.
      */
-    public function activateManagedReverse(bool $global): void
+    public function activateManagedReverse(bool $global, array $claimedIds): void
     {
-        foreach ($this->managedTargets(activating: true, global: $global)->orderBy('id')->lockForUpdate()->get() as $target) {
+        foreach ($this->managedTargets($claimedIds, $global)->orderBy('id')->lockForUpdate()->get() as $target) {
             $this->changeBoundTargetAvailability($target, true);
         }
     }

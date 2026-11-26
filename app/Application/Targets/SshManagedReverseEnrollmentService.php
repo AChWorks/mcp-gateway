@@ -180,7 +180,7 @@ final readonly class SshManagedReverseEnrollmentService
             // "claimed" is durable BEFORE publication. A failed or unknown
             // file/DB finalization remains explicitly reconcilable; the token
             // is never replayable and route admission still denies "claimed".
-            $this->authorizedKeys->sync();
+            $this->authorizedKeys->publishClaim($id);
             $enrollment = SshManagedReverseEnrollment::query()->findOrFail($id);
             $gateway = SshManagedReverseGateway::query()->findOrFail(1);
             if (! $gateway->enabled || $gateway->publication_pending || $enrollment->state !== 'active'
@@ -272,7 +272,7 @@ final readonly class SshManagedReverseEnrollmentService
             }, 3);
             // Do not expose the new one-use command until the old control
             // authorization has been reconciled with the host key reader.
-            $this->authorizedKeys->sync();
+            $this->authorizedKeys->reconcileClosures();
 
             return ['enrollment' => $enrollment->fresh(), 'token' => $token];
         });
@@ -283,7 +283,7 @@ final readonly class SshManagedReverseEnrollmentService
         // Local revoke, like global Disable, closes application authority
         // before attempting any filesystem lock or external publication.
         $this->revokeLocal($enrollment);
-        $this->authorizedKeys->sync();
+        $this->authorizedKeys->reconcileClosures();
     }
 
     private function revokeLocal(SshManagedReverseEnrollment $enrollment): void
