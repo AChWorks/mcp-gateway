@@ -114,8 +114,15 @@ PY
   start_relay
   "${seed[@]}" relay verify >"$secret/relay-reverified.json"
   "${sdk[@]}" relay recovered >"$secret/relay-recovered.json"
+  if (( MIXED_SSH_LONG_SECONDS == 0 )); then
+    source "$ROOT/gateway/tests/Support/installed-mixed/concurrent-stage.sh"
+    run_installed_concurrent
+  fi
   stop_relay
   "${seed[@]}" relay restore >"$secret/relay-restored.json"
+  if (( MIXED_SSH_LONG_SECONDS == 0 )); then
+    "${seed[@]}" route-fanout >"$MIXED_EVIDENCE/route-fanout.json"
+  fi
   # An explicit detach permits Direct again and preserves the new grant.
   "${sdk[@]}" wp-oauth routed >"$secret/relay-explicit-direct.json"
   python3 - "$secret" >"$MIXED_EVIDENCE/relay.json" <<'PY'
