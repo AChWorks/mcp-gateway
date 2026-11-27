@@ -77,6 +77,15 @@ php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
 php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
   --filter=test_final_launch_lease_expiry_after_reservation_fences_real_systemd_exec
 
+# Retained output, overflow/exit markers and artifact reads all need
+# current command scope as well as SFTP read at each actual native fence.
+php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
+  --filter=test_retained_job_sftp_reads_recheck_command_scope_on_every_native_session
+
+# Real native probe errors must not be converted into host_unsupported.
+php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
+  --filter=test_real_job_probe_preserves_native_connection_and_admission_failures
+
 sudo loginctl disable-linger "$user"
 # The guard must reject new detached work while the user manager may linger
 # briefly from its last session; don't assume the bus vanishes immediately.

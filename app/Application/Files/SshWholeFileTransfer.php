@@ -100,7 +100,7 @@ final readonly class SshWholeFileTransfer
         }
 
         $guard = $this->executionAdmission->guard($this->admission->capture($user), $user, $target,
-            GatewayPermission::SshFileWrite, $config, $credential);
+            [GatewayPermission::SshFileWrite], $config, $credential);
         $guard();
 
         return ['target' => $target, 'execution' => SshTargetBinding::executionFingerprint($target, $config, $credential), 'guard' => $guard];

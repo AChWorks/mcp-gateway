@@ -102,18 +102,20 @@ final readonly class SshJobRemoteIdentity
             .'; }; then printf "ssh_job_identity_unverified\n" >&2; exit 1; fi; '.$command;
     }
 
-    /** @return (Closure(SFTP):void)|null */
+    /** @return (Closure(SFTP, Closure():void):void)|null */
     public function sftpVerifier(): ?Closure
     {
         if ($this->witness === null) {
             return null;
         }
 
-        return function (SFTP $sftp): void {
+        return function (SFTP $sftp, Closure $assertAuthority): void {
             $sftp->disableStatCache();
             $path = $this->directory.'/'.self::MARKER;
             try {
+                $assertAuthority();
                 $dir = $sftp->lstat($this->directory);
+                $assertAuthority();
                 $marker = $sftp->lstat($path);
                 $version = $sftp->getNegotiatedVersion();
                 $ownerField = $version <= 3 ? 'uid' : 'owner';
@@ -127,6 +129,7 @@ final readonly class SshJobRemoteIdentity
                     || ! $sameOwner || ($marker['size'] ?? null) !== strlen($this->witness)) {
                     throw new SshTargetConnectionException('job_identity_unverified');
                 }
+                $assertAuthority();
                 $contents = $sftp->get($path, null, 0, strlen($this->witness));
                 if (! hash_equals($this->witness, (string) $contents)) {
                     throw new SshTargetConnectionException('job_identity_unverified');

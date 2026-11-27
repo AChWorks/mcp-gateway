@@ -23,6 +23,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -255,6 +256,89 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         self::assertSame(0, $report['reconcile']['terminal_reconciled']);
     }
 
+    public function test_probe_observations_distinguish_capability_negative_from_unconfirmed_or_failed_native_results(): void
+    {
+        [$user, $target, $client] = $this->fixture();
+        $tools = app(SshJobMcpToolHandlers::class);
+        $jobs = app(SshJobCoordinator::class);
+        $classify = new \ReflectionMethod(SshJobCoordinator::class, 'classifyProbe');
+        $settle = new \ReflectionMethod(SshJobCoordinator::class, 'settleLaunch');
+        $cases = [
+            'capability-negative' => [
+                ['status' => 'completed', 'exit_code' => 0, 'stdout' => 'unsupported'],
+                'job_unsupported', 'unsupported', 'host_unsupported', 'gateway_response',
+            ],
+            'unconfirmed-result' => [
+                ['status' => 'outcome_unknown', 'exit_code' => null, 'error_code' => 'outcome_unknown'],
+                'outcome_unknown', 'failed', 'pre_dispatch_failed', 'unknown',
+            ],
+            'native-nonzero' => [
+                ['status' => 'completed', 'exit_code' => 1, 'error_code' => 'remote_exit_nonzero'],
+                'remote_exit_nonzero', 'failed', 'pre_dispatch_failed', 'gateway_response',
+            ],
+            'unexpected-completed-response' => [
+                ['status' => 'completed', 'exit_code' => 0, 'stdout' => 'unexpected'],
+                'job_state_unconfirmed', 'failed', 'pre_dispatch_failed', 'unknown',
+            ],
+            'retired-attempt' => [
+                ['status' => 'failed', 'error_code' => 'job_attempt_retired'],
+                'job_attempt_retired', 'failed', 'pre_dispatch_failed', 'gateway_admission',
+            ],
+        ];
+        foreach ($cases as $name => [$native, $code, $state, $reason, $origin]) {
+            $request = (string) Str::uuid();
+            // Seed a durable preparing intent through the real no-egress
+            // coordinator, then inject an already observed result at the
+            // classification/settlement boundary, not a real remote effect.
+            $first = $tools->start($user, $target->target_id, $client, $request, 'echo fixture '.$name);
+            $id = $first['result']['job_id'];
+            DB::table('ssh_command_jobs')->where('id', $id)->update([
+                'status' => 'preparing', 'terminal_reason' => null,
+                'launch_observation_ciphertext' => null,
+            ]);
+            $observation = $classify->invoke($jobs, $native);
+            self::assertSame($code, $observation['error_code']);
+            $result = $settle->invoke($jobs, $target, $id, 'probe', $observation);
+            self::assertSame($state, $result['status']);
+            self::assertSame($reason, $result['terminal_reason']);
+            self::assertFalse($result['launch_admitted']);
+            self::assertSame($code, $result['launch_error_code']);
+            $row = DB::table('ssh_command_jobs')->where('id', $id)->sole();
+            self::assertNull($row->unit_mode);
+            $evidence = json_decode(Crypt::decryptString($row->launch_observation_ciphertext), true, flags: JSON_THROW_ON_ERROR);
+            self::assertSame($native['status'], $evidence['status']);
+            self::assertSame($code, $evidence['error_code']);
+            self::assertSame($origin, $evidence['diagnostics']['failure_origin']);
+            self::assertSame('probe', $evidence['diagnostics']['job_stage']);
+            self::assertFalse($evidence['diagnostics']['job_launch_admitted']);
+            self::assertFalse($evidence['diagnostics']['effect_unconfirmed']);
+            $recovered = $tools->start($user, $target->target_id, $client, $request, 'echo fixture '.$name);
+            self::assertSame($id, $recovered['result']['job_id']);
+            self::assertFalse($recovered['ok']);
+            self::assertSame($code, $recovered['error']['code']);
+            self::assertFalse($recovered['result']['retry_safe']);
+        }
+        foreach (['user', 'system'] as $mode) {
+            $supported = ['status' => 'completed', 'exit_code' => 0, 'stdout' => $mode];
+            self::assertSame($supported, $classify->invoke($jobs, $supported));
+        }
+        self::assertSame(count($cases), DB::table('ssh_command_jobs')->count());
+
+        // A late negative result is an observation only; it must not rewrite
+        // a cancellation that already won the preparing-state fence.
+        $id = DB::table('ssh_command_jobs')->where('terminal_reason', 'host_unsupported')->value('id');
+        DB::table('ssh_command_jobs')->where('id', $id)->update([
+            'status' => 'canceled', 'terminal_reason' => 'pre_dispatch_canceled',
+            'launch_observation_ciphertext' => null,
+        ]);
+        $late = $classify->invoke($jobs, ['status' => 'completed', 'exit_code' => 0, 'stdout' => 'unsupported']);
+        $result = $settle->invoke($jobs, $target, $id, 'probe', $late);
+        self::assertSame('canceled', $result['status']);
+        self::assertSame('pre_dispatch_canceled', $result['terminal_reason']);
+        self::assertFalse($result['launch_admitted']);
+        self::assertSame('job_unsupported', $result['launch_error_code']);
+    }
+
     public function test_crashed_preparing_recovers_and_late_probe_cannot_cross_launch_fence(): void
     {
         [$user, $target, $client] = $this->fixture();
@@ -334,7 +418,7 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         // A remote script MIGHT have run; expiry is NOT proof of completion,
         // nor permission to re-execute that same caller-generated request ID.
         $third = $tools->start($user, $target->target_id, $client, (string) Str::uuid(), 'echo new');
-        self::assertSame('unsupported', $third['result']['status']);
+        self::assertSame('failed', $third['result']['status']);
         self::assertSame(3, DB::table('ssh_command_jobs')->count());
         foreach ($old as [$id, $requestId, $state]) {
             self::assertSame($id, $tools->start($user, $target->target_id, $client,
@@ -386,7 +470,7 @@ final class SshJobLifecycleRecoveryTest extends TestCase
                 'echo five', 86401)['error']['code']);
         $fresh = $tools->start($user, $target->target_id, $client, (string) Str::uuid(),
             'echo six', 86400);
-        self::assertSame('unsupported', $fresh['result']['status']);
+        self::assertSame('failed', $fresh['result']['status']);
         self::assertSame(4, DB::table('ssh_command_jobs')->count());
     }
 
@@ -464,7 +548,7 @@ final class SshJobLifecycleRecoveryTest extends TestCase
                     (string) Str::uuid(), 'echo still-overlap', 16)['error']['code']);
 
             Carbon::setTestNow(Carbon::parse($afterDispatch)->addSecond());
-            self::assertSame('unsupported',
+            self::assertSame('failed',
                 $tool->start($user, $target->target_id, $client,
                     (string) Str::uuid(), 'echo new', 16)['result']['status']);
             // Old immutable request ID continues to resolve to the one old
@@ -600,7 +684,8 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         $jobId = app(SshJobMcpToolHandlers::class)->start($user, $target->target_id,
             $client, (string) Str::uuid(), 'echo old')['result']['job_id'];
         DB::table('ssh_command_jobs')->where('id', $jobId)->update([
-            'status' => 'completed', 'expires_at' => now()->subDay(),
+            'status' => 'completed', 'launch_admitted' => true, 'terminal_reason' => 'script_exit',
+            'exit_code' => 0, 'expires_at' => now()->subDay(),
         ]);
         DB::table('ssh_direct_target_configs')->where('target_record_id', $target->getKey())
             ->update(['username' => 'rotated-identity']);
@@ -666,7 +751,7 @@ final class SshJobLifecycleRecoveryTest extends TestCase
         // a successful probe, simulating completed mkdir/script staging.
         // No daemon, real host, remote file or extra test-only product seam.
         $first = $tools->start($user, $target->target_id, $client, $requestId, $script);
-        self::assertSame('unsupported', $first['result']['status']);
+        self::assertSame('failed', $first['result']['status']);
         $id = $first['result']['job_id'];
         DB::table('ssh_command_jobs')->where('id', $id)->update([
             'status' => 'preparing',

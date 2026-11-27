@@ -42,7 +42,7 @@ final class SshJobMcpTest extends TestCase
         });
     }
 
-    public function test_unsupported_host_fails_closed_and_exact_start_intent_is_durable_once(): void
+    public function test_egress_denied_is_not_unsupported_and_exact_start_intent_is_durable_once(): void
     {
         $user = $this->user('owner');
         $target = $this->target();
@@ -52,19 +52,23 @@ final class SshJobMcpTest extends TestCase
 
         $first = $tool->start($user, $target->target_id, $client, $requestId, 'echo safe', 30);
         self::assertFalse($first['ok']);
-        self::assertSame('job_unsupported', $first['error']['code']);
-        self::assertStringContainsString('could not be verified', $first['error']['message']);
-        self::assertStringNotContainsString('lacks a supported', $first['error']['message']);
+        self::assertSame('egress_denied', $first['error']['code']);
+        self::assertSame('pre_dispatch_failed', $first['result']['terminal_reason']);
+        self::assertFalse($first['result']['launch_admitted']);
+        self::assertStringContainsString('not admitted for launch', $first['error']['message']);
         $failure = DB::table('activity_events')->where('operation', 'ssh-job-start')
-            ->where('error_code', 'job_unsupported')->first();
+            ->where('error_code', 'egress_denied')->first();
         self::assertNotNull($failure);
         $details = app(OperationDiagnosticsMcpToolHandlers::class)
             ->read($user, (string) $failure->correlation_id);
         self::assertTrue($details['ok']);
-        self::assertSame('unknown', $details['events'][0]['diagnostics']['provider_cause']);
+        self::assertSame('gateway_admission', $details['events'][0]['diagnostics']['failure_origin']);
+        self::assertArrayNotHasKey('provider_cause', $details['events'][0]['diagnostics']);
+        self::assertSame('egress_denied', $details['events'][0]['diagnostics']['provider_error_code']);
+        self::assertSame('probe', $details['events'][0]['diagnostics']['job_stage']);
         self::assertSame('connection_setup', $details['events'][0]['diagnostics']['failure_stage']);
         $id = $first['result']['job_id'];
-        self::assertSame('unsupported', $first['result']['status']);
+        self::assertSame('failed', $first['result']['status']);
         self::assertSame(1, DB::table('ssh_command_jobs')->count());
         self::assertArrayNotHasKey('script', (array) DB::table('ssh_command_jobs')->sole());
         self::assertStringNotContainsString('echo safe', json_encode(DB::table('ssh_command_jobs')->sole()));
@@ -73,6 +77,8 @@ final class SshJobMcpTest extends TestCase
         // same second; a changed script or runtime is a conflict.
         $duplicate = $tool->start($user, $target->target_id, $client, $requestId, 'echo safe', 30);
         self::assertSame($id, $duplicate['result']['job_id']);
+        self::assertSame('egress_denied', $duplicate['error']['code']);
+        self::assertSame($first['error']['diagnostic_reference'], $duplicate['error']['diagnostic_reference']);
         self::assertSame(1, DB::table('ssh_command_jobs')->count());
         self::assertSame('invalid_input',
             $tool->start($user, $target->target_id, $client, $requestId, 'echo changed', 30)['error']['code']);
@@ -80,7 +86,7 @@ final class SshJobMcpTest extends TestCase
             $tool->start($user, $target->target_id, $client, $requestId, 'echo safe', 31)['error']['code']);
 
         $status = $tool->status($user, $target->target_id, $client, $id);
-        self::assertSame('unsupported', $status['result']['status']);
+        self::assertSame('failed', $status['result']['status']);
         self::assertFalse($status['result']['retry_safe']);
     }
 
@@ -323,7 +329,7 @@ final class SshJobMcpTest extends TestCase
         $created = $handler->start(
             $operator, $target->target_id, $client, (string) Str::uuid(), 'echo owned operator job',
         );
-        self::assertSame('unsupported', $created['result']['status']);
+        self::assertSame('failed', $created['result']['status']);
         $jobId = $created['result']['job_id'];
         DB::table('ssh_command_jobs')->where('id', $jobId)->update(['status' => 'running', 'launch_admitted' => true, 'unit_mode' => 'user']);
         $target->forceFill(['operations_paused' => true])->save();
@@ -512,10 +518,10 @@ final class SshJobMcpTest extends TestCase
         $client = hash('sha256', 'job-diagnostic-client');
         $jobs = app(SshJobMcpToolHandlers::class);
         // The synthetic host declines all outbound SSH, but its durable
-        // unsupported handle is promoted to a simulated previously admitted
+        // pre-dispatch failed handle is promoted to a simulated previously admitted
         // Job to exercise the remote read admission boundary.
         $created = $jobs->start($owner, $target->target_id, $client, (string) Str::uuid(), 'echo no-send');
-        self::assertSame('unsupported', $created['result']['status']);
+        self::assertSame('failed', $created['result']['status']);
         $jobId = $created['result']['job_id'];
         DB::table('ssh_command_jobs')->where('id', $jobId)->update(['status' => 'running', 'launch_admitted' => true, 'unit_mode' => 'user']);
         $rateKey = 'ssh-file:'.hash('sha256', (string) $target->getKey()).':rate';
@@ -580,8 +586,8 @@ final class SshJobMcpTest extends TestCase
 
         $uuid = (string) Str::uuid();
         $first = $tool->start($user, $target->target_id, $client, $uuid, $script, 30);
-        self::assertSame('job_unsupported', $first['error']['code']);
-        self::assertSame('unsupported', $first['result']['status']);
+        self::assertSame('egress_denied', $first['error']['code']);
+        self::assertSame('failed', $first['result']['status']);
         self::assertSame(1, DB::table('ssh_command_jobs')->count());
 
         foreach ([str_repeat('a', 65537), str_repeat('ی', 40000)] as $overlong) {
@@ -618,8 +624,8 @@ final class SshJobMcpTest extends TestCase
         self::assertSame(524288, strlen($script));
         $sameId = (string) Str::uuid();
         $started = $jobs->start($user, $target->target_id, $client, $sameId, $script, 30);
-        self::assertSame('job_unsupported', $started['error']['code']);
-        self::assertSame('unsupported', $started['result']['status']);
+        self::assertSame('egress_denied', $started['error']['code']);
+        self::assertSame('failed', $started['result']['status']);
         self::assertSame(1, DB::table('ssh_command_jobs')->count());
         self::assertSame($started['result']['job_id'],
             $jobs->start($user, $target->target_id, $client, $sameId, $script, 30)['result']['job_id']);
@@ -670,7 +676,7 @@ final class SshJobMcpTest extends TestCase
         self::assertSame(1, DB::table('ssh_command_jobs')->count());
     }
 
-    public function test_expired_unsupported_intent_prunes_without_remote_cleanup(): void
+    public function test_expired_pre_dispatch_failed_intent_prunes_without_remote_cleanup(): void
     {
         $owner = $this->user('owner');
         $target = $this->target();
@@ -857,7 +863,7 @@ final class SshJobMcpTest extends TestCase
             'target_id' => $target->target_id, 'request_id' => (string) Str::uuid(),
             'script' => 'echo pass'.chr(10).str_repeat('#', 524288 - strlen('echo pass'.chr(10))),
         ]);
-        self::assertSame('job_unsupported', $job['result']['structuredContent']['error']['code']);
+        self::assertSame('egress_denied', $job['result']['structuredContent']['error']['code']);
     }
 
     private function user(string $role): User

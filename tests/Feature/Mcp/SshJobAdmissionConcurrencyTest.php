@@ -103,9 +103,11 @@ final class SshJobAdmissionConcurrencyTest extends TestCase
             $this->waitUntil(static fn (): bool => is_file($directory.'/result-'.$winner));
             $accepted = json_decode((string) file_get_contents($directory.'/result-'.$winner),
                 true, flags: JSON_THROW_ON_ERROR);
-            self::assertSame('unsupported', $accepted['result']['status'] ?? null);
+            self::assertSame('failed', $accepted['result']['status'] ?? null);
+            self::assertSame('egress_denied', $accepted['error']['code'] ?? null);
+            self::assertFalse($accepted['result']['launch_admitted']);
             self::assertSame(1, DB::table('ssh_command_jobs')->count());
-            self::assertSame('unsupported',
+            self::assertSame('failed',
                 DB::table('ssh_command_jobs')->value('status'));
             foreach ($workers as &$worker) {
                 $stdout = stream_get_contents($worker['pipes'][1]);

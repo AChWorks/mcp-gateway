@@ -176,23 +176,23 @@ final readonly class SshJobCoordinator
         $probe = [];
         $mode = $this->probe($user, $target, $binding, $credentialDispatch, $admission->stage('probe'), $probe);
         if ($mode === null) {
-            $reference = CorrelationId::current();
-            $row = DB::transaction(function () use ($id, $probe, $reference): ?object {
-                DB::table('ssh_command_jobs')->where('id', $id)->lockForUpdate()->first();
-                $this->storeLaunchObservation($id, 'probe', $probe, $reference);
-                $this->transition($id, 'preparing', 'unsupported');
-
-                return DB::table('ssh_command_jobs')->where('id', $id)->first();
-            });
-            $this->record($target, 'ssh-job-start', 'failure', 'job_unsupported', $this->commandDiagnostics($probe), $reference);
-
-            return $this->summary($row);
+            return $this->settleLaunch($target, $id, 'probe', $probe);
         }
 
         if ($this->transition($id, 'preparing', 'launch_unknown', ['unit_mode' => $mode]) === false) {
-            // Stale pre-dispatch intent was retired by another request/cron.
-            // NEVER dispatch after losing the conditional prelaunch fence.
-            return $this->summary(DB::table('ssh_command_jobs')->where('id', $id)->first());
+            // A successful capability observation does not renew an expired
+            // or retired intent. Preserve it separately from launch authority.
+            $current = DB::table('ssh_command_jobs')->where('id', $id)->first();
+            $expired = $current !== null && $current->status === 'preparing'
+                && ($current->preparing_expires_at === null || now()->gte($current->preparing_expires_at)
+                    || $current->admission_expires_at === null || now()->gte($current->admission_expires_at));
+
+            return $this->settleLaunch($target, $id, 'probe', [
+                ...$probe, 'error_code' => $expired ? 'dispatch_lease_expired' : 'job_attempt_retired',
+                'diagnostics' => [
+                    'failure_origin' => 'gateway_admission', 'failure_stage' => 'admission',
+                ],
+            ]);
         }
         // From here on, any lost SSH reply is non-retryable: the directory,
         // script or unit might already exist. Reconcile using stable job ID.
@@ -346,7 +346,16 @@ final readonly class SshJobCoordinator
                 return null;
             }
             $this->storeLaunchObservation($id, $stage, $observation, $reference);
-            if ($row->status === 'launch_unknown') {
+            if ($stage === 'probe') {
+                if ($row->status === 'preparing') {
+                    // Only an explicit completed negative capability observation
+                    // is unsupported. Transport/admission failure proves nothing
+                    // about the host's capabilities. Neither path staged files.
+                    $unsupported = ($observation['error_code'] ?? null) === 'job_unsupported';
+                    $this->transition($id, 'preparing', $unsupported ? 'unsupported' : 'failed',
+                        ['terminal_reason' => $unsupported ? 'host_unsupported' : 'pre_dispatch_failed']);
+                }
+            } elseif ($row->status === 'launch_unknown') {
                 if ($row->launch_admitted !== null && ! (bool) $row->launch_admitted) {
                     $this->transition($id, 'launch_unknown', 'failed', ['terminal_reason' => 'pre_launch_failed']);
                 } elseif ($stage === 'launch' && $this->successful($observation)) {
@@ -361,6 +370,7 @@ final readonly class SshJobCoordinator
         $code = $acknowledged ? null : ($admitted ? 'outcome_unknown' : ($observation['error_code'] ?? 'pre_launch_failed'));
         $this->record($target, 'ssh-job-start', $acknowledged ? 'success' : ($admitted ? 'unknown' : 'failure'),
             $code, [...$this->commandDiagnostics($observation), 'job_id' => $id, 'job_stage' => $stage,
+                ...($stage === 'probe' ? ['effect_unconfirmed' => false, 'retry_safe' => false] : []),
                 'job_launch_admitted' => $admitted, 'authoritative_status' => $row?->status], $reference);
 
         return $this->summary($row);
@@ -376,7 +386,10 @@ final readonly class SshJobCoordinator
                 'status' => $observation['status'] ?? 'outcome_unknown',
                 'error_code' => $observation['error_code'] ?? null,
                 'exit_code' => $observation['exit_code'] ?? null,
-                'diagnostics' => OperationDiagnostics::safeContext($this->commandDiagnostics($observation)),
+                'diagnostics' => OperationDiagnostics::safeContext([
+                    ...$this->commandDiagnostics($observation),
+                    ...($stage === 'probe' ? ['effect_unconfirmed' => false, 'retry_safe' => false] : []),
+                ]),
             ], JSON_THROW_ON_ERROR)),
             'updated_at' => now(),
         ]);
@@ -613,10 +626,7 @@ final readonly class SshJobCoordinator
         }
         $remote = SshJobRemoteIdentity::forJob($target, $row, $this->directory($jobId));
         try {
-            $file = $this->files->read($user, $target,
-                $this->directory($jobId).'/'.$stream, $offset, $length,
-                expectedTargetBinding: $remote->binding, expectedCredentialDispatch: $remote->credentialDispatch,
-                verifySource: $remote->sftpVerifier());
+            $file = $this->readJobFile($user, $target, $jobId, $stream, $offset, $length, $remote);
         } catch (SshTargetConnectionException $exception) {
             if (! $this->isMissingJobOutput($exception)) {
                 // A provider permission failure, lost transport, or unknown
@@ -646,10 +656,7 @@ final readonly class SshJobCoordinator
             && in_array($row->status, ['completed', 'failed', 'canceled'], true)) {
             try {
                 // Keep the marker probe bound to the original Job Target.
-                $this->files->read($user, $target,
-                    $this->directory($jobId).'/'.$stream.'.truncated',
-                    0, 1, expectedTargetBinding: $remote->binding, expectedCredentialDispatch: $remote->credentialDispatch,
-                    verifySource: $remote->sftpVerifier());
+                $this->readJobFile($user, $target, $jobId, $stream.'.truncated', 0, 1, $remote);
                 $overflowConfirmed = true;
             } catch (SshTargetConnectionException $exception) {
                 if (! $this->isMissingJobOutput($exception)) {
@@ -934,7 +941,9 @@ final readonly class SshJobCoordinator
             $last = $row;
             $stats['scanned']++;
             if ($row->status === 'unsupported' || $row->status === 'retired'
-                || in_array($row->terminal_reason, ['pre_dispatch_abandoned', 'pre_dispatch_canceled'], true)) {
+                || in_array($row->terminal_reason, ['pre_dispatch_abandoned', 'pre_dispatch_canceled'], true)
+                || ($row->status === 'failed' && $row->terminal_reason === 'pre_dispatch_failed'
+                    && $row->launch_admitted !== null && ! (bool) $row->launch_admitted)) {
                 $stats['eligible']++;
                 $stats['cleaned'] += DB::table('ssh_command_jobs')->where('id', $row->id)
                     ->where('status', $row->status)->delete();
@@ -1321,22 +1330,57 @@ final readonly class SshJobCoordinator
     /** @param array<string,mixed> $observation */
     private function probe(User $user, Target $target, string $expectedTargetBinding, string $expectedCredentialDispatch, Closure $gate, array &$observation): ?string
     {
-        $command = 'command -v mkfifo >/dev/null && command -v head >/dev/null'
-            .' && command -v wc >/dev/null && command -v rm >/dev/null'
-            .' && if [ "$(id -u)" = 0 ]; then command -v systemd-run >/dev/null'
-            .' && test "$(cat /proc/1/comm)" = systemd && printf system; else '
-            .'test "$(loginctl show-user "$(id -u)" -p Linger --value 2>/dev/null)" = yes'
-            .' && command -v systemd-run >/dev/null'
-            .' && '.$this->managerEnvironment('user').'systemctl --user show-environment >/dev/null 2>&1'
-            .' && printf user; fi';
+        // Use an explicit completed capability-negative result. Nonzero
+        // exit, failed login or unknown transport response is not evidence
+        // that this host lacks the required persistent manager.
+        $command = 'for requirement in mkfifo head wc rm systemd-run; do '
+            .'command -v "$requirement" >/dev/null 2>&1 || { printf unsupported; exit 0; }; done; '
+            .'uid="$(id -u)" || exit 1; if [ "$uid" = 0 ]; then '
+            .'manager="$(cat /proc/1/comm)" || exit 1; '
+            .'if [ "$manager" = systemd ]; then printf system; else printf unsupported; fi; '
+            .'else command -v loginctl >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1 '
+            .'|| { printf unsupported; exit 0; }; '
+            .'linger="$(loginctl show-user "$uid" -p Linger --value 2>/dev/null)" || exit 1; '
+            .'case "$linger" in no) printf unsupported ;; yes) '
+            .$this->managerEnvironment('user').'systemctl --user show-environment >/dev/null 2>&1 && printf user ;; *) exit 1 ;; esac; fi';
         $result = $this->safeCommand($user, $target, $command, 5, $expectedTargetBinding, $expectedCredentialDispatch, $gate);
-        $observation = $result;
-        if (! $this->successful($result)) {
-            return null;
-        }
-        $mode = trim((string) ($result['stdout'] ?? ''));
+        $observation = $this->classifyProbe($result);
 
-        return in_array($mode, ['user', 'system'], true) ? $mode : null;
+        return isset($observation['error_code']) ? null : trim((string) $observation['stdout']);
+    }
+
+    /**
+     * @param  array<string,mixed>  $result
+     * @return array<string,mixed>
+     */
+    private function classifyProbe(array $result): array
+    {
+        if ($this->successful($result)) {
+            $mode = trim((string) ($result['stdout'] ?? ''));
+            if (in_array($mode, ['user', 'system'], true)) {
+                return $result;
+            }
+            $result['error_code'] = $mode === 'unsupported' ? 'job_unsupported' : 'job_state_unconfirmed';
+        }
+        $code = $result['error_code'] ?? 'job_state_unconfirmed';
+        $defaults = match ($code) {
+            'egress_denied' => ['failure_origin' => 'gateway_admission', 'failure_stage' => 'connection_setup', 'request_not_sent' => true],
+            'forbidden', 'authorization_revoked', 'target_changed', 'target_paused', 'target_not_found',
+            'job_attempt_retired', 'dispatch_lease_expired', 'rate_limited', 'connection_busy', 'admission_unavailable',
+            'timeout_unsupported', 'ssh_output_collector_unavailable', 'credential_unavailable', 'credential_invalid',
+            'reverse_route_not_approved' => ['failure_origin' => 'gateway_admission', 'failure_stage' => 'admission', 'request_not_sent' => true],
+            'host_key_mismatch', 'authentication_failed', 'ssh_handshake_failed',
+            'tcp_unreachable', 'tcp_peer_mismatch', 'reverse_listener_unavailable', 'relay_unavailable' => [
+                'failure_origin' => 'gateway_transport', 'failure_stage' => 'connection_setup', 'request_not_sent' => true,
+            ],
+            'job_unsupported', 'remote_exit_nonzero' => ['failure_origin' => 'gateway_response', 'failure_stage' => 'operation'],
+            default => ['failure_origin' => 'unknown', 'failure_stage' => 'operation', 'provider_cause_unknown' => true],
+        };
+
+        return [
+            ...$result, 'error_code' => $code,
+            'diagnostics' => [...$defaults, ...($result['diagnostics'] ?? []), 'job_stage' => 'probe', 'job_launch_admitted' => false],
+        ];
     }
 
     /**
@@ -1414,12 +1458,25 @@ final readonly class SshJobCoordinator
             && ($result['exit_code'] ?? null) === 0;
     }
 
+    /**
+     * Every retained Job observation composes command scope with the native
+     * SFTP read grant, without borrowing the original launch lease or write
+     * authority. The native guard follows both rights through artifact proof
+     * and the actual read on the current authenticated connection.
+     *
+     * @return array<string,mixed>
+     */
+    private function readJobFile(User $user, Target $target, string $id, string $file, int $offset, int $length, SshJobRemoteIdentity $remote): array
+    {
+        return $this->files->read($user, $target, $this->directory($id).'/'.$file, $offset, $length,
+            expectedTargetBinding: $remote->binding, expectedCredentialDispatch: $remote->credentialDispatch,
+            verifySource: $remote->sftpVerifier(), additionalPermissions: [GatewayPermission::SshCommandRun]);
+    }
+
     private function exitCode(User $user, Target $target, string $id, SshJobRemoteIdentity $remote): ?int
     {
         try {
-            $file = $this->files->read($user, $target, $this->directory($id).'/exit-code', 0, 8,
-                expectedTargetBinding: $remote->binding, expectedCredentialDispatch: $remote->credentialDispatch,
-                verifySource: $remote->sftpVerifier());
+            $file = $this->readJobFile($user, $target, $id, 'exit-code', 0, 8, $remote);
             $value = trim((string) base64_decode((string) $file['data'], true));
             if (preg_match('/^[0-9]{1,3}$/D', $value) === 1 && (int) $value <= 255) {
                 return (int) $value;
@@ -1653,12 +1710,7 @@ final readonly class SshJobCoordinator
                 'failure_stage' => 'operation',
                 'effect_unconfirmed' => true,
                 'retry_safe' => false,
-            ] : ($code === 'job_unsupported' ? [
-                'failure_origin' => 'unknown',
-                'failure_stage' => 'connection_setup',
-                'provider_cause_unknown' => true,
-                'gateway_error_message' => 'Job manager preflight could not confirm support; network or host capability may be unavailable.',
-            ] : [])),
+            ] : []),
             ...$observed,
         ]);
     }

@@ -99,7 +99,7 @@ final readonly class SshCommandRuntime
                 throw new SshTargetConnectionException('credential_unavailable');
             }
 
-            $guard = $this->executionAdmission->guard($context, $user, $fresh, GatewayPermission::SshCommandRun, $config, $credential);
+            $guard = $this->executionAdmission->guard($context, $user, $fresh, [GatewayPermission::SshCommandRun], $config, $credential);
             $guard();
             $route = $this->reverseRoutes->forTarget($fresh);
             $relay = $this->relayRoutes->sshRouteForTarget($fresh);
