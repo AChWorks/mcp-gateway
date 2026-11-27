@@ -88,7 +88,7 @@ jobs:
         run: |
           shopt -s nullglob
           for evidence in "$RUNNER_TEMP"/mixed-evidence/real-installed-mixed-112-*; do
-            for name in identity.txt source-export.txt wp-policy.json report.json client.json file-client.json python-file-client.json oauth-lifecycle.json relay.json revoked.txt file-revoked.txt cleanup.txt; do
+            for name in identity.txt source-export.txt wp-policy.json report.json client.json file-client.json python-file-client.json oauth-lifecycle.json relay.json concurrent.json route-fanout.json revoked.txt file-revoked.txt cleanup.txt; do
               if sudo test -f "$evidence/$name"; then
                 printf '\n--- %s ---\n' "$name"
                 sudo cat "$evidence/$name"

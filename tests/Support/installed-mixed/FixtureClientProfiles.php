@@ -18,10 +18,10 @@ final class FixtureClientProfiles extends ServiceProvider
             throw new RuntimeException('Missing isolated acceptance JWKS.');
         }
         $jwks = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
-        foreach (['acceptance', 'ungranted', 'never_granted'] as $key) {
+        foreach (['acceptance', 'capacity', 'ungranted', 'never_granted'] as $key) {
             config()->set('oauth.client_profiles.'.$key, [
                 'client_id' => 'https://mixed-sdk.example.test/'.match ($key) {
-                    'acceptance' => 'allowed', 'ungranted' => 'ungranted', default => 'never-granted'
+                    'acceptance' => 'allowed', 'capacity' => 'capacity', 'ungranted' => 'ungranted', default => 'never-granted'
                 },
                 'display_name' => 'Disposable installed MCP SDK '.$key,
                 'strategy' => 'pinned_private_key_jwt',

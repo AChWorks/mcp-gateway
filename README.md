@@ -77,7 +77,7 @@ See [ArvanCloud API details](docs/ARVANCLOUD-API-CONNECTOR.md) for supported con
 
 ## MCP tools
 
-Gateway v3.0.0 registered **30 standard MCP Tools**, grouped below by purpose. Query the authenticated `tools/list` for the currently installed release; tool discovery is not authorization.
+Gateway v3.1.0 source registers **31 standard MCP Tools**, grouped below by purpose (v3.0.x registered 30). Query the authenticated `tools/list` for the currently installed release; tool discovery is not authorization.
 
 | Area | Tools | Purpose |
 | --- | --- | --- |

@@ -93,6 +93,7 @@ $mode = $argv[1] ?? '';
 if ($mode === 'init') {
     $registry = app(ClientProfileRegistry::class);
     $registry->register('acceptance');
+    $registry->register('capacity');
     $registry->register('ungranted');
     $registry->register('never_granted');
 
@@ -111,7 +112,9 @@ if ($mode === 'init') {
     $settings = app(OperationalSettings::class);
     $longTimeout = (int) (getenv('MIXED_SSH_LONG_TIMEOUT') ?: 0);
     $settings->save($owner, [
-        ...($longTimeout === 0 ? [] : ['ssh_command_timeout_seconds' => $longTimeout]),
+        'ssh_command_timeout_seconds' => $longTimeout === 0 ? 60 : $longTimeout,
+        'batch_global_active' => 4,
+        'batch_user_active' => 2,
         'wp_response_kib' => 96,
         'wp_readonly_response_kib' => 512,
         'wp_connect_timeout_seconds' => 3,
@@ -179,6 +182,7 @@ if ($mode === 'init') {
     $state['wp_direct'] = ['resource' => $direct['resource_url'], 'access_token' => $direct['access_token']];
     if ($mode === 'complete') {
         $state['owner_token'] = $token((int) $state['owner_id'], 'https://mixed-sdk.example.test/allowed', true);
+        $state['capacity_token'] = $token((int) $state['owner_id'], 'https://mixed-sdk.example.test/capacity', true);
         $state['operator_token'] = $token((int) $state['operator_id'], 'https://mixed-sdk.example.test/allowed', true);
         // A once-authorized second profile is disabled after minting: even its
         // previously valid signed bearer must become unusable immediately.
@@ -242,6 +246,10 @@ if ($mode === 'init') {
         ? installedOAuthScheduler($root)
         : qualifyInstalledWordpressOAuth($root, $read(), $save);
     echo json_encode($result, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT)."\n";
+} elseif ($mode === 'route-fanout') {
+    installedMixedFixtureRoot($stateFile);
+    require __DIR__.'/route-fanout.php';
+    echo json_encode(measureInstalledRouteFanout(), JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT)."\n";
 } elseif ($mode === 'disable') {
     $state = $read();
     DB::table('users')->where('id', $state['owner_id'])->update(['access_enabled' => false]);
