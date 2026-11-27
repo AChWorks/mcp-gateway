@@ -7,11 +7,14 @@ run_installed_concurrent() {
   local evidence="$ROOT/secrets/concurrent" remote="/home/$MIXED_SSH_USER/mixed-concurrent"
   install -d -o "$WORKER" -g "$WORKER_GROUP" -m 0700 "$evidence"
   runuser -u "$MIXED_SSH_USER" -- mkdir -m 0700 "$remote"
-  runuser -u "$MIXED_SSH_USER" -- dd if=/dev/zero of="$remote/payload" bs=524288 count=1 status=none
-  local -a sdk_concurrent=(runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER"
+  runuser -u "$MIXED_SSH_USER" -- dd if=/dev/urandom of="$remote/payload" bs=524288 count=1 status=none
+  local payload_sha
+  payload_sha="$(sha256sum "$remote/payload" | cut -d" " -f1)"
+  local -a sdk_concurrent=(runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" MIXED_EXPECTED_SFTP_SHA="$payload_sha"
     php "$ROOT/client/concurrent-client.php")
   local -a sql_concurrent=(mariadb --no-defaults -uroot --socket="$ROOT/db.sock" gateway --batch --skip-column-names)
-  local -a worker_concurrent=(runuser -u "$WORKER" -- php "$ROOT/gateway/artisan" gateway:batch-work --once)
+  local -a worker_concurrent=(runuser -u "$WORKER" -- php -d "curl.cainfo=$ROOT/secrets/tls.crt"
+    -d "openssl.cafile=$ROOT/secrets/tls.crt" "$ROOT/gateway/artisan" gateway:batch-work --once)
   concurrent_id() {
     python3 - "$1" <<'PY'
 import json, re, sys
@@ -72,16 +75,26 @@ PY
   # All completed while both remote commands were still held by the barrier.
   [[ "$("${sql_concurrent[@]}" -e "SELECT COUNT(*) FROM target_batch_items WHERE batch_id='$batch_id' AND status='dispatching' AND effect_admitted=1")" == 2 ]]
   [[ ! -e "$remote/unexpected-busy" ]]
+  "${sdk_concurrent[@]}" wp-denied >"$evidence/wp-denied.json"
   "${sdk_concurrent[@]}" foreign "$batch_id" >"$evidence/foreign.json"
   "${sdk_concurrent[@]}" cancel-queue >"$evidence/cancel-queue.json"
   local cancel_id
   cancel_id="$(concurrent_id "$evidence/cancel-queue.json")"
   "${sdk_concurrent[@]}" cancel "$cancel_id" >"$evidence/cancel.json"
+  # Distinct client identity does not enlarge the original Owner's user
+  # budget. This queued WP child has a FREE Target, unlike the busy SSH.
+  "${sdk_concurrent[@]}" capacity-wp-queue >"$evidence/capacity-wp-queue.json"
+  local capacity_wp_id
+  capacity_wp_id="$(concurrent_id "$evidence/capacity-wp-queue.json")"
+  "${worker_concurrent[@]}" >"$evidence/user-pressure-worker.log" 2>&1
+  [[ "$("${sql_concurrent[@]}" -e "SELECT COUNT(*) FROM target_batch_items WHERE batch_id='$capacity_wp_id' AND status='queued' AND dispatch_attempt_id IS NULL")" == 1 ]]
   "${sdk_concurrent[@]}" wp-queue >"$evidence/wp-queue.json"
   local wp_id
   wp_id="$(concurrent_id "$evidence/wp-queue.json")"
   "${worker_concurrent[@]}" >"$evidence/wp-worker.log" 2>&1
   "${sdk_concurrent[@]}" wp-status "$wp_id" >"$evidence/wp-status.json"
+  [[ "$("${sql_concurrent[@]}" -e "SELECT COUNT(*) FROM target_batch_items WHERE batch_id='$capacity_wp_id' AND status='queued' AND dispatch_attempt_id IS NULL")" == 1 ]]
+  "${sdk_concurrent[@]}" capacity-wp-cancel "$capacity_wp_id" >"$evidence/capacity-wp-cancel.json"
   [[ "$("${sql_concurrent[@]}" -e "SELECT COUNT(*) FROM target_batch_items WHERE batch_id='$batch_id' AND status='dispatching' AND effect_admitted=1")" == 2 ]]
   echo "Mixed operations completed during barrier; releasing both SSH children"
   runuser -u "$MIXED_SSH_USER" -- touch "$remote/release"
@@ -132,8 +145,8 @@ PY
   python3 - "$evidence" "$started_ns" "$completed_ns" >"$MIXED_EVIDENCE/concurrent.json" <<'PY'
 import json, pathlib, sys
 p = pathlib.Path(sys.argv[1])
-names = ["queue", "busy", "wp", "sftp", "foreign", "cancel", "wp-status",
-         "status", "recovered", "cancel-status", "interrupt-status", "processes"]
+names = ["queue", "busy", "wp", "wp-denied", "sftp", "foreign", "cancel", "wp-status",
+         "status", "recovered", "cancel-status", "capacity-wp-cancel", "interrupt-status", "processes"]
 data = {name: json.loads((p / (name + ".json")).read_text()) for name in names}
 data["db_status_samples"] = {
     name: {k: int(v) for k, v in (line.split("\t") for line in
@@ -144,6 +157,8 @@ data.update({
     "normal_scenario_wall_ms": (int(sys.argv[3]) - int(sys.argv[2])) / 1e6,
     "simultaneous_admitted_ssh_batch_children": 2,
     "wp_and_sftp_completed_during_ssh_barrier": True,
+    "same_user_budget_held_across_distinct_clients": True,
+    "other_authorized_user_progressed_during_user_pressure": True,
     "physical_topology": "one disposable runner, distinct registered Direct/Relay targets and real WP, same SSH OS account",
     "queued_cancel_no_dispatch": True, "interrupted_worker_killed": True,
     "interrupted_lease_expiry": "exact admitted DB row aged by fixture after worker kill; not elapsed production TTL",

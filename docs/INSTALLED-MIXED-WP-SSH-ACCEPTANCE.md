@@ -24,7 +24,7 @@ IP-SAN certificate. Real peer/hostname verification remains enabled and
 only the disposable copy's certificate bundle is extended.
 
 The isolated installed Gateway registers a **test-only pinned OAuth client
-provider** (absent from production boot), with one approved identity, one
+provider** (absent from production boot), with two separately approved identities, one
 revoked signed identity, and an enabled never-granted identity (whose bearer
 issuance must fail). Gateway client bearer setup is performed via its real
 internal OAuth authorization repositories, **not** via a complete external
@@ -37,7 +37,8 @@ The installed Owner changes the existing typed operational settings through
 the normal settings service to prove DB overrides (3s connect, 9s request,
 96 KiB normal and 512 KiB readonly), plus 4 MiB/30 seconds for
 the optional SSH whole-file profile, distinct from the disposable
-configuration fallback. The fixture also sets the existing 512 KiB SSH command/output and inline file windows and a 1024 KiB WordPress Ability input setting. The installed Bridge's own native request and response budgets are configured independently (1024 KiB request, 512 KiB response and 128 KiB text windows). The independent HTTP body limit remains in force.
+configuration fallback. The ordinary concurrent scenario admits a 60-second SSH
+command budget in this disposable installation only. The fixture also sets the existing 512 KiB SSH command/output and inline file windows and a 1024 KiB WordPress Ability input setting. The installed Bridge's own native request and response budgets are configured independently (1024 KiB request, 512 KiB response and 128 KiB text windows). The independent HTTP body limit remains in force.
 No production account, web property, server listener, credential or SSRF
 policy is changed. Do not run on user-owned/production sites.
 
@@ -113,9 +114,40 @@ Do not preserve sensitive fixture data for debugging.
 
 The runner prints the actual private sanitized evidence destination under its configured `MIXED_EVIDENCE_DIR`. The hosted workflow reports only explicitly selected sanitized files, not fixture state, tokens, keys or raw HTTP logs.
 Review `identity.txt`, `source-export.txt`, `report.json`, `client.json`,
-`relay.json`, `oauth-lifecycle.json`, `revoked.txt` and `cleanup.txt` (all owner-readable with private permissions). The report
+`relay.json`, `concurrent.json`, `route-fanout.json`, `oauth-lifecycle.json`, `revoked.txt` and `cleanup.txt` (all owner-readable with private permissions). The report
 includes effective Owner settings and finite HTTP limits; the client report
 includes actual wire body sizes, SFTP byte size, digest, representative latency and peak SDK memory. The Bridge effective settings are recorded separately in `wp-policy.json`. Repeat the command to prove clean reproducibility.
+
+## Representative concurrent qualification (ordinary lane only)
+
+The ordinary installed runner starts two independent real Batch workers
+against one installed MariaDB. Each SSH child creates a unique marker using
+its registered Direct or Relay route, then waits at a bounded barrier.
+While both effects are admitted, separate authenticated SDK sessions test
+same-Target Busy/no effect, a genuine 256 KiB WordPress native digest Ability
+under the second Owner client, the expected Unclassified denial for the
+scoped Operator (released Bridge catalog marks it native_abilities),
+a byte-exact 512 KiB SFTP read, independent client history and a real
+WordPress Batch. The fixture uses the existing global/user active budgets
+(4/2), verifies that a second client cannot exceed the same Owner user budget,
+and proves progress for another authorized user. Queued cancellation and stable request identity are tested
+without remote replay. A distinct admitted command is interrupted by
+killing the fixture-owned worker; its exact DB lease row is deliberately
+aged to exercise recovery after expiry without waiting for a production TTL.
+The worker restarts, preserves unknown outcome and does not create another
+remote marker. This is real remote effect/worker loss with controlled lease
+expiry, not a measurement of the production lease duration.
+
+`concurrent.json` records SDK latencies, verified byte counts, aggregate
+namespace process CPU/RSS samples, MariaDB global status snapshots and
+cleanup checks. CPU samples are a lower bound; RSS can double-count shared
+pages; MariaDB is outside the PID namespace and has separate DB metrics.
+The native OpenSSH endpoint and Unix account are shared by distinct Target
+records; this is not physical multi-host capacity. The separate
+`route-fanout.json` measures actual serialized MariaDB administrative
+availability-edge transactions at 100 and 1000 metadata-only records,
+including required audit events, not 1000 live connections. Neither test
+asserts a production throughput ceiling or requires new infrastructure.
 
 ## Required same-runtime assertions
 

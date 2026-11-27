@@ -113,6 +113,8 @@ if ($mode === 'init') {
     $longTimeout = (int) (getenv('MIXED_SSH_LONG_TIMEOUT') ?: 0);
     $settings->save($owner, [
         'ssh_command_timeout_seconds' => $longTimeout === 0 ? 60 : $longTimeout,
+        'batch_global_active' => 4,
+        'batch_user_active' => 2,
         'wp_response_kib' => 96,
         'wp_readonly_response_kib' => 512,
         'wp_connect_timeout_seconds' => 3,

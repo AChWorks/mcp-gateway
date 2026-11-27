@@ -1,3 +1,24 @@
+# MCP Gateway v3.1.0
+
+**Stable v3.1.0 — Target authority, connector lifecycle and durable execution foundation.**
+
+### Highlights
+
+- **Independent Target transport, credentials and authorization:** Direct, Relay and managed Reverse routes now share an explicit transport authority and lifecycle. A route change or administrative availability change fences stale, not-yet-dispatched work without silently discarding valid credentials, past observations or possibly executed effects. Remote identity, semantic grant and credential material revisions remain distinct. A temporarily unavailable route does not silently fall back to Direct.
+- **One verified access and execution boundary:** Target scope, role, deny, consent, client identity, and current connector binding are rechecked at the relevant dispatch boundary. Human and MCP/deferred origins remain distinct; no new universal permission or sandbox is implied. The Admin displays current route/verification evidence separately from credential state.
+- **Durable Batch and retained SSH Jobs:** admission, possible remote effect and settlement are distinct journal states. Expiry/cancellation cannot authorize a stale attempt; uncertain work is never automatically replayed. Retained Job reads and late observations preserve original principal, remote peer/account and artifact identity, with fresh current authority for a new remote operation.
+- **New `ssh-script-run` Tool:** explicitly stage a script over verified SFTP with an exact interpreter, byte/hash verification and one bounded monotonic deadline. This is separate from native exec and detached Jobs; no implicit retry, command rewriting or interpreter guessing. It requires command and file-write authority plus the documented remote POSIX/SFTP capabilities. Native SSH commands remain compatible. The full configured 512 KiB script and 360/600-second staged deadlines have isolated installed Direct and Relay evidence; a raw native exec argument, real client, proxy or operator host can have lower effective limits.
+- **WordPress OAuth and provider compatibility:** preserve exact assertion/recovery intent after proven no-send failures; do not replay uncertain rotating-token effects. Real pinned installed WordPress Bridge/Adapter tests cover OAuth refresh/revoke, authorized dynamic Abilities, mutation/private transfer parity, and native Direct/Relay provider routing. Security patch dependencies are updated.
+- **Migration and recovery:** eight v3-only migrations preserve current delegated access, separate route/SSH and credential authority, retain queued/admitted/possibly sent journal evidence, and record current Target check evidence. Previously dispatched or uncertain work is not resubmitted. Reviewed populated MariaDB upgrade/restart/independent-restore fixtures cover existing released v3 data. The separate Update ZIP is intended for actual published v3.0.0, v3.0.1 and v3.0.2 baselines; exact package checks must pass before publication.
+
+### Installation and upgrade
+
+Fresh installations use an empty database. Existing v3 installations use only the independently verified versioned browser Update ZIP, not the fresh-install ZIP. Before update, verify a restorable database and application/secret backup (including `.env`, application key, OAuth/Bridge keys, and relevant remote Job evidence). A managed-file backup alone is not a database rollback; after migration may have started, inspect recovery evidence before any restore. v2-to-v3 in-place updates remain unsupported.
+
+### Qualification boundary
+
+The source and isolated native/provider evidence is tracked in [#346](https://github.com/AChWorks/mcp-gateway/issues/346), [#154](https://github.com/AChWorks/mcp-gateway/issues/154), [#222](https://github.com/AChWorks/mcp-gateway/issues/222), [#130](https://github.com/AChWorks/mcp-gateway/issues/130), [#97](https://github.com/AChWorks/mcp-gateway/issues/97), [#284](https://github.com/AChWorks/mcp-gateway/issues/284), and [#328](https://github.com/AChWorks/mcp-gateway/issues/328). These are not production capacity promises, actual ChatGPT/WAN/CDN/physical multi-host acceptance, or unattended production Cron evidence. Operator-host installation and service-change acceptance remain separate under [#325](https://github.com/AChWorks/mcp-gateway/issues/325), [#328](https://github.com/AChWorks/mcp-gateway/issues/328) and [#330](https://github.com/AChWorks/mcp-gateway/issues/330). Publication does not deploy or migrate a running Gateway.
+
 # MCP Gateway v3.0.2
 
 **Stable v3.0.2 — Admin Connectivity presentation correction.**

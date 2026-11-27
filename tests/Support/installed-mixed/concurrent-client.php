@@ -21,7 +21,7 @@ $check = static function (bool $condition, string $message): void {
 $check(preg_match('/^mcpac[0-9]+$/D', $account) === 1, 'Expected disposable SSH account.');
 $dir = '/home/'.$account.'/mixed-concurrent';
 $owner = in_array($mode, ['queue', 'status', 'interrupt-queue', 'interrupt-status'], true);
-$wp = in_array($mode, ['wp', 'wp-queue', 'wp-status'], true);
+$wp = in_array($mode, ['wp-denied', 'wp-queue', 'wp-status'], true);
 $token = $state[$owner ? 'owner_token' : ($wp ? 'operator_token' : 'capacity_token')];
 $client = Client::builder()->setClientInfo('installed-concurrent-'.$mode, '1')
     ->setInitTimeout(8)->setRequestTimeout(30)->setMaxRetries(0)->build();
@@ -42,7 +42,7 @@ $queue = static function (array $args, bool $wordpress = false) use ($call, $che
     $request = $args + ['request_id' => (string) Str::uuid(), 'preview_token' => $preview['preview_token']];
     $tool = $prefix.($wordpress ? '-read' : '-run');
     $created = $call($tool, $request);
-    $check(($created['ok'] ?? false) && ($created['status'] ?? null) === 'queued', 'Batch not queued.');
+    $check(($created['ok'] ?? false) && ($created['status'] ?? null) === 'queued', 'Batch not queued: '.($created['error']['code'] ?? 'status mismatch'));
     $again = $call($tool, $request);
     $check(($again['batch_id'] ?? null) === $created['batch_id'], 'Stable request did not deduplicate.');
 
@@ -61,12 +61,12 @@ try {
         'interrupt-queue' => $queue(['target_ids' => [$direct], 'timeout_seconds' => 30,
             'command' => 'set -eu; mktemp '.escapeshellarg($dir.'/interrupted.XXXXXX').'; sleep 20']),
         'cancel-queue' => $queue(['target_ids' => [$direct], 'command' => 'touch '.escapeshellarg($dir.'/unexpected-cancel')]),
-        'wp-queue' => $queue(['target_ids' => [$state['wp_target']]], true),
+        'wp-queue', 'capacity-wp-queue' => $queue(['target_ids' => [$state['wp_target']]], true),
         'status', 'wp-status', 'interrupt-status', 'cancel-status', 'foreign' => $call('target-batch-status', ['batch_id' => $id]),
-        'cancel' => $call('target-batch-cancel', ['batch_id' => $id]),
+        'cancel', 'capacity-wp-cancel' => $call('target-batch-cancel', ['batch_id' => $id]),
         'busy', 'recovered' => $call('ssh-command-run', ['target_id' => $direct,
             'command' => $mode === 'busy' ? 'touch '.escapeshellarg($dir.'/unexpected-busy') : 'printf lease-released']),
-        'wp' => $call('wordpress-ability-execute', ['target_id' => $state['wp_target'],
+        'wp', 'wp-denied' => $call('wordpress-ability-execute', ['target_id' => $state['wp_target'],
             'ability' => 'gateway-mixed-test/digest-read', 'input' => ['payload' => str_repeat('w', 262144)]]),
         'sftp' => $call('ssh-file-read', ['target_id' => $relay, 'path' => $dir.'/payload', 'length' => 524288]),
         default => throw new RuntimeException('Unknown concurrent fixture operation.'),
@@ -77,6 +77,7 @@ try {
         case 'interrupt-queue':
         case 'cancel-queue':
         case 'wp-queue':
+        case 'capacity-wp-queue':
             break;
         case 'status':
             $check(($result['status'] ?? null) === 'completed' && ($result['counts']['completed'] ?? null) === 2,
@@ -90,10 +91,11 @@ try {
             break;
         case 'wp-status':
             $check(($result['status'] ?? null) === 'completed' && ($result['counts']['completed'] ?? null) === 1,
-                'Native WordPress Batch did not complete.');
+                'Native WordPress Batch did not complete: '.($result['items'][0]['error_code'] ?? 'status mismatch'));
             $result = ['status' => 'completed', 'children' => 1];
             break;
         case 'cancel':
+        case 'capacity-wp-cancel':
         case 'cancel-status':
             $check(($result['status'] ?? null) === 'canceled' && ($result['counts']['canceled'] ?? null) === 1,
                 'Queued Batch cancellation did not settle.');
@@ -110,7 +112,7 @@ try {
             $result = ['error_code' => $error];
             break;
         case 'busy':
-            $check(($result['ok'] ?? true) === false && $error === 'connection_busy', 'Same-Target command was not rejected as busy.');
+            $check(($result['ok'] ?? true) === false && $error === 'connection_busy', 'Same-Target command was not rejected as busy: '.($error ?? 'unexpected success'));
             $result = ['error_code' => $error];
             break;
         case 'recovered':
@@ -121,13 +123,23 @@ try {
         case 'wp':
             $digest = hash('sha256', str_repeat('w', 262144));
             $check(($result['ok'] ?? false) && ($result['result']['bytes'] ?? null) === 262144
-                && ($result['result']['sha256'] ?? null) === $digest, 'Concurrent WP provider read failed.');
-            $result = ['bytes' => 262144, 'sha256' => $digest];
+                && ($result['result']['sha256'] ?? null) === $digest, 'Concurrent WP provider read failed: '.($error ?? 'result mismatch'));
+            $check(($result['result']['principal_id'] ?? null) === 1, 'Unexpected native WordPress principal.');
+            $result = ['bytes' => 262144, 'sha256' => $digest, 'principal_id' => 1];
+            break;
+        case 'wp-denied':
+            // Released Bridge catalogs third-party native Abilities as
+            // native_abilities, not ability_specific. An Operator has no
+            // Unclassified grant; the Owner/second client can execute it.
+            $check(($result['ok'] ?? true) === false && $error === 'forbidden',
+                'Unclassified native Ability must not be granted to the Operator: '.($error ?? 'unexpected success'));
+            $result = ['error_code' => $error];
             break;
         case 'sftp':
             $bytes = base64_decode($result['result']['data'] ?? '', true);
-            $check(($result['ok'] ?? false) && $bytes === str_repeat("\0", 524288)
-                && ($result['result']['end_of_file'] ?? false) === true, 'Concurrent native SFTP receipt failed.');
+            $check(($result['ok'] ?? false) && is_string($bytes) && strlen($bytes) === 524288
+                && hash_equals((string) getenv('MIXED_EXPECTED_SFTP_SHA'), hash('sha256', $bytes))
+                && ($result['result']['end_of_file'] ?? false) === true, 'Concurrent native SFTP receipt failed: '.($error ?? 'size/digest mismatch'));
             $result = ['bytes' => strlen($bytes), 'sha256' => hash('sha256', $bytes)];
             break;
     }
