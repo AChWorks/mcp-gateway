@@ -42,6 +42,21 @@ set_exception_handler(static function (Throwable $error): never {
     );
     exit(1);
 });
+function installedMixedFixtureRoot(string $stateFile): string
+{
+    $root = dirname(base_path());
+    if (PHP_SAPI !== 'cli' || ! str_starts_with(basename($root), 'mcp-gateway-installed-112-')
+        || realpath($stateFile) !== $root.'/secrets/state.json'
+        || config('app.url') !== 'https://11.22.33.45'
+        || config('database.default') !== 'mariadb'
+        || config('database.connections.mariadb.unix_socket') !== $root.'/db.sock'
+        || config('database.connections.mariadb.database') !== 'gateway') {
+        throw new RuntimeException('Expected the owned installed mixed fixture.');
+    }
+
+    return $root;
+}
+
 $stateFile = (string) getenv('MIXED_STATE_FILE');
 if ($stateFile === '' || ! str_starts_with($stateFile, '/')) {
     throw new RuntimeException('MIXED_STATE_FILE must be an absolute disposable fixture path.');
@@ -135,7 +150,10 @@ if ($mode === 'init') {
         'gateway_source_version' => trim((string) file_get_contents(base_path('VERSION'))),
     ]);
     echo "Fixture registered: one WordPress and one verified OpenSSH Target; OAuth consent pending.\n";
-} elseif ($mode === 'complete') {
+} elseif (in_array($mode, ['complete', 'relay-complete'], true)) {
+    if ($mode === 'relay-complete') {
+        installedMixedFixtureRoot($stateFile);
+    }
     $state = $read();
     $callback = json_decode((string) file_get_contents((string) getenv('MIXED_CALLBACK_FILE')), true, 512, JSON_THROW_ON_ERROR);
     parse_str((string) parse_url((string) $state['authorize_url'], PHP_URL_QUERY), $query);
@@ -154,26 +172,32 @@ if ($mode === 'init') {
         || ! str_starts_with($direct['resource_url'], 'https://11.22.33.44/')) {
         throw new RuntimeException('Unexpected disposable downstream grant identity.');
     }
-    $state['wp_direct'] = ['resource' => $direct['resource_url'], 'access_token' => $direct['access_token']];
-    $state['owner_token'] = $token((int) $state['owner_id'], 'https://mixed-sdk.example.test/allowed', true);
-    $state['operator_token'] = $token((int) $state['operator_id'], 'https://mixed-sdk.example.test/allowed', true);
-    // A once-authorized second profile is disabled after minting: even its
-    // previously valid signed bearer must become unusable immediately.
-    // The real repository must reject minting for an enabled but never-granted
-    // identity. No signed bearer may be fabricated to bypass this boundary.
-    try {
-        $token((int) $state['owner_id'], 'https://mixed-sdk.example.test/never-granted', false);
-        throw new LogicException('Never-granted OAuth client unexpectedly received a bearer.');
-    } catch (RuntimeException $exception) {
-        if (! str_contains($exception->getMessage(), 'No active OAuth authorization matches')) {
-            throw $exception;
-        }
-        $state['never_granted_mint_denied'] = true;
+    if ($mode === 'relay-complete' && ($wp->target_id !== $state['wp_target']
+        || $wp->transportKind() !== 'relay' || hash_equals($state['wp_direct']['access_token'], $direct['access_token']))) {
+        throw new RuntimeException('Relay callback did not produce a fresh grant on the selected Target.');
     }
-    $state['disabled_profile_token'] = $token((int) $state['owner_id'], 'https://mixed-sdk.example.test/ungranted', true);
-    app(ClientProfileRegistry::class)->disable('ungranted');
+    $state['wp_direct'] = ['resource' => $direct['resource_url'], 'access_token' => $direct['access_token']];
+    if ($mode === 'complete') {
+        $state['owner_token'] = $token((int) $state['owner_id'], 'https://mixed-sdk.example.test/allowed', true);
+        $state['operator_token'] = $token((int) $state['operator_id'], 'https://mixed-sdk.example.test/allowed', true);
+        // A once-authorized second profile is disabled after minting: even its
+        // previously valid signed bearer must become unusable immediately.
+        // The real repository must reject minting for an enabled but never-granted
+        // identity. No signed bearer may be fabricated to bypass this boundary.
+        try {
+            $token((int) $state['owner_id'], 'https://mixed-sdk.example.test/never-granted', false);
+            throw new LogicException('Never-granted OAuth client unexpectedly received a bearer.');
+        } catch (RuntimeException $exception) {
+            if (! str_contains($exception->getMessage(), 'No active OAuth authorization matches')) {
+                throw $exception;
+            }
+            $state['never_granted_mint_denied'] = true;
+        }
+        $state['disabled_profile_token'] = $token((int) $state['owner_id'], 'https://mixed-sdk.example.test/ungranted', true);
+        app(ClientProfileRegistry::class)->disable('ungranted');
+    }
     $save($state);
-    echo "Real WordPress authorization-code + signed client assertion succeeded; three signed test bearer tokens persisted (redacted).\n";
+    echo "Real WordPress authorization-code + signed client assertion succeeded (redacted).\n";
 } elseif ($mode === 'wp-parity') {
     $state = $read();
     $owner = User::query()->findOrFail($state['owner_id']);
@@ -207,9 +231,13 @@ if ($mode === 'init') {
         throw new RuntimeException('Unsupported disposable parity setting operation.');
     }
     echo json_encode($result, JSON_THROW_ON_ERROR)."\n";
+} elseif ($mode === 'relay') {
+    require __DIR__.'/relay-seed.php';
+    $result = installedRelaySeed(installedMixedFixtureRoot($stateFile), $argv[2] ?? '', $read(), $save);
+    echo json_encode($result, JSON_THROW_ON_ERROR)."\n";
 } elseif (in_array($mode, ['wp-oauth-lifecycle', 'wp-oauth-schedule'], true)) {
     require __DIR__.'/wp-oauth-lifecycle.php';
-    $root = installedOAuthFixtureRoot($stateFile);
+    $root = installedMixedFixtureRoot($stateFile);
     $result = $mode === 'wp-oauth-schedule'
         ? installedOAuthScheduler($root)
         : qualifyInstalledWordpressOAuth($root, $read(), $save);

@@ -132,6 +132,8 @@ if [[ "${1:-}" == inside ]]; then
     php "$ROOT/client/file-client.php" >"$MIXED_EVIDENCE/file-client.json"
   runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
     python3 "$ROOT/client/file-client.py" >"$MIXED_EVIDENCE/python-file-client.json"
+  source "$ROOT/gateway/tests/Support/installed-mixed/relay-stage.sh"
+  run_installed_relay
   runuser -u "$WORKER" -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" \
     php -d curl.cainfo="$ROOT/secrets/tls.crt" -d openssl.cafile="$ROOT/secrets/tls.crt" \
     tests/Support/installed-mixed/seed.php wp-oauth-lifecycle >"$MIXED_EVIDENCE/oauth-lifecycle.json"
@@ -261,6 +263,8 @@ unzip -q "$WP_ADAPTER_ARCHIVE" -d "$ROOT/wp/wp-content/plugins"
 cp "$WP_CLI" "$ROOT/wp-cli.phar"
 cp "$ROOT/gateway/tests/Support/installed-mixed/client.php" "$ROOT/client/"
 cp "$ROOT/gateway/tests/Support/installed-mixed/wp-parity.php" "$ROOT/client/"
+cp "$ROOT/gateway/tests/Support/installed-mixed/relay-client.php" "$ROOT/client/"
+cp "$ROOT/gateway/tests/Support/installed-mixed/ssh-capacity.php" "$ROOT/client/"
 cp "$ROOT/gateway/tests/Support/installed-mixed/file-client.php" "$ROOT/client/"
 cp "$ROOT/gateway/tests/Support/installed-mixed/file-client.py" "$ROOT/client/"
 cp "$ROOT/gateway/tests/Support/installed-mixed/dynamic-ability.php" "$ROOT/client/"
