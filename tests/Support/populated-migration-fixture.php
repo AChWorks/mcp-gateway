@@ -108,12 +108,18 @@ function fixtureOpen(Target $target, TargetCredential $credential): array|string
 function fixtureBatch(Target $target, int $actor, string $state, string $binding, bool $exact): string
 {
     $batch = fixtureId();
+    $ssh = $target->connector_type === 'ssh_direct';
+    $claimed = $state !== 'queued';
+    $finished = $state === 'completed';
+    $turn = $claimed ? ((int) DB::table('target_batches')->max('last_dispatch_turn') + 1) : 0;
     fixtureInsert('target_batches', [
         'id' => $batch, 'actor_user_id' => $actor, 'source_channel' => 'web',
         'client_identity_hash' => hash('sha256', 'installed-fixture'), 'request_id' => (string) Str::uuid(),
         'request_fingerprint' => hash('sha256', $batch), 'request_intent_hash' => hash('sha256', 'intent-'.$batch),
-        'capability_key' => $target->connector_type === 'ssh_direct' ? 'ssh.command.run' : 'wordpress.bridge.info',
-        'arguments_ciphertext' => Crypt::encryptString('{"fixture":true}'),
+        'capability_key' => $ssh ? 'ssh.command.run' : 'wordpress.bridge.info',
+        'arguments_ciphertext' => Crypt::encryptString(json_encode($ssh ? ['command' => 'printf fixture', 'timeout_seconds' => 10] : [], JSON_THROW_ON_ERROR)),
+        'status' => $finished ? 'completed' : ($claimed ? 'running' : 'queued'),
+        'last_dispatch_turn' => $turn, 'finished_at' => $finished ? now() : null,
         'execution_mode' => 'rolling', 'parallelism' => 1, 'target_count' => 1,
     ]);
     $id = fixtureId();
@@ -122,7 +128,9 @@ function fixtureBatch(Target $target, int $actor, string $state, string $binding
         'target_id_snapshot' => $target->target_id, 'connector_type_snapshot' => $target->connector_type,
         'target_binding_hash' => $exact ? $binding : hash('sha256', 'obsolete-'.$binding),
         'position' => 0, 'status' => $state, 'dispatch_attempt_id' => $state === 'queued' ? null : (string) Str::uuid(),
-        'result_ciphertext' => $state === 'completed' ? Crypt::encryptString('retained outcome') : null,
+        'started_at' => $claimed ? now() : null, 'lease_expires_at' => $claimed ? now()->addMinutes(3) : null,
+        'finished_at' => $finished ? now() : null, 'diagnostic_reference' => $finished ? (string) Str::uuid() : null,
+        'result_ciphertext' => $finished ? Crypt::encryptString(json_encode(['ok' => true, 'status' => 'completed', 'result' => $ssh ? ['exit_code' => 0, 'stdout' => 'fixture'] : ['fixture' => true]], JSON_THROW_ON_ERROR)) : null,
     ]);
 
     return $id;
@@ -181,7 +189,9 @@ if ($argv[2] === 'seed') {
         fixtureInsert('ssh_command_jobs', ['id' => fixtureId(), 'target_record_id' => $target->id,
             'user_id' => $owner, 'client_identity_hash' => hash('sha256', 'fixture'), 'request_id' => (string) Str::uuid(),
             'script_digest' => hash('sha256', 'fixture job'), 'target_binding_hash' => SshTargetBinding::hash($target, $config),
-            'status' => 'outcome_unknown', 'runtime_seconds' => 60, 'expires_at' => now()->addDay(),
+            'status' => 'launch_unknown', 'unit_mode' => 'user', 'runtime_seconds' => 60,
+            'preparing_expires_at' => now()->addMinutes(2), 'reconcile_grace_seconds' => 600,
+            'admission_expires_at' => now()->addMinutes(15), 'expires_at' => now()->addDay(),
             'original_user_id' => $owner, 'original_target_record_id' => $target->id, 'original_target_id' => $target->target_id,
             'original_host' => $config->host, 'original_port' => $config->port, 'original_os_username' => $config->username,
             'original_auth_method' => $config->auth_method, 'original_host_key_digest' => hash('sha256', $pin)]);
