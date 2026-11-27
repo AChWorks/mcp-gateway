@@ -106,6 +106,114 @@ final class SshVerifiedTransportFixtureTest extends TestCase
         }
     }
 
+    public function test_delayed_authority_check_does_not_restart_authentication_budget(): void
+    {
+        if (! function_exists('pcntl_fork')) {
+            $this->markTestSkipped('Disposable loopback forwarding fixture requires pcntl.');
+        }
+
+        // Forward the real pinned OpenSSH handshake. Stop forwarding only
+        // after the verified host-key check, immediately before login.
+        $listener = stream_socket_server('tcp://127.0.0.1:0');
+        self::assertIsResource($listener);
+        $listen = (string) stream_socket_get_name($listener, false);
+        $port = (int) substr($listen, strrpos($listen, ':') + 1);
+        $upstreamPort = (int) $this->env('SSH_FIXTURE_PORT_MODERN');
+        $signal = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        self::assertIsArray($signal);
+        [$control, $worker] = $signal;
+        $child = pcntl_fork();
+        self::assertNotSame(-1, $child);
+        if ($child === 0) {
+            fclose($control);
+            $client = stream_socket_accept($listener, 3);
+            $server = stream_socket_client('tcp://127.0.0.1:'.$upstreamPort, $errno, $errstr, 3);
+            if (! is_resource($client) || ! is_resource($server)) {
+                exit(2);
+            }
+            try {
+                $until = hrtime(true) + 5_000_000_000;
+                $paused = false;
+                $loginBytesObserved = false;
+                while (hrtime(true) < $until) {
+                    $read = $paused ? [$client] : [$client, $server, $worker];
+                    $write = $except = null;
+                    if (@stream_select($read, $write, $except, 0, 100_000) === false) {
+                        exit(3);
+                    }
+                    if (in_array($worker, $read, true)) {
+                        if (fread($worker, 1) !== 'P') {
+                            exit(4);
+                        }
+                        $paused = true;
+                        fwrite($worker, 'A');
+                    }
+                    foreach ($read as $from) {
+                        if ($from === $worker) {
+                            continue;
+                        }
+                        $data = fread($from, 8192);
+                        if ($data === false || feof($from)) {
+                            exit(0);
+                        }
+                        if ($paused && $data !== '' && ! $loginBytesObserved) {
+                            $loginBytesObserved = true;
+                            fwrite($worker, 'D'); // Only presence, never encrypted payload or credential bytes.
+                        }
+                        if (! $paused && $data !== '') {
+                            $destination = $from === $client ? $server : $client;
+                            if (fwrite($destination, $data) !== strlen($data)) {
+                                exit(5);
+                            }
+                        }
+                    }
+                }
+            } finally {
+                fclose($client);
+                fclose($server);
+                fclose($worker);
+                fclose($listener);
+            }
+            exit(0);
+        }
+        fclose($listener);
+        fclose($worker);
+        stream_set_timeout($control, 2);
+        $started = hrtime(true);
+        $deadline = $started + 2_000_000_000;
+        $guardCalled = false;
+        $elapsed = 0.0;
+        $reason = null;
+        try {
+            $this->transport()->withAuthenticatedSession(
+                SshRegisteredEndpoint::fromInput('fixture.example.test', $port, $this->env('SSH_FIXTURE_USER')),
+                $this->pin('SSH_FIXTURE_ED25519_HOST_PUB'), 'password', $this->env('SSH_FIXTURE_PASSWORD'), null,
+                static fn () => self::fail('Stalled login must not reach command dispatch.'),
+                beforeLogin: static function () use ($control, $deadline, &$guardCalled): void {
+                    $guardCalled = true;
+                    self::assertSame(1, fwrite($control, 'P'));
+                    self::assertSame('A', fread($control, 1));
+                    // Spend most of the original 2s on current authority.
+                    $remaining = $deadline - hrtime(true) - 300_000_000;
+                    self::assertGreaterThan(0, $remaining, 'Pinned handshake must finish before the deliberate delay.');
+                    usleep(intdiv($remaining, 1000));
+                    self::assertGreaterThan(0, $deadline - hrtime(true));
+                }, deadlineNs: $deadline,
+            );
+            self::fail('Authentication unexpectedly completed.');
+        } catch (SshTargetConnectionException $exception) {
+            $reason = $exception->reason;
+            $elapsed = (hrtime(true) - $started) / 1_000_000_000;
+            self::assertSame('D', fread($control, 1), 'Actual post-guard authentication traffic must reach the stalled peer.');
+        } finally {
+            fclose($control);
+            pcntl_waitpid($child, $status);
+        }
+        self::assertTrue($guardCalled);
+        self::assertSame('transfer_timed_out', $reason);
+        self::assertLessThan(2.6, $elapsed, 'Authentication must not reuse its old larger timeout.');
+    }
+
     private function transport(): SshVerifiedTransport
     {
         $policy = new class implements SshDialAddressPolicy

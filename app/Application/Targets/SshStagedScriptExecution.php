@@ -14,6 +14,21 @@ final class SshStagedScriptExecution
 {
     public const DIRECTORY_PREFIX = '/var/tmp/.mcp-gateway-script-';
 
+    // Exit codes belong only to our small preparation/cleanup programs,
+    // never to the user script or its guarded launcher.
+    private const CONTROL_FAILURES = [
+        'umask_failed' => 40,
+        'interpreter_unavailable' => 41,
+        'hash_unavailable' => 42,
+        'directory_create_failed' => 43,
+        'directory_identity_unverified' => 44,
+        'witness_write_failed' => 45,
+        'witness_identity_unverified' => 46,
+        'cleanup_identity_unverified' => 47,
+        'payload_remove_failed' => 48,
+        'directory_remove_failed' => 49,
+    ];
+
     public static function validInterpreter(string $path): bool
     {
         return str_starts_with($path, '/') && strlen($path) <= 1024
@@ -48,6 +63,7 @@ final class SshStagedScriptExecution
         $stage = 'prepare';
         $diagnostics = [];
         $cleanupError = null;
+        $cleanupDiagnostics = [];
         $source = null;
         try {
             // Stage local bytes before making any remote directory. Do not
@@ -57,17 +73,23 @@ final class SshStagedScriptExecution
                 throw new SshTargetConnectionException('input_unavailable');
             }
             $deadline->assertAvailable();
+            $prepareSteps = [
+                'umask_failed' => 'umask 077',
+                'interpreter_unavailable' => 'test -f '.$program.' && test -x '.$program,
+                'hash_unavailable' => 'command -v sha256sum >/dev/null 2>&1',
+                'directory_create_failed' => 'mkdir -m 700 -- '.$dir,
+                'directory_identity_unverified' => $privateDirectory,
+                'witness_write_failed' => 'printf %s '.SshPrivateArtifactWitness::quote($witness).' > '.$marker,
+                'witness_identity_unverified' => $identity,
+            ];
             $prepared = $execute(
-                'umask 077; test -f '.$program.' && test -x '.$program
-                .' && command -v sha256sum >/dev/null 2>&1'
-                .' && mkdir -m 700 -- '.$dir.' && '.$privateDirectory
-                .' && printf %s '.SshPrivateArtifactWitness::quote($witness).' > '.$marker.' && '.$identity,
+                self::controlCommand($prepareSteps),
                 static function () use (&$prepareAttempted): void {
                     $prepareAttempted = true;
                 },
             );
             if (! self::successful($prepared)) {
-                throw new SshTargetConnectionException('script_preparation_failed', self::observation($prepared));
+                throw new SshTargetConnectionException('script_preparation_failed', self::observation($prepared, $prepareSteps, $directory, $witness));
             }
             $created = true;
             $stage = 'upload';
@@ -124,14 +146,21 @@ final class SshStagedScriptExecution
                 $deadline->assertAvailable();
                 // Only exact known files; no recursive delete, glob, fresh
                 // authority or cleanup of a possibly running interpreter.
-                $cleanup = $execute($identity.' && rm -f -- '.$file.' '.$marker
-                    .' && rmdir -- '.$dir, null);
+                $cleanupSteps = [
+                    'cleanup_identity_unverified' => $identity,
+                    'payload_remove_failed' => 'rm -f -- '.$file.' '.$marker,
+                    'directory_remove_failed' => 'rmdir -- '.$dir,
+                ];
+                $cleanup = $execute(self::controlCommand($cleanupSteps), null);
                 $clean = self::successful($cleanup);
                 if (! $clean) {
                     $cleanupError = 'script_cleanup_unconfirmed';
+                    $cleanupDiagnostics = self::observation($cleanup, $cleanupSteps, $directory, $witness);
                 }
             } catch (Throwable $exception) {
                 $cleanupError = $exception instanceof SshTargetConnectionException ? $exception->reason : 'script_cleanup_unconfirmed';
+                $cleanupDiagnostics = $exception instanceof SshTargetConnectionException
+                    ? $exception->diagnostics : ['exception_class' => $exception::class, 'provider_cause_unknown' => true];
             }
         }
         if (! $clean && $cleanupError === null) {
@@ -162,6 +191,7 @@ final class SshStagedScriptExecution
             'duration_ms' => (int) round((hrtime(true) - $started) / 1_000_000),
             '__diagnostic_context' => [
                 ...$diagnostics, ...$evidence,
+                ...($cleanupDiagnostics === [] ? [] : ['script_cleanup_diagnostics' => $cleanupDiagnostics]),
                 'retry_safe' => false,
                 'effect_unconfirmed' => ($result['status'] ?? null) === 'outcome_unknown' || ! $clean,
             ],
@@ -174,15 +204,82 @@ final class SshStagedScriptExecution
         return ($result['status'] ?? null) === 'completed' && ($result['exit_code'] ?? null) === 0;
     }
 
-    /** @param array<string,mixed> $result
+    /** @param array<string,string> $steps */
+    private static function controlCommand(array $steps): string
+    {
+        // These are Gateway-owned commands, not the user script. Disable
+        // shell tracing before the private witness and use stable native
+        // utility diagnostics; the user's launch environment is unchanged.
+        $command = 'set +x; LC_ALL=C; export LC_ALL';
+        foreach ($steps as $reason => $step) {
+            $command .= '; { '.$step.'; } || exit '.self::CONTROL_FAILURES[$reason];
+        }
+
+        return $command;
+    }
+
+    /**
+     * Retain actual bounded control-command evidence, never the command
+     * string, witness, arbitrary login-shell output or user-script output.
+     * Only recognized utility messages about our exact generated paths are
+     * useful here. Unrecognized stderr is not invented into a provider cause.
+     *
+     * @param  array<string,mixed>  $result
+     * @param  array<string,string>  $steps
      * @return array<string,mixed>
      */
-    private static function observation(array $result): array
+    private static function observation(array $result, array $steps, string $directory, string $witness): array
     {
-        return [
-            'failure_origin' => 'unknown',
-            'failure_stage' => 'operation',
-            ...is_int($result['exit_code'] ?? null) ? ['remote_exit_code' => $result['exit_code']] : ['provider_cause_unknown' => true],
-        ];
+        $details = ['failure_origin' => 'unknown', 'failure_stage' => 'operation'];
+        $exit = $result['exit_code'] ?? null;
+        if (($result['status'] ?? null) !== 'completed' || ! is_int($exit)) {
+            return [...$details, 'provider_cause_unknown' => true];
+        }
+        $details['remote_exit_code'] = $exit;
+        if (($result['stderr_truncated'] ?? false) === true) {
+            $details['script_control_stderr_truncated'] = true;
+        }
+        $reason = array_search($exit, self::CONTROL_FAILURES, true);
+        if (! is_string($reason) || ! isset($steps[$reason])) {
+            return [...$details, 'provider_cause_unknown' => true];
+        }
+        $details['script_control_failure'] = $reason;
+        // Native stdout/stderr have independent capture limits. Keep only
+        // relevant utility evidence whose path is owned by this operation.
+        $prefixes = match ($reason) {
+            'directory_create_failed' => ["mkdir: cannot create directory '".$directory."': "],
+            'directory_remove_failed' => ["rmdir: failed to remove '".$directory."': "],
+            'payload_remove_failed' => [
+                "rm: cannot remove '".$directory."/script': ",
+                "rm: cannot remove '".$directory."/identity': ",
+            ],
+            'directory_identity_unverified', 'witness_identity_unverified', 'cleanup_identity_unverified' => [
+                "stat: cannot stat '".$directory."': ",
+                "stat: cannot stat '".$directory."/identity': ",
+                'cat: '.$directory.'/identity: ',
+            ],
+            default => [],
+        };
+        $stderr = $result['stderr'] ?? null;
+        if ($prefixes !== [] && is_string($stderr) && ($result['stderr_encoding'] ?? null) === 'utf-8') {
+            $messages = [];
+            foreach (explode("\n", $stderr) as $line) {
+                foreach ($prefixes as $prefix) {
+                    if (str_starts_with($line, $prefix)) {
+                        // A trace or shell startup line is not a native
+                        // utility diagnostic. Explicitly mask our witness
+                        // even in a recognized line before common redaction.
+                        $messages[] = str_replace($witness, '[REDACTED]', $line);
+                        break;
+                    }
+                }
+            }
+            if ($messages !== []) {
+                $details['source_error_message'] = implode("\n", $messages);
+                $details['source_error_message_truncated'] = ($result['stderr_truncated'] ?? false) === true;
+            }
+        }
+
+        return $details;
     }
 }

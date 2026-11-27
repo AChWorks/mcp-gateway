@@ -3,71 +3,182 @@
 namespace App\Infrastructure\Connectors\SshDirect;
 
 use App\Application\Targets\SshTargetConnectionException;
-use php_user_filter;
 
 /**
- * Socket-level monotonic budget for an admitted whole-operation deadline.
+ * Deadline-aware view of an already connected, peer-verified TCP socket.
  *
- * SFTP and SSH2 packet parsers are dependency-private. This transparent
- * stream filter makes the same deadline observable on every raw SSH read
- * and write, including SFTP drains and staged-script control/launch replies
- * after verified login. Ordinary native exec sessions do not install it.
+ * phpseclib reads identification with stream_select + stream_get_line, then
+ * private binary packet reads. PHP cannot select a filtered TCP stream.
+ * Cast only to the original socket for select; every actual read/write uses
+ * that same socket and the immutable monotonic deadline. No proxy process,
+ * additional connection, DNS lookup, or vendor-private packet replacement.
+ *
+ * PHP's stream wrapper API owns the public stream_* methods and context.
  */
-final class SshSocketDeadline extends php_user_filter
+final class SshSocketDeadline
 {
-    private const NAME = 'achworks.ssh-sftp-stream-deadline.v1';
+    private const SCHEME = 'achworks-ssh-deadline';
 
-    /** @param resource $socket */
-    public static function attach(mixed $socket, int $deadlineNs): void
+    private static bool $registered = false;
+
+    /** @var resource */
+    public $context;
+
+    /** @var resource */
+    private $socket;
+
+    private int $deadlineNs;
+
+    private int $timeoutNs;
+
+    /** @param resource $socket
+     * @return resource
+     */
+    public static function wrap(mixed $socket, int $deadlineNs, int $timeoutSeconds): mixed
     {
-        if (! is_resource($socket) || $deadlineNs <= hrtime(true)) {
+        if ($deadlineNs <= hrtime(true)) {
             throw new SshTargetConnectionException('transfer_timed_out');
         }
+        if (! self::$registered) {
+            if (in_array(self::SCHEME, stream_get_wrappers(), true)
+                || ! stream_wrapper_register(self::SCHEME, self::class)) {
+                throw new SshTargetConnectionException('transfer_unavailable');
+            }
+            self::$registered = true;
+        }
 
-        if (! in_array(self::NAME, stream_get_filters(), true)
-            && ! stream_filter_register(self::NAME, self::class)) {
+        $stream = @fopen(self::SCHEME.'://connection', 'r+b', false, stream_context_create([
+            self::SCHEME => ['socket' => $socket, 'deadline' => $deadlineNs, 'timeout' => $timeoutSeconds],
+        ]));
+        if (! is_resource($stream)) {
             throw new SshTargetConnectionException('transfer_unavailable');
         }
 
-        if (@stream_filter_append($socket, self::NAME, STREAM_FILTER_READ, $deadlineNs) === false
-            || @stream_filter_append($socket, self::NAME, STREAM_FILTER_WRITE, $deadlineNs) === false) {
-            throw new SshTargetConnectionException('transfer_unavailable');
-        }
-
-        // Bound a stalled socket write independently of the PHP default
-        // socket timeout. phpseclib sets finer per-READ timeouts itself.
-        @stream_set_timeout($socket, 8);
+        return $stream;
     }
 
-    /**
-     * @param  resource  $in
-     * @param  resource  $out
-     */
-    public function filter($in, $out, &$consumed, bool $closing): int
+    public function stream_open(string $path, string $mode, int $options, ?string &$openedPath): bool
     {
-        if (! is_int($this->params)) {
+        $settings = stream_context_get_options($this->context)[self::SCHEME] ?? [];
+        $socket = $settings['socket'] ?? null;
+        $deadline = $settings['deadline'] ?? null;
+        $timeout = $settings['timeout'] ?? null;
+        if ($path !== self::SCHEME.'://connection' || $mode !== 'r+b'
+            || ! is_resource($socket) || ! is_int($deadline) || ! is_int($timeout)
+            || $deadline <= hrtime(true) || $timeout < 1
+            || ! stream_set_blocking($socket, false)) {
+            return false;
+        }
+
+        $this->socket = $socket;
+        $this->deadlineNs = $deadline;
+        $this->timeoutNs = $timeout * 1_000_000_000;
+
+        return true;
+    }
+
+    /** @return resource|false */
+    public function stream_cast(int $castAs): mixed
+    {
+        // No raw descriptor export except PHP's select implementation.
+        return $castAs === STREAM_CAST_FOR_SELECT ? $this->socket : false;
+    }
+
+    public function stream_set_option(int $option, int $arg1, int $arg2): bool
+    {
+        if ($option !== STREAM_OPTION_READ_TIMEOUT) {
+            return false;
+        }
+        // Keep the library's shorter waits, but never extend the absolute
+        // operation budget when it resets its own timeout for another packet.
+        $this->timeoutNs = max(1, $arg1 * 1_000_000_000 + $arg2 * 1000);
+
+        return true;
+    }
+
+    public function stream_read(int $count): string|false
+    {
+        $this->assertAvailable();
+        if ($count === 0) {
+            return '';
+        }
+        $until = min($this->deadlineNs, hrtime(true) + $this->timeoutNs);
+        do {
+            $data = @fread($this->socket, $count);
+            $this->assertAvailable();
+            if ($data === false || $data !== '' || feof($this->socket)) {
+                return $data;
+            }
+        } while ($this->wait(true, $until));
+
+        return '';
+    }
+
+    public function stream_write(#[\SensitiveParameter] string $data): int|false
+    {
+        $this->assertAvailable();
+        if ($data === '') {
+            return 0;
+        }
+        $until = min($this->deadlineNs, hrtime(true) + $this->timeoutNs);
+        do {
+            $count = @fwrite($this->socket, $data);
+            $this->assertAvailable();
+            if ($count === false || $count > 0 || feof($this->socket)) {
+                return $count;
+            }
+        } while ($this->wait(false, $until));
+
+        return 0;
+    }
+
+    public function stream_eof(): bool
+    {
+        return ! is_resource($this->socket) || feof($this->socket);
+    }
+
+    public function stream_flush(): bool
+    {
+        return true;
+    }
+
+    public function stream_close(): void
+    {
+        if (is_resource($this->socket)) {
+            fclose($this->socket);
+        }
+    }
+
+    /** @return array<mixed>|false */
+    public function stream_stat(): array|false
+    {
+        return fstat($this->socket);
+    }
+
+    private function wait(bool $reading, int $until): bool
+    {
+        $this->assertAvailable();
+        $remaining = $until - hrtime(true);
+        if ($remaining <= 0) {
+            return false;
+        }
+        $read = $reading ? [$this->socket] : null;
+        $write = $reading ? null : [$this->socket];
+        $except = null;
+        $micros = intdiv($remaining + 999, 1000);
+        $ready = @stream_select($read, $write, $except, intdiv($micros, 1_000_000), $micros % 1_000_000);
+        $this->assertAvailable();
+        if ($ready === false) {
             throw new SshTargetConnectionException('transfer_unavailable');
         }
 
-        // Never forward any buffered data after expiry, including while
-        // closing the socket after an ambiguous remote write.
-        $expired = hrtime(true) >= $this->params;
-        if ($expired && ! $closing) {
+        return $ready > 0;
+    }
+
+    private function assertAvailable(): void
+    {
+        if (hrtime(true) >= $this->deadlineNs) {
             throw new SshTargetConnectionException('transfer_timed_out');
         }
-
-        while ($bucket = stream_bucket_make_writeable($in)) {
-            $consumed += $bucket->datalen;
-            if ($expired) {
-                continue;
-            }
-
-            if (hrtime(true) >= $this->params) {
-                throw new SshTargetConnectionException('transfer_timed_out');
-            }
-            stream_bucket_append($out, $bucket);
-        }
-
-        return PSFS_PASS_ON;
     }
 }

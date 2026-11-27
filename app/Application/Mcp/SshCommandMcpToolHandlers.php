@@ -92,7 +92,10 @@ final readonly class SshCommandMcpToolHandlers
         $cleanupUnconfirmed = ($result['temporary_cleanup_confirmed'] ?? true) === false;
         $this->activity->record(
             $reference, $operation, $unknown ? 'unknown' : ($failed ? 'failure' : 'success'),
-            $target, $error,
+            // Retain the cleanup error on the successful execution event
+            // so the existing Admin error-details view can show the same
+            // correlated diagnostics as MCP. Do not alter the tool result.
+            $target, $error ?? ($cleanupUnconfirmed ? 'script_cleanup_unconfirmed' : null),
             [
                 ...($unknown ? [
                     'failure_origin' => 'unknown',

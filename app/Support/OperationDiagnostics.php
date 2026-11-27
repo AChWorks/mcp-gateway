@@ -174,6 +174,31 @@ final class OperationDiagnostics
             if (is_string($cleanupCode) && preg_match('/\A[a-z][a-z0-9_]{0,63}\z/D', $cleanupCode) === 1) {
                 $safe['script_cleanup_error_code'] = $cleanupCode;
             }
+            if (($details['temporary_cleanup_confirmed'] ?? null) === false
+                && is_array($details['script_cleanup_diagnostics'] ?? null)) {
+                // Scope the nested context to the cleanup attempt. Reuse
+                // canonical filtering without accepting nested compounds or
+                // interpreting cleanup certainty as launch certainty.
+                $cleanup = self::safeContext(array_diff_key($details['script_cleanup_diagnostics'], [
+                    'script_stage' => true, 'script_cleanup_diagnostics' => true,
+                    'script_staging_path' => true, 'temporary_cleanup_confirmed' => true,
+                ]));
+                if ($cleanup !== []) {
+                    $safe['script_cleanup_diagnostics'] = $cleanup;
+                }
+            }
+        }
+        if (($details['script_control_stderr_truncated'] ?? null) === true) {
+            $safe['script_control_stderr_truncated'] = true;
+        }
+        $controlFailure = $details['script_control_failure'] ?? null;
+        if (is_string($controlFailure) && in_array($controlFailure, [
+            'umask_failed', 'interpreter_unavailable', 'hash_unavailable',
+            'directory_create_failed', 'directory_identity_unverified',
+            'witness_write_failed', 'witness_identity_unverified',
+            'cleanup_identity_unverified', 'payload_remove_failed', 'directory_remove_failed',
+        ], true)) {
+            $safe['script_control_failure'] = $controlFailure;
         }
         if (($details['provider_cause_unknown'] ?? null) === true
             || ($details['provider_cause'] ?? null) === 'unknown') {
@@ -384,6 +409,7 @@ final class OperationDiagnostics
             'connection_unavailable', 'ssh_handshake_failed' => __('The SSH connection could not be established securely.'),
             'outcome_unknown' => __('A remote command or file write may have occurred; do not retry automatically.'),
             'response_too_large', 'file_too_large' => __('The data exceeds the configured safe resource limit.'),
+            'script_cleanup_unconfirmed' => __('The staged script returned a known result, but its temporary staging cleanup was not confirmed.'),
             'script_preparation_failed' => __('The private staged-script directory or interpreter prerequisites could not be confirmed. The user script was not launched.'),
             'script_staging_failed', 'script_staging_identity_unverified' => __('The exact staged script or its private directory could not be verified. The user script was not launched.'),
             'transfer_timed_out' => __('The file transfer exceeded its allowed execution time.'),
@@ -446,6 +472,7 @@ final class OperationDiagnostics
             'outcome_unknown' => __('Inspect the remote state and any transfer receipt before deciding whether another command or write is safe.'),
             'downstream_rejected' => __('A downstream MCP Tool reported an error but its provider cause may be unavailable. Use the diagnostic reference in authorized Admin Activity or the operation-diagnostics-read MCP Tool to inspect the original observed error. If the upstream Adapter stripped the provider cause, inspect Bridge/WordPress. Reconcile uncertain remote effects before any retry.'),
             'response_too_large', 'file_too_large' => __('Reduce the payload or use a supported bounded transfer mode. Do not disable resource limits.'),
+            'script_cleanup_unconfirmed' => __('Inspect the original private staging locator and recorded cleanup evidence. Do not replay the completed script merely to clean up.'),
             'script_preparation_failed' => __('Check the explicit interpreter, POSIX shell and writable private /var/tmp staging on the exact Target. Inspect any unconfirmed staging residue.'),
             'script_staging_failed', 'script_staging_identity_unverified' => __('Check SFTP support, current command/write authority and the shared exec/SFTP filesystem. Inspect the original staging locator; never launch unverified bytes.'),
             'transfer_timed_out' => __('Check network performance and supported operation budgets before a safe new attempt.'),
