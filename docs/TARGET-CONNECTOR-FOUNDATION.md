@@ -16,14 +16,16 @@ A **Target** is one explicitly enrolled, individually authorizable downstream sy
 
 **Current built-in families (published in v2.7.0):** `wp_ai_bridge`, `ssh_direct` and `arvancloud`, explicitly allowlisted by [`TargetConnectorRegistry`](../app/Application/Targets/TargetConnectorRegistry.php). Unknown/stored unsupported types fail closed. ArvanCloud uses a distinct bound HTTPS Machine User REST adapter; see the [ArvanCloud connector guide](ARVANCLOUD-API-CONNECTOR.md). Source inclusion and publication do not prove installed-host or authenticated provider acceptance.
 
-The actual [`TargetConnectorAdapter`](../app/Application/Targets/TargetConnectorAdapter.php) currently covers these lifecycle/metadata responsibilities (use the live interface signature, not this prose, when implementing):
+The actual [`TargetConnectorAdapter`](../app/Application/Targets/TargetConnectorAdapter.php) currently covers these registration, configuration and lifecycle responsibilities (use the live interface signature, not this prose, when implementing):
 
 | Concern | Existing adapter method/family |
 | --- | --- |
-| identity / registration | `type`, `registrationRules`, `safeOldInputFields`, `register`, `registrationStatus` |
+| identity / registration | `type`, `registrationRules`, `registrationRequiresPassword`, `register` |
 | revision-safe changes | `configurationRules`, `configurationRevision`, `updateConfiguration` |
 | credential/connection lifecycle | `connect`, `reconnect`, `disconnect`, `test`, `hasPendingDeletion` |
-| bounded presentation | `adminDetails`, `publicMetadata` |
+
+
+The existing Admin companion owns form-only replay allowlists, registration feedback and local detail projection. Optional `TargetPublicMetadataContributor` implementations supply non-secret metadata in bounded batches for already authorized Targets, shared by MCP inventory and single-Target context. Neither presentation path grants execution authority.
 
 **These methods do not currently constitute a generic action dispatcher.** WordPress Ability, SSH command/file/Job and ArvanCloud REST execution remain family-specific; reusable execution/application use cases belong below human and MCP entry adapters where a real second consumer requires them, never in MCP Tool schemas or Blade controllers.
 
@@ -59,6 +61,7 @@ High-trust policy and group changes that lift SSH denials, change broad scope or
 - Network/authentication errors, timeouts and unknown responses are not automatically proof that a rotating grant was revoked or that a mutation did not happen. Keep generation-fenced intent/recovery, with remote network I/O **outside** long DB locks/transactions and conditional finalize to avoid stale results overwriting revocation/changes.
 - Local credential **forgetting**, verified provider **revocation** and Target **disconnection** have different guarantees. Never label a remote grant revoked merely because local encrypted material was deleted. Pending/uncertain remote revocation uses connector-specific recoverable state and operator-safe diagnostics.
 - The scoped `targets.operations.manage` **Target Pause** denies *new* Gateway-mediated remote operation stages while retaining Target identity/credentials/authorized inventory. It does not cancel/rollback already-dispatched effects or prove an external service stopped.
+- Explicit checks persist independently scoped, current-generation observations in the additive `target_check_evidence` table. SSH host/login, WordPress public metadata, Arvan HTTPS reachability and authenticated GET evidence have separate applicability. Newer attempts fence older outcomes; route and relevant configuration changes retire applicable evidence without invalidating unrelated grants. Legacy observations are imported only as current when their generation is established; otherwise they remain history. The existing Needs review count, list and filter share one local predicate; no universal Connected requirement is introduced. WordPress metadata observations own their separate evidence slot; the existing primary diagnostic may mirror a metadata-only setup/Test failure only with explicit check provenance (`last_error_check_kind`). OAuth lifecycle writes retire that provenance, and metadata verification cannot replace or clear an unrelated OAuth diagnostic or intent. Legacy attribution is conservative; unresolved diagnostics without proven ownership remain available for explicit authorization recovery. Reverse route identity comparison is byte-exact in both admission and the local SQL review projection, independent of database collation.
 - Registered inventory and Admin overview do not synchronously contact every Target. An explicitly initiated `test` uses the strongest safe supported current-credential evidence; unauthenticated metadata reachability alone is not authenticated health.
 
 See [CONNECTOR-INTEGRATION-GUIDE.md](CONNECTOR-INTEGRATION-GUIDE.md) for WordPress idle OAuth recovery and conformance details, [CLIENT-PROFILE-RUNBOOK.md](CLIENT-PROFILE-RUNBOOK.md) for the client edge and [TARGET-DISCONNECT-RECOVERY.md](TARGET-DISCONNECT-RECOVERY.md) for WordPress disconnection.

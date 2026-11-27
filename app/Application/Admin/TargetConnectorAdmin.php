@@ -22,6 +22,7 @@ final class TargetConnectorAdmin
     public function __construct(
         private readonly TargetConnectorRegistry $connectors,
         private readonly Container $container,
+        private readonly TargetHealthAdmin $health,
     ) {}
 
     public function forType(string $type): ?TargetConnectorAdminPresenter
@@ -93,6 +94,11 @@ final class TargetConnectorAdmin
                 'recovery' => $this->recovery($target),
             ];
         }
+        $health = $this->health->forTargets($targets);
+        foreach ($presentation as $id => &$row) {
+            $row['health'] = $health[$id];
+        }
+        unset($row);
         foreach ($groups as $type => $items) {
             $groupIds = array_fill_keys(array_map(static fn (Target $target): string => $target->target_id, $items), true);
             foreach ($this->forType($type)?->inventory($items) ?? [] as $id => $details) {

@@ -5,6 +5,7 @@ namespace App\Application\Admin;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use Illuminate\Support\Facades\DB;
 
@@ -25,29 +26,71 @@ final class WordpressTargetAdminPresenter implements TargetConnectorAdminPresent
         );
     }
 
+    public function safeOldInputFields(): array
+    {
+        return ['base_url'];
+    }
+
+    public function registrationStatus(): string
+    {
+        return __('WordPress Target registered. Connection authorization is not yet configured.');
+    }
+
+    public function details(Target $target): array
+    {
+        $id = $target->getKey();
+        $credential = TargetCredential::query()
+            ->where('target_record_id', $id)->where('connector_type', 'wp_ai_bridge')
+            ->where('purpose', WpAiBridgeTargetVault::PURPOSE)->first(['id']);
+        $revocation = DB::table('wp_ai_bridge_revocation_intents')
+            ->where('target_record_id', $id)
+            ->first(['id', 'kind', 'phase', 'credential_id', 'generation', 'token_total', 'token_confirmed', 'created_at', 'updated_at']);
+        $refresh = DB::table('wp_ai_bridge_refresh_intents')
+            ->where('target_record_id', $id)->first(['id', 'created_at']);
+
+        return [
+            'wpConfig' => WpAiBridgeTargetConfig::query()->where('target_record_id', $id)->first(),
+            'hasCredential' => $credential !== null,
+            // Read-only, non-secret expiry and generation help avoid offering
+            // a cancellation action when local proof already makes it impossible.
+            'credentialMetadata' => $credential === null ? null : DB::table('wp_ai_bridge_credential_metadata')
+                ->where('credential_id', $credential->getKey())
+                ->first(['credential_id', 'generation', 'access_expires_at']),
+            'revocationIntent' => $revocation,
+            'revocationPending' => $revocation !== null,
+            'oauthFlowPending' => DB::table('wp_ai_bridge_oauth_flows')
+                ->where('target_record_id', $id)->exists(),
+            'refreshIntent' => $refresh,
+            'refreshPending' => $refresh !== null,
+        ];
+    }
+
     public function inventory(array $targets): array
     {
         if ($targets === []) {
             return [];
         }
         $ids = array_map(static fn (Target $target): string => (string) $target->getKey(), $targets);
-        $revocations = DB::table('wp_ai_bridge_revocation_intents')
-            ->whereIn('target_record_id', $ids)->get()->keyBy('target_record_id');
-        $refreshIds = DB::table('wp_ai_bridge_refresh_intents')
-            ->whereIn('target_record_id', $ids)->pluck('target_record_id')->all();
-        $configs = DB::table('wp_ai_bridge_target_configs')
-            ->whereIn('target_record_id', $ids)
-            ->get(['target_record_id', 'metadata_checked_at', 'metadata_reachable'])->keyBy('target_record_id');
-        $credentialIds = TargetCredential::query()
-            ->whereIn('target_record_id', $ids)->where('connector_type', 'wp_ai_bridge')
-            ->where('purpose', WpAiBridgeTargetVault::PURPOSE)->pluck('target_record_id')->all();
+        // One page-scoped projection of the three independent OAuth states.
+        $states = DB::table('targets')
+            ->leftJoin('wp_ai_bridge_revocation_intents as revocation', 'revocation.target_record_id', '=', 'targets.id')
+            ->leftJoin('wp_ai_bridge_refresh_intents as refresh', 'refresh.target_record_id', '=', 'targets.id')
+            ->leftJoin('target_credentials as credential', function ($join): void {
+                $join->on('credential.target_record_id', '=', 'targets.id')
+                    ->where('credential.connector_type', 'wp_ai_bridge')
+                    ->where('credential.purpose', WpAiBridgeTargetVault::PURPOSE);
+            })
+            ->whereIn('targets.id', $ids)
+            ->get(['targets.id', 'revocation.id as revocation_id', 'revocation.phase', 'revocation.kind',
+                'revocation.token_confirmed', 'revocation.token_total', 'refresh.id as refresh_id',
+                'credential.id as credential_id'])->keyBy('id');
         $result = [];
         foreach ($targets as $target) {
-            $hasCredential = in_array((string) $target->getKey(), $credentialIds, true);
+            $state = $states->get($target->getKey());
+            $hasCredential = $state !== null && $state->credential_id !== null;
             $recovery = $this->describeRecovery(
-                $target, $revocations->get($target->getKey()),
-                in_array($target->getKey(), $refreshIds, true), $hasCredential,
-                $configs->get($target->getKey()),
+                $target, $state !== null && $state->revocation_id !== null ? $state : null,
+                $state !== null && $state->refresh_id !== null, $hasCredential,
             );
             $recovery['credential_present'] = $hasCredential;
             $result[$target->target_id] = ['recovery' => $recovery];
@@ -90,15 +133,12 @@ final class WordpressTargetAdminPresenter implements TargetConnectorAdminPresent
             $reachability = __('The current network route has not been checked. Earlier metadata observations are historical; authorization is unchanged.');
         }
 
-        $historic = $target->last_error_code !== null && $target->last_failure_at !== null
-            && $timestamp !== null && $timestamp !== false
-            && (int) $metadataReachable === 1
-            && strtotime((string) $target->last_failure_at) < $timestamp;
+        // Public metadata success says nothing about OAuth recovery.
+        // The health projection owns observation history; this is the
+        // independently retained primary diagnostic.
         $history = $target->last_error_code === null
             ? null
-            : ($historic
-                ? __('Earlier error before the most recent successful metadata check: :code', ['code' => $target->last_error_code])
-                : __('Recorded error (diagnostic, not proof of current reachability): :code', ['code' => $target->last_error_code]));
+            : __('Recorded error (diagnostic, not proof of current reachability): :code', ['code' => $target->last_error_code]);
 
         if ($refreshPending) {
             return [

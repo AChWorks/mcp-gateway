@@ -60,22 +60,15 @@ final class SshReverseRoutePolicy
             || preg_match('/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/D', $identity) !== 1) {
             throw new SshTargetConnectionException('reverse_route_not_approved');
         }
-        $raw = config('ssh.reverse_approved_routes', '');
-        $document = is_string($raw) ? json_decode($raw, false, 16) : null;
-        // Require an object map, not a JSON array of unowned ports.
-        $allowed = $document instanceof \stdClass ? json_decode($raw, true, 16) : null;
-        if ($allowed === null && trim($raw) === '') {
-            $allowed = [];
-        }
-        if (! is_array($allowed) || ! $this->unambiguousAllowlist($allowed)) {
-            throw new SshTargetConnectionException('reverse_route_not_approved');
-        }
+        $allowed = $this->approvedRoutes();
         // An empty/malformed/multi-owner port assignment fails closed. No
         // app-level listener can choose its own identity by changing DB fields.
         $entry = $allowed[$targetId] ?? null;
-        if (is_array($entry) && count($entry) === 2
-            && ($entry['port'] ?? null) === $number
-            && ($entry['tunnel_identity'] ?? null) === $identity) {
+        if ($allowed === null) {
+            throw new SshTargetConnectionException('reverse_route_not_approved');
+        }
+        if ($entry !== null && $entry['port'] === $number
+            && $entry['tunnel_identity'] === $identity) {
             // A managed identity must never override or shadow a legacy operator key.
             if (SshManagedReverseEnrollment::query()->where('target_id', $targetId)->exists()) {
                 throw new SshTargetConnectionException('reverse_route_not_approved');
@@ -97,11 +90,28 @@ final class SshReverseRoutePolicy
             ->whereNull('revoked_at')
             ->whereNotNull('control_public_key')
             ->first();
-        if (! $managed || in_array($number, array_column($allowed, 'port'), true)) {
+        if (! $managed || $managed->tunnel_identity !== $identity || in_array($number, array_column($allowed, 'port'), true)) {
             throw new SshTargetConnectionException('reverse_route_not_approved');
         }
 
         return SshReverseRoute::fromApprovedPolicy($targetId, $number, $identity);
+    }
+
+    /** @return array<string,array{port:int,tunnel_identity:string}>|null */
+    public function approvedRoutes(): ?array
+    {
+        $raw = config('ssh.reverse_approved_routes');
+        if (! is_string($raw)) {
+            return null;
+        }
+        if (trim($raw) === '') {
+            return [];
+        }
+        $document = json_decode($raw, false, 16);
+        // Require an object map, not a JSON array of unowned ports.
+        $allowed = $document instanceof \stdClass ? json_decode($raw, true, 16) : null;
+
+        return is_array($allowed) && $this->unambiguousAllowlist($allowed) ? $allowed : null;
     }
 
     /** @param array<string,mixed> $allowed */

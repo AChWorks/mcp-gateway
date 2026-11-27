@@ -35,8 +35,9 @@ final class TargetConfigurationController extends Controller
         $adapter = $connectors->availableForTarget($target);
         abort_unless($adapter instanceof TargetConnectorAdapter, 404);
 
+        $presenter = $connectorAdmin->forType($adapter->type());
         try {
-            $definition = $connectorAdmin->forType($adapter->type())?->definition();
+            $definition = $presenter?->definition();
             $validated = $request->validate(
                 $adapter->configurationRules($target),
                 $definition->validationMessages ?? [],
@@ -54,7 +55,7 @@ final class TargetConfigurationController extends Controller
             }
 
             return back()->withErrors($exception->errors())
-                ->withInput($this->safeInput($request, $adapter->safeOldInputFields()))
+                ->withInput($this->safeInput($request, $presenter?->safeOldInputFields() ?? []))
                 ->with('target_configuration_failed', true);
         } catch (TargetConnectorFailure $exception) {
             $code = $exception->reason ?? 'configuration_rejected';
@@ -62,7 +63,7 @@ final class TargetConfigurationController extends Controller
 
             return back()
                 ->withErrors([$exception->field ?? 'configuration' => $exception->getMessage()])
-                ->withInput($this->safeInput($request, $adapter->safeOldInputFields()))
+                ->withInput($this->safeInput($request, $presenter?->safeOldInputFields() ?? []))
                 ->with('diagnostic_code', $code)
                 ->with('diagnostic_context', OperationDiagnostics::safeContext($exception->diagnostics))
                 ->with('diagnostic_reference', $reference)

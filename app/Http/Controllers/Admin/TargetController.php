@@ -6,8 +6,9 @@ use App\Application\Access\AccessControl;
 use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Access\OperationAdmission;
 use App\Application\Admin\TargetConnectorAdmin;
+use App\Application\Admin\TargetConnectorAdminPresenter;
+use App\Application\Admin\TargetHealthAdmin;
 use App\Application\Targets\SshManagedReverseHostReadiness;
-use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorRegistry;
 use App\Application\Targets\TargetEnrollmentPreflight;
@@ -126,6 +127,7 @@ final class TargetController extends Controller
         Gate::authorize(GatewayPermission::TargetsCreate->value);
 
         $adapter = null;
+        $presenter = null;
         $selected = $request->input('connector_type');
         $query = is_string($selected) && in_array($selected, $connectors->types(), true)
             ? ['connector_type' => $selected] : [];
@@ -141,12 +143,13 @@ final class TargetController extends Controller
                 'connector_type' => ['required', Rule::in($connectors->types())],
             ]);
             $adapter = $connectors->forType((string) $choice['connector_type']);
+            $presenter = $connectorAdmin->forType($adapter->type());
             if (! $adapter instanceof TargetEnrollmentPreflight) {
                 throw ValidationException::withMessages([
                     'connector_type' => __('This connector does not support endpoint preflight.'),
                 ]);
             }
-            $definition = $connectorAdmin->forType($adapter->type())?->definition();
+            $definition = $presenter?->definition();
             $validated = $request->validate(
                 [...ConnectionRelayRoutes::selectionRules(), ...$adapter->preflightRules()],
                 $definition->validationMessages ?? [],
@@ -168,7 +171,7 @@ final class TargetController extends Controller
             }
 
             return redirect()->route('admin.targets.create', $query)
-                ->withInput($this->safeOldInput($request, $adapter))
+                ->withInput($this->safeOldInput($request, $presenter))
                 ->withErrors($exception->errors())
                 ->with('target_preflight_validation_failed', true);
         }
@@ -210,7 +213,7 @@ final class TargetController extends Controller
         }
 
         return redirect()->route('admin.targets.create', $query)
-            ->withInput($this->safeOldInput($request, $adapter))
+            ->withInput($this->safeOldInput($request, $presenter))
             ->with('target_endpoint_preflight', $result);
     }
 
@@ -228,6 +231,7 @@ final class TargetController extends Controller
         // Validate the actual connector type before its own fields. This avoids
         // making unrelated connector fields mandatory for every new adapter.
         $adapter = null;
+        $presenter = null;
         $selected = $request->input('connector_type');
         $createQuery = is_string($selected) && in_array($selected, $connectors->types(), true)
             ? ['connector_type' => $selected] : [];
@@ -242,12 +246,13 @@ final class TargetController extends Controller
                 'connector_type' => ['required', Rule::in($connectors->types())],
             ]);
             $adapter = $connectors->forType((string) $choice['connector_type']);
+            $presenter = $connectorAdmin->forType($adapter->type());
             if ($adapter->type() === 'ssh_direct' && $request->input('ssh_mode') === 'managed') {
                 throw ValidationException::withMessages([
                     'ssh_mode' => __('For Managed Reverse SSH, open the selected Managed connection mode and use Create Pending Setup. No Target was registered.'),
                 ]);
             }
-            $definition = $connectorAdmin->forType($adapter->type())?->definition();
+            $definition = $presenter?->definition();
             $validated = $request->validate([
                 'target_id' => ['required', 'string', 'max:64', 'regex:/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/D'],
                 'display_name' => ['required', 'string', 'max:160'],
@@ -275,7 +280,7 @@ final class TargetController extends Controller
             $reference = OperationDiagnostics::failure('target-registration', 'invalid_input', null, $context);
 
             return redirect()->route('admin.targets.create', $createQuery)
-                ->withInput($this->safeOldInput($request, $adapter))
+                ->withInput($this->safeOldInput($request, $presenter))
                 ->withErrors($exception->errors())
                 ->with('diagnostic_code', 'invalid_input')
                 ->with('diagnostic_context', $context)
@@ -297,7 +302,7 @@ final class TargetController extends Controller
             $reference = OperationDiagnostics::failure('target-registration', $code, null, $context);
 
             return redirect()->route('admin.targets.create', $createQuery)
-                ->withInput($this->safeOldInput($request, $adapter))
+                ->withInput($this->safeOldInput($request, $presenter))
                 ->withErrors([$exception->field ?? 'target_id' => $exception->getMessage()])
                 ->with('diagnostic_code', $code)
                 ->with('diagnostic_context', OperationDiagnostics::safeContext($context))
@@ -310,21 +315,20 @@ final class TargetController extends Controller
             return redirect()->route(Gate::allows(GatewayPermission::TargetsView->value)
                 ? 'admin.targets.index'
                 : 'admin.targets.create')
-                ->with('status', $adapter->registrationStatus().' '.__(
+                ->with('status', ($presenter?->registrationStatus() ?? __('Target registered.')).' '.__(
                     'Target :id was registered but is outside your permitted scope. Ask an Owner to assign access before using it.',
                     ['id' => $target->target_id],
                 ));
         }
 
         return redirect()->route('admin.targets.show', ['target' => $target->target_id])
-            ->with('status', $adapter->registrationStatus());
+            ->with('status', $presenter?->registrationStatus() ?? __('Target registered.'));
     }
 
-    public function show(Target $target, TargetConnectorRegistry $connectors, TargetConnectorAdmin $connectorAdmin): View
+    public function show(Target $target, TargetConnectorRegistry $connectors, TargetConnectorAdmin $connectorAdmin, TargetHealthAdmin $health): View
     {
         Gate::authorize(GatewayPermission::TargetsView->value, $target);
 
-        $adapter = $connectors->availableForTarget($target);
         $id = $target->getKey();
 
         $canRemoveSafely = ! TargetCredential::query()->where('target_record_id', $id)->exists()
@@ -338,11 +342,11 @@ final class TargetController extends Controller
             ], true);
 
         $presenter = $connectorAdmin->forType($target->connector_type);
-        $details = $adapter?->adminDetails($target) ?? [];
+        $details = $presenter?->details($target) ?? [];
 
         return view('admin.targets.show', [
             'target' => $target,
-            'relayUnavailable' => $target->relay_record_id !== null && ! ConnectionRelay::query()->whereKey($target->relay_record_id)->where('enabled', true)->exists(),
+            'health' => $health->forTargets([$target])[$target->target_id],
             'connectorUi' => $presenter?->definition(),
             'canRemoveSafely' => $canRemoveSafely,
             ...$details,
@@ -360,8 +364,8 @@ final class TargetController extends Controller
 
         $adapter = $canConfigure ? $connectors->availableForTarget($target) : null;
 
-        $details = $adapter?->adminDetails($target) ?? [];
         $presenter = $connectorAdmin->forType($target->connector_type);
+        $details = $adapter === null ? [] : ($presenter?->details($target) ?? []);
         $hasConfig = $presenter?->hasConfiguration($details) ?? false;
 
         return view('admin.targets.edit', [
@@ -506,10 +510,10 @@ final class TargetController extends Controller
     /** @return array<string, mixed> */
     private function safeOldInput(
         Request $request,
-        ?TargetConnectorAdapter $adapter,
+        ?TargetConnectorAdminPresenter $presenter,
     ): array {
         // Allowlist replayable fields; new connector secrets stay private by
-        // default even when the adapter introduces an unfamiliar form field.
+        // default even when the connector introduces an unfamiliar form field.
         return TargetFormInput::replayable($request, [
             'connector_type',
             'ssh_mode',
@@ -517,7 +521,7 @@ final class TargetController extends Controller
             'display_name',
             'ai_guidance',
             'connection_relay_id',
-            ...($adapter?->safeOldInputFields() ?? []),
+            ...($presenter?->safeOldInputFields() ?? []),
         ]);
     }
 

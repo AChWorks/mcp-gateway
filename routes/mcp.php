@@ -25,6 +25,12 @@ Route::post('/reverse-ssh/enroll/{enrollment}/claim', ManagedReverseClaimControl
     ->where('enrollment', '[A-Za-z0-9]{26}')
     ->middleware('throttle:10,1');
 
+// A claimed installer may recheck only its exact, still-current initial
+// login authorization. The consumed enrollment token remains non-replayable.
+Route::post('/reverse-ssh/enroll/{enrollment}/bootstrap-check', [ManagedReverseClaimController::class, 'bootstrapCheck'])
+    ->where('enrollment', '[A-Za-z0-9]{26}')
+    ->middleware('throttle:10,1,managed-reverse-bootstrap');
+
 Route::post('/oauth/register', DcrRegistrationController::class)->middleware('throttle:oauth-register');
 Route::post('/oauth/token', TokenController::class)->middleware([EnsureCorrelationId::class, ObserveOAuthTokenRequest::class, 'throttle:oauth-token']);
 Route::post('/oauth/revoke', RevocationController::class)->middleware([EnsureCorrelationId::class, ObserveOAuthTokenRequest::class, 'throttle:oauth-token']);

@@ -435,7 +435,7 @@ final class SshManagedReverseAdminTest extends TestCase
         $url = '/admin/targets/retry-target/reverse-ssh/reissue';
         $this->get('/admin/targets/retry-target')->assertOk()
             ->assertSee('Reissue Managed Reverse route (advanced)')
-            ->assertSee('Reissue one-use install command');
+            ->assertSee('Reissue setup command');
         $this->post($url, [
             'confirm_target_id' => 'wrong',
             'current_password' => 'StrongPassword!234',

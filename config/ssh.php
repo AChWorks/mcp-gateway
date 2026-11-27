@@ -29,7 +29,7 @@ return [
         'installer_path' => base_path('bin/managed-reverse-target.sh'),
         // Committed digest from the exact installer delivered by the package.
         // The release/distribution process must independently verify this.
-        'installer_sha256' => '42b64ce22ce7d3084bbefd489f3a1cfed08b1e14f17070d8fbccb50b55d74184',
+        'installer_sha256' => '77b73150580234a60b21356dfee79232bdbcf4f9270cbee6067bf321f5ddecf0',
         // The separately privileged Gateway bootstrap is also release-pinned.
         'gateway_script_sha256' => 'eaf5960e16c27393b08b66afbfcb48d94a77e073dee57f7e3bc5ec8631632f28',
     ],

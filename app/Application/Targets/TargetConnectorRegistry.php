@@ -76,15 +76,35 @@ final class TargetConnectorRegistry
 
     /**
      * Inventory may show an unsupported historical connector but cannot run it.
+     * Only connectors with actual public metadata contribute, for the same
+     * already authorized bounded set in both inventory and single-Target context.
      *
-     * @return array<string, mixed>
+     * @param  list<Target>  $targets
+     * @return array<string,array<string,mixed>>
      */
-    public function publicMetadata(Target $target): array
+    public function publicMetadata(array $targets): array
     {
-        if (! self::supports($target->connector_type)) {
-            return [];
+        $groups = [];
+        foreach ($targets as $target) {
+            $groups[$target->connector_type][] = $target;
+        }
+        $metadata = [];
+        foreach ($groups as $type => $items) {
+            if (! self::supports($type)) {
+                continue;
+            }
+            $adapter = $this->forType($type);
+            if (! $adapter instanceof TargetPublicMetadataContributor) {
+                continue;
+            }
+            $ids = array_fill_keys(array_map(static fn (Target $target): string => (string) $target->getKey(), $items), true);
+            foreach ($adapter->publicMetadata($items) as $id => $details) {
+                if (isset($ids[$id])) {
+                    $metadata[$id] = $details;
+                }
+            }
         }
 
-        return $this->forTarget($target)->publicMetadata($target);
+        return $metadata;
     }
 }

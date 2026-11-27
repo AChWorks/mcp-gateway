@@ -70,6 +70,7 @@ if (!/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(base || '')) {
                 assert.equal(await reissue.isVisible(), true,
                     'Native disclosure reveals the actual recovery form');
                 assert.equal(await reissue.count(), 1);
+                assert.equal(await reissue.getByRole('button', {name: 'Reissue setup command'}).count(), 1);
                 assert.equal(await reissue.locator('input[name="confirm_target_id"]').count(), 1);
                 assert.equal(await reissue.locator('input[name="current_password"]').count(), 1);
                 for (const dir of ['ltr', 'rtl']) {
@@ -97,6 +98,11 @@ if (!/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(base || '')) {
                         && geometry.submit.right <= geometry.form.right + 2,
                         'Recovery action escaped form ' + JSON.stringify({width, dir, geometry}));
                 }
+                await page.goto(base + '/__browser__/managed-reverse-transport');
+                await page.locator('details.target-help-details').filter({has: page.locator('form[action$="/reverse-ssh/reissue"]')}).locator('summary').click();
+                assert.equal(await page.getByRole('button', {name: 'Reissue transport command'}).count(), 1);
+                assert.equal(await page.getByText('Route unavailable', {exact: true}).count(), 1);
+                assert.equal(await page.getByRole('button', {name: 'Reissue setup command'}).count(), 0);
                 assert.deepEqual(failures, [], 'Client-side runtime errors on managed Reverse UI');
                 await context.close();
             }
@@ -116,12 +122,12 @@ if (!/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(base || '')) {
         assert.equal(await form.isVisible(), true);
         await form.locator('[name="confirm_target_id"]').fill('ui-managed-pending');
         await form.locator('[name="current_password"]').fill('wrong-password');
-        await form.getByRole('button', { name: 'Reissue one-use install command' }).click();
+        await form.getByRole('button', { name: 'Reissue setup command' }).click();
         await page.getByRole('alert').filter({ hasText: 'Managed Reverse SSH action was not completed' }).waitFor();
         assert.equal(await recovery.evaluate(el => el.open), true,
             'Failed no-JS recovery must remain expanded with its validation feedback visible');
         assert.equal(await form.isVisible(), true);
-        assert.equal(await page.getByRole('button', { name: 'Reissue one-use install command' }).count(), 1,
+        assert.equal(await page.getByRole('button', { name: 'Reissue setup command' }).count(), 1,
             'Wrong password must not remove the Owner recovery path.');
         await page.goto(base + '/__browser__/experience/viewer');
         const denied = await page.goto(base + '/admin/settings/reverse-ssh');

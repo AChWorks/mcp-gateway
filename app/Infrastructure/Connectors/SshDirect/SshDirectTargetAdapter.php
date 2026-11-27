@@ -14,8 +14,8 @@ use App\Application\Targets\TargetConnectorResult;
 use App\Application\Targets\TargetEndpointPreflight;
 use App\Application\Targets\TargetEnrollmentPreflight;
 use App\Application\Targets\TargetPreflightResult;
+use App\Application\Targets\TargetPublicMetadataContributor;
 use App\Domain\Targets\Target;
-use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
@@ -23,12 +23,13 @@ use App\Models\User;
 use App\Support\OperationDiagnostics;
 use Closure;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
 use RuntimeException;
 
 /** SSH-specific enrollment, trust and verification never become generic OAuth behavior. */
-final readonly class SshDirectTargetAdapter implements TargetBatchBindingContributor, TargetConnectorAdapter, TargetEnrollmentPreflight
+final readonly class SshDirectTargetAdapter implements TargetBatchBindingContributor, TargetConnectorAdapter, TargetEnrollmentPreflight, TargetPublicMetadataContributor
 {
     public function __construct(private Container $container) {}
 
@@ -73,16 +74,6 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
                 ...ConnectionRelayRoutes::selectionRules()['connection_relay_id'],
                 'prohibited_if:ssh_route_mode,reverse',
             ],
-        ];
-    }
-
-    public function safeOldInputFields(): array
-    {
-        // ssh_host_key is the server's PUBLIC pin; no login secrets are flashed.
-        return [
-            'ssh_host', 'ssh_port', 'ssh_username', 'ssh_host_key',
-            'ssh_auth_method', 'ssh_trust_confirmed', 'ssh_route_mode',
-            'ssh_reverse_port', 'ssh_tunnel_identity',
         ];
     }
 
@@ -267,11 +258,6 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
         return ($input['ssh_route_mode'] ?? 'direct') === 'reverse';
     }
 
-    public function registrationStatus(): string
-    {
-        return __('SSH Target registered with encrypted credentials and an out-of-band host-key pin. Authentication has NOT yet been verified.');
-    }
-
     public function configurationRules(Target $target): array
     {
         return [
@@ -352,25 +338,19 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
         }
     }
 
-    public function adminDetails(Target $target): array
+    public function publicMetadata(array $targets): array
     {
-        $id = $target->getKey();
-        $config = SshTargetConfig::query()->where('target_record_id', $id)->first();
+        // The inventory's indexed local projection already provides the
+        // relation. Single-Target context loads it only for actual SSH Targets.
+        (new Collection($targets))->loadMissing(
+            'sshConfig:target_record_id,host,port,username,observed_peer_ip,observed_at',
+        );
+        $metadata = [];
+        foreach ($targets as $target) {
+            $metadata[(string) $target->getKey()] = ['ssh' => SshTargetIdentity::safeMetadata($target)];
+        }
 
-        return [
-            'sshConfig' => $config,
-            'sshFingerprint' => $config instanceof SshTargetConfig
-                ? SshHostKeyPin::fromLine($config->pinned_host_key)->fingerprint()
-                : null,
-            'sshHasCredential' => TargetCredential::query()
-                ->where('target_record_id', $id)->where('connector_type', $this->type())
-                ->where('purpose', SshTargetVault::PURPOSE)->exists(),
-        ];
-    }
-
-    public function publicMetadata(Target $target): array
-    {
-        return ['ssh' => SshTargetIdentity::safeMetadata($target)];
+        return $metadata;
     }
 
     public function hasPendingDeletion(Target $target): bool

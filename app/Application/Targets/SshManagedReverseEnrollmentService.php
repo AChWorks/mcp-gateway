@@ -10,11 +10,14 @@ use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
+use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Models\User;
 use App\Support\CorrelationId;
 use Carbon\CarbonImmutable;
+use Illuminate\Contracts\Encryption\DecryptException;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
@@ -135,7 +138,7 @@ final readonly class SshManagedReverseEnrollmentService
      * On a lost response the caller must request explicit Owner reconciliation;
      * never treat a used token as a safe retry capability.
      *
-     * @return array<string,int|string>
+     * @return array<string,int|string|null>
      */
     public function claim(string $enrollmentId, string $token, string $publicKey): array
     {
@@ -181,24 +184,105 @@ final readonly class SshManagedReverseEnrollmentService
             // file/DB finalization remains explicitly reconcilable; the token
             // is never replayable and route admission still denies "claimed".
             $this->authorizedKeys->publishClaim($id);
-            $enrollment = SshManagedReverseEnrollment::query()->findOrFail($id);
-            $gateway = SshManagedReverseGateway::query()->findOrFail(1);
-            if (! $gateway->enabled || $gateway->publication_pending || $enrollment->state !== 'active'
-                || $enrollment->publication_pending) {
-                throw new RuntimeException('Managed Reverse SSH authority changed during claim publication.');
-            }
 
-            return [
-                'control_host' => $gateway->control_host,
-                'control_port' => $gateway->control_port,
-                'control_user' => $gateway->control_user,
-                'control_host_key' => $gateway->control_host_key,
-                'listener_port' => $enrollment->listener_port,
-                'target_port' => $enrollment->target->sshConfig->port,
-                'target_username' => $enrollment->login_public_key !== '' ? $enrollment->target->sshConfig->username : '',
-                'login_public_key' => $enrollment->login_public_key,
-            ];
+            return DB::transaction(function () use ($id, $controlKey): array {
+                [$gateway, $enrollment, $target, $config] = $this->currentClaim($id);
+                if (! hash_equals((string) $enrollment->control_key_hash, hash('sha256', $controlKey))) {
+                    throw new InvalidArgumentException('Managed Reverse SSH claim changed.');
+                }
+                $bootstrap = $this->bootstrapBinding($gateway, $enrollment, $target, $config);
+
+                return [
+                    'enrollment_id' => (string) $enrollment->getKey(),
+                    'control_key_hash' => $enrollment->control_key_hash,
+                    'target_host_key' => $config->pinned_host_key,
+                    'control_host' => $gateway->control_host,
+                    'control_port' => $gateway->control_port,
+                    'control_user' => $gateway->control_user,
+                    'control_host_key' => $gateway->control_host_key,
+                    'listener_port' => $enrollment->listener_port,
+                    'target_port' => $config->port,
+                    'target_username' => $bootstrap !== null ? $config->username : '',
+                    'login_public_key' => $bootstrap !== null ? $enrollment->login_public_key : '',
+                    // This purpose-bound receipt can only check that the
+                    // original bootstrap is still authorized. It cannot claim
+                    // a route, issue keys, restore grants or return credentials.
+                    'bootstrap_receipt' => $bootstrap !== null ? Crypt::encryptString($bootstrap) : null,
+                ];
+            }, 3);
         });
+    }
+
+    public function bootstrapStillAuthorized(string $enrollmentId, string $receipt): bool
+    {
+        try {
+            $original = Crypt::decryptString($receipt);
+
+            return DB::transaction(function () use ($enrollmentId, $original): bool {
+                [$gateway, $enrollment, $target, $config] = $this->currentClaim($enrollmentId);
+                $current = $this->bootstrapBinding($gateway, $enrollment, $target, $config);
+
+                return $current !== null && hash_equals($current, $original);
+            }, 3);
+        } catch (DecryptException|InvalidArgumentException) {
+            return false;
+        }
+    }
+
+    /** @return array{SshManagedReverseGateway,SshManagedReverseEnrollment,Target,SshTargetConfig} */
+    private function currentClaim(string $id): array
+    {
+        // Match the existing provider -> Target -> enrollment lock order.
+        // No remote call or filesystem publication under this transaction.
+        $gateway = SshManagedReverseGateway::query()->whereKey(1)->lockForUpdate()->first();
+        $record = SshManagedReverseEnrollment::query()->whereKey($id)->value('target_record_id');
+        $target = $record === null ? null : Target::query()->whereKey($record)->lockForUpdate()->first();
+        $enrollment = SshManagedReverseEnrollment::query()->whereKey($id)->lockForUpdate()->first();
+        if (! $target instanceof Target
+            || ! $enrollment instanceof SshManagedReverseEnrollment || $enrollment->state !== 'active'
+            || $enrollment->revoked_at !== null
+            || $enrollment->target_record_id !== $target->getKey()
+            || $target->reverse_listener_port !== $enrollment->listener_port
+            || $target->reverse_tunnel_identity !== $enrollment->tunnel_identity
+            || $enrollment->control_key_hash === null) {
+            throw new InvalidArgumentException('Managed Reverse SSH claim is no longer active.');
+        }
+        if (! $gateway?->enabled || $gateway->publication_pending || $enrollment->publication_pending) {
+            // Temporary administrative unavailability does not retire the
+            // original bootstrap grant. A later explicit retry can recheck it.
+            throw new RuntimeException('Managed Reverse SSH publication is unavailable.');
+        }
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->lockForUpdate()->first();
+        if (! $config instanceof SshTargetConfig) {
+            throw new InvalidArgumentException('Managed Reverse SSH login identity is unavailable.');
+        }
+
+        return [$gateway, $enrollment, $target, $config];
+    }
+
+    private function bootstrapBinding(SshManagedReverseGateway $gateway, SshManagedReverseEnrollment $enrollment,
+        Target $target, SshTargetConfig $config): ?string
+    {
+        if ($enrollment->login_public_key === '') {
+            return null;
+        }
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())
+            ->where('connector_type', 'ssh_direct')->where('purpose', SshTargetVault::PURPOSE)->lockForUpdate()->first();
+        if (! $credential instanceof TargetCredential || $config->auth_method !== 'private_key') {
+            return null;
+        }
+
+        // Bind the actual bootstrap grant, peer and control path, not a
+        // material reseal or transient network observation. Verification,
+        // credential replacement/removal, reissue and revoke fence old proof.
+        return hash('sha256', json_encode([
+            'managed-reverse-login-bootstrap-v1',
+            (string) $enrollment->getKey(), $enrollment->control_key_hash,
+            $enrollment->listener_port, $enrollment->tunnel_identity,
+            $gateway->control_host, $gateway->control_port, $gateway->control_user, $gateway->control_host_key,
+            SshTargetBinding::peerFingerprint($target, $config),
+            $credential->authorityFingerprint(), $enrollment->login_public_key,
+        ], JSON_THROW_ON_ERROR));
     }
 
     /**
@@ -227,7 +311,9 @@ final readonly class SshManagedReverseEnrollmentService
                     ->whereKey($original->getKey())->lockForUpdate()->firstOrFail();
                 $config = SshTargetConfig::query()
                     ->where('target_record_id', $target->getKey())->lockForUpdate()->firstOrFail();
-                if ($current->state === 'revoked' || ! $target->usesReverseRoute()) {
+                if ($current->state === 'revoked' || ! $target->usesReverseRoute()
+                    || $target->reverse_listener_port !== $current->listener_port
+                    || $target->reverse_tunnel_identity !== $current->tunnel_identity) {
                     throw new InvalidArgumentException('Only a selected, non-revoked managed Reverse route can be reissued.');
                 }
                 // Rotating the control path never opens or rewrites the

@@ -152,6 +152,46 @@ final class SshManagedReverseEnrollmentTest extends TestCase
         app(SshManagedReverseEnrollmentService::class)->claim($row->id, $started['token'], $this->publicKey(61));
     }
 
+    public function test_bootstrap_receipt_rechecks_only_current_initial_grant_and_never_replays_claim(): void
+    {
+        $this->gateway();
+        file_put_contents($this->keyFile, '');
+        $service = app(SshManagedReverseEnrollmentService::class);
+        $started = $this->begin();
+        $row = $started['enrollment'];
+        $claim = $service->claim($row->id, $started['token'], $this->publicKey(61));
+        self::assertSame($row->id, $claim['enrollment_id']);
+        self::assertSame(hash('sha256', $this->publicKey(61)), $claim['control_key_hash']);
+        self::assertSame($this->publicKey(52), $claim['target_host_key']);
+        self::assertIsString($claim['bootstrap_receipt']);
+        $receipt = $claim['bootstrap_receipt'];
+        self::assertTrue($service->bootstrapStillAuthorized($row->id, $receipt));
+        $this->postJson('/reverse-ssh/enroll/'.$row->id.'/bootstrap-check', ['receipt' => $receipt])
+            ->assertNoContent()->assertHeader('Cache-Control', 'no-store, private');
+        $this->postJson('/reverse-ssh/enroll/'.$row->id.'/bootstrap-check', ['receipt' => $started['token']])
+            ->assertStatus(409);
+        self::assertFalse($service->bootstrapStillAuthorized($row->id, $started['token']));
+        self::assertFalse($service->bootstrapStillAuthorized($row->id, $receipt.'invalid'));
+        self::assertSame('active', $row->fresh()->state);
+        self::assertNull($row->fresh()->token_hash);
+
+        $next = $service->reissue($row->fresh());
+        self::assertFalse($service->bootstrapStillAuthorized($row->id, $receipt));
+        $newRow = $next['enrollment'];
+        $new = $service->claim($newRow->id, $next['token'], $this->publicKey(62));
+        self::assertFalse($service->bootstrapStillAuthorized($newRow->id, $receipt));
+        self::assertSame($claim['login_public_key'], $new['login_public_key']);
+        self::assertTrue($service->bootstrapStillAuthorized($newRow->id, $new['bootstrap_receipt']));
+
+        app(SshTargetConnectionService::class)->disconnect($newRow->target);
+        self::assertFalse($service->bootstrapStillAuthorized($newRow->id, $new['bootstrap_receipt']));
+        $transport = $service->reissue($newRow->fresh());
+        $transportClaim = $service->claim($transport['enrollment']->id, $transport['token'], $this->publicKey(63));
+        self::assertSame('', $transportClaim['login_public_key']);
+        self::assertSame('', $transportClaim['target_username']);
+        self::assertNull($transportClaim['bootstrap_receipt']);
+    }
+
     public function test_revoke_removes_authorized_key_and_fences_transport(): void
     {
         $this->gateway();

@@ -90,6 +90,8 @@ final readonly class WpAiBridgeTargetRegistration
                     'metadata_reachable' => true,
                 ]);
 
+                TargetCheckEvidence::recordLocked($target, TargetCheckEvidence::WORDPRESS_METADATA);
+
                 DB::table('wp_ai_bridge_target_reservations')
                     ->where('target_hash', $hash)
                     ->delete();

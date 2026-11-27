@@ -6,9 +6,12 @@ use App\Application\Mcp\TargetMcpToolHandlers;
 use App\Application\Targets\TargetInventory;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
+use App\Domain\Targets\Target;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetConfig;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use Tests\TestCase;
@@ -147,6 +150,71 @@ final class TargetInventoryTest extends TestCase
         self::assertNull($second['next_cursor']);
         self::assertSame('target-00101', $second['targets'][0]['target_id']);
         self::assertSame('target-00150', $second['targets'][49]['target_id']);
+    }
+
+    public function test_mcp_public_metadata_is_batched_only_for_the_authorized_page(): void
+    {
+        Http::preventStrayRequests();
+        $operator = User::query()->create([
+            'name' => 'Scoped metadata operator',
+            'email' => 'metadata-operator@example.test',
+            'password' => 'CorrectHorse!234',
+            'role' => GatewayRole::Operator->value,
+            'target_scope_mode' => TargetScopeMode::Selected->value,
+        ]);
+        $expected = [];
+        for ($i = 1; $i <= 26; $i++) {
+            $slug = sprintf('api-%03d', $i);
+            $target = Target::query()->create([
+                'target_id' => $slug, 'display_name' => $slug,
+                'connector_type' => 'arvancloud', 'connection_state' => 'disconnected',
+            ]);
+            if ($i !== 25) {
+                ArvanApiTargetConfig::query()->create([
+                    'target_record_id' => $target->getKey(), 'base_url' => 'https://'.$slug.'.example.test',
+                    'spec_url' => $i % 2 === 0 ? 'https://'.$slug.'.example.test/spec' : null,
+                    'probe_path' => '/private-probe-path',
+                ]);
+            }
+            if ($i !== 26) {
+                DB::table('user_target_access')->insert([
+                    'user_id' => $operator->getKey(), 'target_record_id' => $target->getKey(),
+                    'allowed' => true, 'created_at' => now(), 'updated_at' => now(),
+                ]);
+                $expected[$slug] = $i === 25 ? null : [
+                    'base_url' => 'https://'.$slug.'.example.test', 'has_openapi_spec' => $i % 2 === 0,
+                ];
+            }
+        }
+        $handler = app(TargetMcpToolHandlers::class);
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        try {
+            $page = $handler->targetsList($operator, limit: 24);
+            $queries = DB::getQueryLog();
+        } finally {
+            DB::disableQueryLog();
+        }
+        self::assertTrue($page['ok']);
+        self::assertCount(24, $page['targets']);
+        self::assertTrue($page['truncated']);
+        $metadataQueries = array_values(array_filter($queries,
+            static fn (array $query): bool => str_contains($query['query'], 'arvan_api_target_configs')));
+        self::assertCount(1, $metadataQueries, 'The public metadata query count must not grow per Arvan Target.');
+        self::assertCount(24, $metadataQueries[0]['bindings']);
+        self::assertStringNotContainsString('probe_path', $metadataQueries[0]['query']);
+        foreach ($page['targets'] as $item) {
+            self::assertSame($expected[$item['target_id']], $item['arvan_api']);
+        }
+        $last = $handler->targetsList($operator, cursor: $page['next_cursor']);
+        self::assertCount(1, $last['targets']);
+        self::assertSame('api-025', $last['targets'][0]['target_id']);
+        self::assertArrayNotHasKey('arvan_api', $last['targets'][0]);
+        self::assertFalse($last['truncated']);
+        $context = $handler->targetContext($operator, 'api-002');
+        self::assertSame($expected['api-002'], $context['target']['arvan_api']);
+        self::assertSame('target_not_found', $handler->targetContext($operator, 'api-026')['error']['code']);
+        Http::assertNothingSent();
     }
 
     public function test_inventory_rejects_unbounded_or_unknown_machine_filters(): void

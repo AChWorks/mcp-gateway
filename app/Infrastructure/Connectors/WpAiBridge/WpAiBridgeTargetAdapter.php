@@ -15,7 +15,6 @@ use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetReconfiguration;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
-use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayUnavailable;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
@@ -56,11 +55,6 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
         return [
             'base_url' => ['required', 'string', 'url:https', 'max:2048'],
         ];
-    }
-
-    public function safeOldInputFields(): array
-    {
-        return ['base_url'];
     }
 
     public function preflightRules(): array
@@ -121,11 +115,6 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
     public function registrationRequiresPassword(array $input): bool
     {
         return false;
-    }
-
-    public function registrationStatus(): string
-    {
-        return __('WordPress Target registered. Connection authorization is not yet configured.');
     }
 
     public function configurationRules(Target $target): array
@@ -200,41 +189,6 @@ final readonly class WpAiBridgeTargetAdapter implements TargetBatchBindingContri
         } catch (WpAiBridgeTargetConnectionException $exception) {
             throw new TargetConnectorFailure($this->connectionFailureMessage($exception), null, $exception->reason, $exception->diagnostics);
         }
-    }
-
-    /** @return array<string, mixed> */
-    public function adminDetails(Target $target): array
-    {
-        $id = $target->getKey();
-        $credential = TargetCredential::query()
-            ->where('target_record_id', $id)->where('connector_type', $this->type())
-            ->where('purpose', WpAiBridgeTargetVault::PURPOSE)->first(['id']);
-
-        return [
-            'wpConfig' => WpAiBridgeTargetConfig::query()->where('target_record_id', $id)->first(),
-            'hasCredential' => $credential !== null,
-            // Read-only, non-secret expiry and generation help avoid offering
-            // a cancellation action when local proof already makes it impossible.
-            'credentialMetadata' => $credential === null ? null : DB::table('wp_ai_bridge_credential_metadata')
-                ->where('credential_id', $credential->getKey())
-                ->first(['credential_id', 'generation', 'access_expires_at']),
-            'revocationIntent' => DB::table('wp_ai_bridge_revocation_intents')
-                ->where('target_record_id', $id)
-                ->first(['id', 'kind', 'phase', 'credential_id', 'generation', 'token_total', 'token_confirmed', 'created_at', 'updated_at']),
-            'revocationPending' => DB::table('wp_ai_bridge_revocation_intents')
-                ->where('target_record_id', $id)->exists(),
-            'oauthFlowPending' => DB::table('wp_ai_bridge_oauth_flows')
-                ->where('target_record_id', $id)->exists(),
-            'refreshIntent' => DB::table('wp_ai_bridge_refresh_intents')
-                ->where('target_record_id', $id)->first(['id', 'created_at']),
-            'refreshPending' => DB::table('wp_ai_bridge_refresh_intents')
-                ->where('target_record_id', $id)->exists(),
-        ];
-    }
-
-    public function publicMetadata(Target $target): array
-    {
-        return [];
     }
 
     public function hasPendingDeletion(Target $target): bool

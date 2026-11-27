@@ -234,22 +234,114 @@ fi
     die "Rejected claim wrote a misleading successful enrollment record."
 echo "PASS: rejected token fails before control-account provisioning."
 
-# EXACT application-generated command executed as root; public test CA is
-# explicitly trusted only by this disposable process. No shell secrets logged.
+# Real interruption before a login write and immediately after the
+# authorized_keys write. Wrappers run only on this disposable CI runner.
+mkdir "$tmp/fault-bin"
+cat > "$tmp/fault-bin/useradd" <<'FAULT'
+#!/bin/sh
+exit 73
+FAULT
+chmod 0755 "$tmp/fault-bin/useradd"
+state="/var/lib/mcp-gateway-reverse/$enrollment/enrollment.json"
+if sudo env PATH="$tmp/fault-bin:$PATH" CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/one-command.sh" > "$tmp/before-write.log" 2>&1; then
+    die "Interrupted account creation was treated as success."
+fi
+sudo python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["_bootstrap"]["phase"]=="unattempted" and d["login_public_key"]' "$state"
+sudo install -m 0600 "$state" "$tmp/unattempted.json"
+sudo test ! -e /home/deploy.prod/.ssh/authorized_keys ||
+    die "Initial login was written before the bootstrap attempt."
+rm "$tmp/fault-bin/useradd"
+real_runuser="$(command -v runuser)"
+cat > "$tmp/fault-bin/runuser" <<FAULT
+#!/bin/bash
+set -eu
+if [[ "\$1" == -u && "\$2" == deploy.prod && "\$3" == -- && "\$4" == python3 ]]; then
+    "$real_runuser" "\$@"
+    kill -KILL "\$PPID"
+    exit 73
+fi
+exec "$real_runuser" "\$@"
+FAULT
+chmod 0755 "$tmp/fault-bin/runuser"
+if sudo env PATH="$tmp/fault-bin:$PATH" CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/one-command.sh" > "$tmp/after-write.log" 2>&1; then
+    die "Interrupted login write was treated as complete."
+fi
+sudo python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["_bootstrap"]["phase"]=="attempted" and d["login_public_key"]' "$state"
+sudo install -m 0600 "$state" "$tmp/attempted.json"
+rm "$tmp/fault-bin/runuser"
+login_keys="/home/deploy.prod/.ssh/authorized_keys"
+login_digest="$(sudo sha256sum "$login_keys" | cut -d ' ' -f1)"
+login_stat="$(sudo stat -c '%i %s %a %y %z' "$login_keys")"
 sudo env CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/one-command.sh" \
     > "$tmp/installer.log" 2>&1 || {
         sed -E 's/[a-f0-9]{64}/[REDACTED]/g' "$tmp/installer.log" >&2
-        die "Single-command Target installer failed."
+        die "Single-command Target installer recovery failed."
     }
+[[ "$(sudo sha256sum "$login_keys" | cut -d ' ' -f1)" == "$login_digest" ]] ||
+    die "Interrupted present-key reconciliation changed authorized_keys."
+[[ "$(sudo stat -c '%i %s %a %y %z' "$login_keys")" == "$login_stat" ]] ||
+    die "Interrupted present-key reconciliation touched authorized_keys."
+sudo python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["_bootstrap"]["phase"]=="complete" and d["login_public_key"]=="" and "bootstrap_receipt" not in d' "$state"
+sudo install -m 0600 "$state" "$tmp/completed.json"
+echo "PASS: durable unattempted resume, actual post-write interruption and present-key settlement without rewrite."
 sudo systemctl is-active --quiet "$target_unit" ||
     { sudo journalctl -u "$target_unit" -n 30 --no-pager >&2; die "Target systemd tunnel not running."; }
 echo "PASS: exact generated command, HTTPS TLS + release digest, one-use claim and Target systemd activation."
+
+# The exact legacy present-key case is also read-only.
+sudo python3 - "$tmp/attempted.json" "$state" <<'PYLEGACY'
+import json,sys
+d=json.load(open(sys.argv[1]))
+for key in ("_bootstrap","bootstrap_receipt","enrollment_id","control_key_hash","target_host_key"):
+    d.pop(key,None)
+with open(sys.argv[2],"w") as f:
+    json.dump(d,f)
+PYLEGACY
+sudo env CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/one-command.sh" > "$tmp/legacy-present.log" 2>&1 ||
+    die "Legacy present-key recovery failed."
+[[ "$(sudo sha256sum "$login_keys" | cut -d ' ' -f1)" == "$login_digest" ]] ||
+    die "Legacy present-key recovery changed authorized_keys."
+[[ "$(sudo stat -c '%i %s %a %y %z' "$login_keys")" == "$login_stat" ]] ||
+    die "Legacy present-key recovery touched authorized_keys."
+sudo python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["_bootstrap"]["phase"]=="complete" and not d["login_public_key"]' "$state"
+echo "PASS: legacy present-key recovery settles without rewriting."
+# Deliberate operator-side removal while retaining an unrelated key.
+ssh-keygen -q -t ed25519 -N '' -C fixture-unrelated -f "$tmp/unrelated"
+sudo install -m 0600 -o deploy.prod -g deploy.prod "$tmp/unrelated.pub" "$login_keys"
+login_digest="$(sudo sha256sum "$login_keys" | cut -d ' ' -f1)"
+login_stat="$(sudo stat -c '%i %s %a %y %z' "$login_keys")"
+for phase in completed attempted legacy; do
+    if [[ "$phase" == legacy ]]; then
+        sudo python3 - "$tmp/attempted.json" "$state" <<'PYLEGACY'
+import json,sys
+d=json.load(open(sys.argv[1]))
+for key in ("_bootstrap","bootstrap_receipt","enrollment_id","control_key_hash","target_host_key"):
+    d.pop(key,None)
+with open(sys.argv[2],"w") as f:
+    json.dump(d,f)
+PYLEGACY
+    else
+        sudo install -m 0600 "$tmp/$phase.json" "$state"
+    fi
+    sudo env CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/one-command.sh" > "$tmp/$phase-recovery.log" 2>&1 ||
+        die "Transport recovery failed for $phase local evidence."
+    [[ "$(sudo sha256sum "$login_keys" | cut -d ' ' -f1)" == "$login_digest" ]] ||
+        die "$phase recovery restored a removed login key."
+    [[ "$(sudo stat -c '%i %s %a %y %z' "$login_keys")" == "$login_stat" ]] ||
+        die "$phase recovery touched unrelated authorized_keys."
+    if [[ "$phase" != completed ]]; then
+        grep -Fq 'Initial SSH login setup could not be confirmed.' "$tmp/$phase-recovery.log" ||
+            die "Missing uncertainty guidance for $phase."
+    fi
+done
+echo "PASS: completed, interrupted-absent and legacy-absent recovery preserves deliberately removed login and unrelated entries."
 
 # Exercise the recovery flow after an already successful but unverified
 # one-use claim. The old complete root state and systemd unit still exist.
 prior_unit="$target_unit"
 prior_user="$control_user"
 prior_id="$enrollment"
+cp "$tmp/one-command.sh" "$tmp/retired-command.sh"
 # Reissue withdraws the old control authorization. The prior SSH process may
 # exit or be in systemd RestartSec backoff, so is-active is not evidence that
 # the owned unit, OS account or root state survived. Pin actual ownership.
@@ -271,6 +363,13 @@ sudo test -f "/var/lib/mcp-gateway-reverse/$prior_id/enrollment.json" ||
     die "Previous Target enrollment's root-owned claim state was removed during Owner reissue."
 getent passwd "$prior_user" >/dev/null ||
     die "Previous Target tunnel account was removed during Owner reissue."
+# Provably unattempted but retired enrollment is not fresh authority.
+sudo install -m 0600 "$tmp/unattempted.json" "/var/lib/mcp-gateway-reverse/$prior_id/enrollment.json"
+sudo env CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/retired-command.sh" > "$tmp/retired-recovery.log" 2>&1 || true
+[[ "$(sudo sha256sum "$login_keys" | cut -d ' ' -f1)" == "$login_digest" ]] ||
+    die "Retired cached bootstrap restored login authorization."
+sudo python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["_bootstrap"]["phase"]=="uncertain" and d["login_public_key"]==""' "/var/lib/mcp-gateway-reverse/$prior_id/enrollment.json"
+echo "PASS: retired exact unattempted cache cannot authorize a login write."
 sudo env CURL_CA_BUNDLE="$tmp/tls.crt" sh "$tmp/one-command.sh" \
     > "$tmp/reissued.log" 2>&1 || {
         sed -E 's/[a-f0-9]{64}/[REDACTED]/g' "$tmp/reissued.log" >&2
