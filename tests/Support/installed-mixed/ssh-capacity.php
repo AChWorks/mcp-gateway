@@ -5,21 +5,24 @@ declare(strict_types=1);
 use Mcp\Client;
 
 /** Identical staged-script workload and assertions across actual SSH routes. */
-function qualifyStagedScript(Closure $run, Closure $check): array
+function qualifyStagedScript(Closure $run, Closure $check, int $sleepSeconds = 0): array
 {
     // Same admitted byte ceiling, explicitly staged instead of native argv.
-    $tail = "\n".'printf "staged-512k-ok"; printf "staged-512k-err" >&2; exit 7';
+    $tail = "\n".($sleepSeconds > 0 ? 'sleep '.$sleepSeconds."\n" : '')
+        .'printf "staged-512k-ok"; printf "staged-512k-err" >&2; exit 7';
     $script = '# '.str_repeat('x', 524288 - 2 - strlen($tail)).$tail;
     $staged = $run($script, '/bin/sh');
     $stageResult = $staged['result'] ?? [];
     $check(($staged['ok'] ?? false) === true && ($stageResult['status'] ?? null) === 'completed'
+        && ($stageResult['complete'] ?? false) === true
         && ($stageResult['script_bytes'] ?? null) === 524288
         && ($stageResult['script_staging_verified'] ?? false) === true
         && ($stageResult['script_launch_attempted'] ?? false) === true
         && ($stageResult['stdout'] ?? null) === 'staged-512k-ok'
         && ($stageResult['stderr'] ?? null) === 'staged-512k-err'
         && ($stageResult['exit_code'] ?? null) === 7
-        && ($stageResult['temporary_cleanup_confirmed'] ?? false) === true,
+        && ($stageResult['temporary_cleanup_confirmed'] ?? false) === true
+        && ($stageResult['duration_ms'] ?? 0) >= $sleepSeconds * 1000,
         'Verified 512 KiB staged synchronous script failed: '.json_encode($staged, JSON_THROW_ON_ERROR));
     $stageEvidence = [
         'input_bytes' => strlen($script), 'interpreter' => '/bin/sh',
@@ -33,14 +36,34 @@ function qualifyStagedScript(Closure $run, Closure $check): array
     return $stageEvidence;
 }
 
-function qualifyInstalledStagedScript(Client $client, string $target, string $prefix, Closure $call, Closure $check): array
-{
-    return qualifyStagedScript(
+function qualifyInstalledStagedScript(
+    Client $client, string $target, string $prefix, Closure $call, Closure $check,
+    int $sleepSeconds = 0, int $timeout = 0,
+): array {
+    $label = $prefix.'ssh_staged_512k'.($sleepSeconds > 0 ? '_'.$sleepSeconds.'s' : '');
+    if ($sleepSeconds > 0) {
+        $check($timeout > $sleepSeconds, 'Extended staged fixture requires time for preparation and cleanup.');
+        fwrite(STDERR, 'Stage: '.$label.' with selected '.$timeout."s timeout.\n");
+    }
+    $started = hrtime(true);
+    $result = qualifyStagedScript(
         static fn (string $script, string $interpreter): array => $call($client, 'ssh-script-run', [
             'target_id' => $target, 'script' => $script, 'interpreter' => $interpreter,
-        ], $prefix.'ssh_staged_512k'),
+            ...($timeout > 0 ? ['timeout_seconds' => $timeout] : []),
+        ], $label, $timeout > 0 ? $timeout + 30 : null),
         $check,
+        $sleepSeconds,
     );
+    if ($sleepSeconds > 0) {
+        $clientMs = round((hrtime(true) - $started) / 1000000, 2);
+        $check($clientMs >= $sleepSeconds * 1000, 'Extended staged SDK duration is shorter than the actual workload.');
+        $result += [
+            'requested_sleep_seconds' => $sleepSeconds, 'selected_timeout_seconds' => $timeout,
+            'client_duration_ms' => $clientMs,
+        ];
+    }
+
+    return $result;
 }
 
 function qualifyInstalledInlineSftp(Client $client, string $target, string $prefix, Closure $call, Closure $check): array

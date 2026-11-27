@@ -13,6 +13,8 @@ require __DIR__.'/ssh-capacity.php';
 $state = json_decode((string) file_get_contents($root.'/secrets/state.json'), true, 512, JSON_THROW_ON_ERROR);
 $longSeconds = (int) (getenv('MIXED_SSH_LONG_SECONDS') ?: 0);
 $longTimeout = (int) (getenv('MIXED_SSH_LONG_TIMEOUT') ?: 0);
+$longMode = getenv('MIXED_SSH_LONG_MODE') ?: 'native';
+$longRoute = getenv('MIXED_SSH_LONG_ROUTE') ?: 'direct';
 $httpExchanges = [];
 $http = new Http(['verify' => $root.'/secrets/tls.crt', 'proxy' => '', 'http_errors' => false, 'timeout' => $longTimeout > 0 ? $longTimeout + 30 : 30,
     'on_stats' => static function (TransferStats $stats) use (&$httpExchanges): void {
@@ -66,7 +68,8 @@ $call = static function (Client $c, string $name, array $args, string $label, ?f
 };
 if (($argv[1] ?? '') === 'relay') {
     require __DIR__.'/relay-client.php';
-    $result = qualifyInstalledRelay($state, $argv[2] ?? '', $client, $http, $connect, $call, $check);
+    $result = qualifyInstalledRelay($state, $argv[2] ?? '', $client, $http, $connect, $call, $check,
+        $longMode === 'staged' && $longRoute === 'relay' ? $longSeconds : 0, $longTimeout);
     echo json_encode($result + ['latency_ms' => $timings, 'wire' => $wire],
         JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT)."\n";
     exit(0);
@@ -342,7 +345,12 @@ try {
         $operator->disconnect();
     }
     $extended = null;
-    if ($longTimeout > 0) {
+    $extendedStaged = null;
+    if ($longTimeout > 0 && $longMode === 'staged' && $longRoute === 'direct') {
+        $extendedStaged = qualifyInstalledStagedScript(
+            $client, $state['ssh_target'], '', $call, $check, $longSeconds, $longTimeout,
+        );
+    } elseif ($longTimeout > 0 && $longMode === 'native') {
         // Only an explicitly selected isolated qualification, never the
         // routine PR lane. No client retry or implicit Job conversion.
         $marker = 'long-exec-'.$longSeconds;
@@ -380,6 +388,7 @@ try {
         'ssh_command_input_measurements' => $commandInputs,
         'ssh_staged_script' => $stageEvidence,
         'ssh_extended_duration' => $extended,
+        'ssh_extended_staged' => $extendedStaged,
         'http_wire_measurements' => $wire,
         'client_peak_memory_bytes' => memory_get_peak_usage(true),
         'latency_ms' => $timings,

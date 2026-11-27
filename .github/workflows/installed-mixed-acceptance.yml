@@ -14,9 +14,14 @@ on:
   workflow_dispatch:
     inputs:
       extended:
-        description: 'Also qualify actual 350s and 590s commands on separate isolated runners'
+        description: 'Also qualify actual 350s and 590s execution on separate isolated runners'
         type: boolean
         default: false
+      extended_mode:
+        description: 'Extended native exec or explicit staged script (350s Direct, 590s Relay)'
+        type: choice
+        options: [native, staged]
+        default: native
 
 permissions:
   contents: read
@@ -33,7 +38,7 @@ jobs:
       fail-fast: false
       matrix:
         long_seconds: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.extended && '[350,590]' || '[0]') }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.long_seconds > 0 && 20 || 15 }}
     steps:
       - name: Check out exact candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,9 +71,14 @@ jobs:
           sha256sum --check "$GITHUB_WORKSPACE/tests/Support/installed-mixed/fixture-pins.sha256"
 
       - name: Prove installed HTTPS OAuth, MCP and native SSH
+        env:
+          LONG_MODE: ${{ inputs.extended_mode || 'native' }}
+          LONG_ROUTE: ${{ inputs.extended_mode == 'staged' && matrix.long_seconds == 590 && 'relay' || 'direct' }}
         run: |
           sudo env PATH="$PATH" MIXED_WORKER_USER=mixedfixture \
             MIXED_SSH_LONG_SECONDS="${{ matrix.long_seconds }}" \
+            MIXED_SSH_LONG_MODE="$LONG_MODE" \
+            MIXED_SSH_LONG_ROUTE="$LONG_ROUTE" \
             MIXED_INPUT_DIR="$RUNNER_TEMP/mixed-inputs" \
             MIXED_EVIDENCE_DIR="$RUNNER_TEMP/mixed-evidence" \
             bash tests/Support/installed-mixed/run.sh
