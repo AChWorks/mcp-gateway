@@ -3,6 +3,7 @@
 namespace Tests\Feature\Migration;
 
 use App\Domain\Targets\Target;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -39,6 +40,68 @@ final class GatewayV3FreshSchemaTest extends TestCase
         self::assertTrue(Schema::hasColumns('target_check_evidence', ['target_record_id', 'kind', 'transport_revision',
             'attempt_id', 'observed_at', 'error_code', 'last_failure_at', 'last_failure_code']));
         self::assertSame(46, count(Schema::getTables()) - 1);
+    }
+
+    public function test_check_evidence_backfill_keeps_only_attributable_observations_current_and_is_restart_safe(): void
+    {
+        $early = '2026-10-01 10:00:00.000000';
+        $late = '2026-10-01 11:00:00.000000';
+        $ssh = Target::query()->create([
+            'target_id' => 'legacy-ssh', 'display_name' => 'SSH', 'connector_type' => 'ssh_direct',
+            'connection_state' => 'connected', 'last_tested_at' => $late,
+        ]);
+        $wordpress = [];
+        foreach (['current', 'failed', 'historical'] as $name) {
+            $base = 'https://'.$name.'.example.test';
+            $target = Target::query()->create([
+                'target_id' => $name, 'display_name' => $name, 'connector_type' => 'wp_ai_bridge',
+                'connection_state' => 'connected',
+                'last_tested_at' => match ($name) {
+                    'current' => $early,
+                    'failed' => $late,
+                    default => null,
+                },
+                'last_failure_at' => $name === 'failed' ? $late : null,
+                'last_failure_code' => $name === 'failed' ? 'metadata_unreachable' : null,
+            ]);
+            DB::table('targets')->where('id', $target->getKey())->update(['transport_revision' => 3]);
+            WpAiBridgeTargetConfig::query()->create([
+                'target_record_id' => $target->getKey(),
+                'base_url' => $base, 'base_url_hash' => hash('sha256', $base),
+                'mcp_resource_url' => $base.'/mcp', 'oauth_issuer_url' => $base,
+                'oauth_authorization_url' => $base.'/authorize', 'oauth_token_url' => $base.'/token',
+                'oauth_revocation_url' => $base.'/revoke',
+                'metadata_checked_at' => $early, 'metadata_reachable' => true,
+            ]);
+            $wordpress[$name] = $target;
+        }
+        $migration = require database_path('migrations/0001_01_01_000010_record_target_check_evidence.php');
+        $migration->up();
+        $evidence = DB::table('target_check_evidence')->get()->keyBy('target_record_id');
+        self::assertCount(4, $evidence);
+        self::assertSame('ssh_login', $evidence[$ssh->getKey()]->kind);
+        self::assertSame(0, (int) $evidence[$ssh->getKey()]->transport_revision);
+        self::assertNull($evidence[$ssh->getKey()]->error_code);
+        $current = $evidence[$wordpress['current']->getKey()];
+        self::assertSame('wordpress_metadata', $current->kind);
+        self::assertSame(3, (int) $current->transport_revision);
+        self::assertNull($current->error_code);
+        $failed = $evidence[$wordpress['failed']->getKey()];
+        self::assertSame(3, (int) $failed->transport_revision);
+        self::assertSame('metadata_unreachable', $failed->error_code);
+        self::assertSame($failed->observed_at, $failed->last_failure_at);
+        $historical = $evidence[$wordpress['historical']->getKey()];
+        self::assertNotNull($historical->observed_at);
+        self::assertNull($historical->transport_revision);
+        self::assertSame(4, Target::query()->where('connection_state', 'connected')->count());
+
+        // A repeated backfill must not replace evidence recorded after migration.
+        DB::table('target_check_evidence')->where('target_record_id', $ssh->getKey())
+            ->update(['error_code' => 'newer_failure']);
+        $migration->up();
+        self::assertSame('newer_failure', DB::table('target_check_evidence')
+            ->where('target_record_id', $ssh->getKey())->value('error_code'));
+        self::assertSame(4, DB::table('target_check_evidence')->count());
     }
 
     public function test_fresh_v3_seeds_required_operational_state_without_old_target_or_access_data(): void

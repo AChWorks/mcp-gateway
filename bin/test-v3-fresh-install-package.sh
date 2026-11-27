@@ -142,9 +142,14 @@ $owner = $ownerQuery->fetchColumn();
 $legacyQuery = $pdo->prepare("SHOW TABLES LIKE ?");
 $legacyQuery->execute(["sites"]);
 $historic = $legacyQuery->fetchAll();
-if ((int) $count !== 46 || (int) $owner !== 1 || $historic !== []) {
+$evidenceColumns = $pdo->query("SHOW COLUMNS FROM target_check_evidence")->fetchAll(PDO::FETCH_COLUMN);
+if ($evidenceColumns !== ["target_record_id", "kind", "transport_revision", "attempt_id", "observed_at",
+    "error_code", "last_failure_at", "last_failure_code"]) {
+    throw new RuntimeException("Invalid installed Target check evidence schema.");
+}
+if ((int) $count !== 47 || (int) $owner !== 1 || $historic !== []) {
     throw new RuntimeException(sprintf("Invalid installed schema/users: tables=%d owners=%d", $count, $owner));
 }
-printf("PASS: packaged v3 fresh installation, 46 tables, %d exact migrations, 1 Owner, 0600 private keys, locked reinstall and gateway:check.\n",
+printf("PASS: packaged v3 fresh installation, 47 tables, %d exact migrations, 1 Owner, 0600 private keys, locked reinstall and gateway:check.\n",
     count($migrations));
 '
