@@ -6,6 +6,7 @@ use App\Application\Access\UserAccessManager;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Operations\OperationalSettings;
+use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
@@ -201,6 +202,75 @@ final class SshCommandMcpTest extends TestCase
             }
         } finally {
             ini_set('max_execution_time', $old);
+        }
+    }
+
+    public function test_staged_script_requires_command_and_write_but_not_separate_file_read_authority(): void
+    {
+        $actor = $this->user('operator');
+        $target = $this->target();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        DB::table('user_target_access')->insert([
+            'user_id' => $actor->getKey(), 'target_record_id' => $target->getKey(), 'allowed' => true,
+        ]);
+        $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
+        {
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                throw new SshTargetConnectionException('egress_denied');
+            }
+        });
+
+        $handler = app(SshCommandMcpToolHandlers::class);
+        $script = 'printf private-script-never-in-activity';
+        self::assertSame('target_not_found', $handler->runScript($actor, $target->target_id, $script, '/bin/sh')['error']['code']);
+        DB::table('user_permission_denials')->where('user_id', $actor->getKey())
+            ->where('permission', GatewayPermission::SshCommandRun->value)->delete();
+        self::assertSame('egress_denied', $handler->run($actor, $target->target_id, $script)['error']['code']);
+        self::assertSame('target_not_found', $handler->runScript($actor, $target->target_id, $script, '/bin/sh')['error']['code']);
+        DB::table('user_permission_denials')->where('user_id', $actor->getKey())
+            ->where('permission', GatewayPermission::SshFileWrite->value)->delete();
+        $refused = $handler->runScript($actor, $target->target_id, $script, '/bin/sh');
+        self::assertSame('egress_denied', $refused['error']['code']);
+        self::assertFalse($refused['result']['script_launch_attempted']);
+        self::assertTrue($refused['result']['temporary_cleanup_confirmed']);
+        DB::table('user_target_permission_denials')->insert([
+            'user_id' => $actor->getKey(), 'target_record_id' => $target->getKey(),
+            'permission' => GatewayPermission::SshCommandRun->value,
+        ]);
+        self::assertSame('target_not_found', $handler->runScript($actor, $target->target_id, $script, '/bin/sh')['error']['code']);
+        self::assertStringNotContainsString($script, json_encode(
+            DB::table('activity_events')->where('operation', 'ssh-script-run')->get(), JSON_THROW_ON_ERROR));
+    }
+
+    public function test_staged_script_reuses_owner_byte_timeout_and_absolute_interpreter_contract(): void
+    {
+        $owner = $this->user('owner');
+        $target = $this->target();
+        $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+        DB::table('operational_settings')->where('id', 1)->update([
+            'ssh_command_max_kib' => 512, 'ssh_command_timeout_seconds' => 600,
+        ]);
+        $this->app->forgetInstance(OperationalSettings::class);
+        // No live network; preserve the exact typed admission denial.
+        $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
+        {
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                throw new SshTargetConnectionException('egress_denied');
+            }
+        });
+        $handler = app(SshCommandMcpToolHandlers::class);
+        self::assertSame('egress_denied', $handler->runScript($owner, $target->target_id, str_repeat('é', 262144), '/bin/sh', 600)['error']['code']);
+        foreach ([
+            [str_repeat('é', 262145), '/bin/sh', 600],
+            ['echo ok', 'sh', 10],
+            ['echo ok', '/bin/sh'.chr(0), 10],
+            ['echo ok', '/bin/sh', 601],
+        ] as [$script, $interpreter, $seconds]) {
+            $result = $handler->runScript($owner, $target->target_id, $script, $interpreter, $seconds);
+            self::assertSame('invalid_input', $result['error']['code']);
+            self::assertSame(['max_command_bytes' => 524288, 'max_timeout_seconds' => 600], $result['error']['effective_limits']);
         }
     }
 

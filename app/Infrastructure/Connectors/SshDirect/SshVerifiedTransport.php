@@ -48,10 +48,11 @@ final readonly class SshVerifiedTransport
         SshRegisteredEndpoint $endpoint, SshHostKeyPin $pin,
         string $authMethod, string $secret, ?string $passphrase,
         Closure $operation, ?SshReverseRoute $route = null, ?LocalSocks5Route $relay = null, ?Closure $beforeLogin = null,
+        ?int $deadlineNs = null,
     ): mixed {
         return $this->withAuthenticatedOperation(
             $endpoint, $pin, $authMethod, $secret, $passphrase, $operation, false,
-            null, $route, $relay, $beforeLogin,
+            $deadlineNs, $route, $relay, $beforeLogin,
         );
     }
 
@@ -197,7 +198,7 @@ final readonly class SshVerifiedTransport
             try {
                 $ssh = $requireSftp
                     ? new SshSubsystemOnlySftp($socket, $dialPort, $this->boundedTimeout(8, $deadlineNs))
-                    : new SSH2($socket, $dialPort, 8);
+                    : new SSH2($socket, $dialPort, $this->boundedTimeout(8, $deadlineNs));
                 $ssh->setTimeout($this->boundedTimeout(8, $deadlineNs));
                 if ($ssh instanceof SshSubsystemOnlySftp && $deadlineNs !== null) {
                     $ssh->startOperationDeadline($deadlineNs);
@@ -235,10 +236,10 @@ final readonly class SshVerifiedTransport
             }
 
             $this->assertDeadline($deadlineNs);
-            if ($requireSftp && $deadlineNs !== null) {
+            if ($deadlineNs !== null) {
                 // phpseclib's SSH identification uses stream_select(), which
                 // may not work on filtered sockets. Attach AFTER verified login.
-                // This bounds all subsequent raw SFTP channel reads/writes.
+                // Bound subsequent raw channel reads/writes of this operation.
                 SshSocketDeadline::attach($socket, $deadlineNs);
             }
 

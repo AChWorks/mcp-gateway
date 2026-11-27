@@ -85,7 +85,7 @@ Gateway v3.0.0 registered **30 standard MCP Tools**, grouped below by purpose. Q
 | WordPress (3) | `wordpress-abilities-read`, `wordpress-ability-execute`, `wordpress-content-publish-create` | Dynamic Abilities and separately gated publishing |
 | WordPress Batch (2) | `wordpress-bridge-batch-preview`, `wordpress-bridge-batch-read` | Fixed read-only information Batch |
 | ArvanCloud (2) | `arvan-api-catalog`, `arvan-api-request` | Optional OpenAPI catalog and authenticated fixed-origin REST |
-| SSH commands (1) | `ssh-command-run` | Approved remote command |
+| SSH commands (2) | `ssh-command-run`, `ssh-script-run` | Native remote command or explicit verified staged synchronous script |
 | SFTP and file changes (6) | `ssh-file-stat`, `ssh-file-list`, `ssh-file-read`, `ssh-file-write`, `ssh-file-patch`, `ssh-change-verify` | Bounded, verifiable remote file operations |
 | SSH Jobs (5) | `ssh-job-start`, `ssh-jobs-list`, `ssh-job-status`, `ssh-job-output`, `ssh-job-cancel` | Durable remote job lifecycle |
 | SSH diagnostics (3) | `ssh-system-inspect`, `ssh-network-diagnose`, `ssh-logs-query` | Typed observations and diagnostics |

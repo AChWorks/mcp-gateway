@@ -43,6 +43,18 @@ final class SshCommandExecutionDeadline
         return max(1, (int) ceil($remainingNs / 1_000_000_000));
     }
 
+    public function expiresAtNs(): int
+    {
+        return $this->expiresAtNs;
+    }
+
+    public function assertAvailable(): void
+    {
+        if ($this->expired()) {
+            throw new SshTargetConnectionException('transfer_timed_out');
+        }
+    }
+
     public function expired(): bool
     {
         return ($this->clock)() >= $this->expiresAtNs;

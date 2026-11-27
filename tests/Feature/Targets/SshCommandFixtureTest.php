@@ -222,7 +222,50 @@ final class SshCommandFixtureTest extends TestCase
         self::assertSame(0, $result['result']['exit_code']);
     }
 
-    private function target(string $method): Target
+    public function test_staged_512_kib_script_uses_exact_bytes_and_native_output_without_systemd(): void
+    {
+        $target = $this->target('password');
+        $owner = $this->owner();
+        DB::table('operational_settings')->where('id', 1)->update([
+            'ssh_command_max_kib' => 512, 'ssh_command_timeout_seconds' => 30,
+        ]);
+        $this->app->forgetInstance(OperationalSettings::class);
+        $tail = "\nprintf 'staged-tail'; printf 'staged-error' >&2; exit 7";
+        $script = '# '.str_repeat('x', 524288 - 2 - strlen($tail)).$tail;
+        $result = app(SshCommandMcpToolHandlers::class)->runScript($owner, $target->target_id, $script, '/bin/sh', 30);
+        self::assertTrue($result['ok'], json_encode($result));
+        self::assertSame(524288, $result['result']['script_bytes']);
+        self::assertTrue($result['result']['script_staging_verified']);
+        self::assertTrue($result['result']['script_launch_attempted']);
+        self::assertSame('staged-tail', $result['result']['stdout']);
+        self::assertSame('staged-error', $result['result']['stderr']);
+        self::assertSame(7, $result['result']['exit_code']);
+        self::assertTrue($result['result']['temporary_cleanup_confirmed'], json_encode($result));
+        self::assertArrayNotHasKey('script_staging_path', $result['result']);
+        self::assertSame(0, DB::table('ssh_command_jobs')->count());
+        self::assertSame(1, DB::table('activity_events')->where('operation', 'ssh-script-run')->count());
+        self::assertStringNotContainsString('staged-tail', json_encode(DB::table('activity_events')->where('operation', 'ssh-script-run')->get(), JSON_THROW_ON_ERROR));
+    }
+
+    public function test_command_only_host_keeps_native_exec_and_refuses_script_before_launch(): void
+    {
+        $target = $this->target('password', (int) $this->env('SSH_FIXTURE_PORT_NO_SFTP'));
+        $owner = $this->owner();
+        $handler = app(SshCommandMcpToolHandlers::class);
+        $ordinary = $handler->run($owner, $target->target_id, 'printf native-ok');
+        self::assertTrue($ordinary['ok'], json_encode($ordinary));
+        self::assertSame('native-ok', $ordinary['result']['stdout']);
+        $staged = $handler->runScript($owner, $target->target_id, 'printf should-not-run', '/bin/sh');
+        self::assertFalse($staged['ok'], json_encode($staged));
+        self::assertSame('failed', $staged['result']['status']);
+        self::assertSame('upload', $staged['result']['script_stage']);
+        self::assertFalse($staged['result']['script_launch_attempted']);
+        self::assertFalse($staged['result']['script_staging_verified']);
+        self::assertTrue($staged['result']['temporary_cleanup_confirmed'], json_encode($staged));
+        self::assertSame('native-ok', $handler->run($owner, $target->target_id, 'printf native-ok')['result']['stdout']);
+    }
+
+    private function target(string $method, ?int $port = null): Target
     {
         $secret = $method === 'password'
             ? $this->env('SSH_FIXTURE_PASSWORD')
@@ -230,7 +273,7 @@ final class SshCommandFixtureTest extends TestCase
 
         $target = app(SshTargetRegistration::class)->register(
             'ssh-command-'.str_replace('_', '-', $method), 'Command fixture', 'fixture.example.test',
-            (int) $this->env('SSH_FIXTURE_PORT_MODERN'), $this->env('SSH_FIXTURE_USER'),
+            $port ?? (int) $this->env('SSH_FIXTURE_PORT_MODERN'), $this->env('SSH_FIXTURE_USER'),
             trim((string) file_get_contents($this->env('SSH_FIXTURE_ED25519_HOST_PUB'))),
             $method, $secret, $method === 'password' ? null : $this->env('SSH_FIXTURE_KEY_PASSPHRASE'),
         );

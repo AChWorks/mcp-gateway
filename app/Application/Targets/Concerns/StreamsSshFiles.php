@@ -118,6 +118,8 @@ trait StreamsSshFiles
      * compare-and-swap. Optional size/mtime checks are only best effort.
      *
      * @param  resource  $source
+     * @param  list<GatewayPermission>  $additionalPermissions
+     * @param  (Closure(SFTP, Closure():void):void)|null  $verifyStaging
      * @return array<string, mixed>
      */
     public function uploadFromStream(
@@ -126,7 +128,7 @@ trait StreamsSshFiles
         bool $overwrite = false, ?int $expectedSize = null, ?int $expectedMtime = null,
         ?string $expectedTargetBinding = null, ?int $overallDeadlineNs = null,
         ?string $expectedCredentialDispatch = null, ?string $expectedExecution = null,
-        ?Closure $admitRemoteEffect = null,
+        ?Closure $admitRemoteEffect = null, array $additionalPermissions = [], ?Closure $verifyStaging = null,
     ): array {
         $this->validatePath($path);
         $this->validatePath($privateStagingDir);
@@ -150,11 +152,12 @@ trait StreamsSshFiles
         return $this->operate($user, $target, GatewayPermission::SshFileWrite,
             function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $assertWriteAuthority, string $routeMode) use (
                 $path, $source, $expectedBytes, $expectedSha256, $deadline, $privateStagingDir,
-                $overwrite, $expectedSize, $expectedMtime, $admitRemoteEffect,
+                $overwrite, $expectedSize, $expectedMtime, $admitRemoteEffect, $additionalPermissions, $verifyStaging,
             ): array {
                 $sftp->disableStatCache();
                 try {
                     $this->ensureStreamDeadline($deadline);
+                    $verifyStaging?->__invoke($sftp, $assertWriteAuthority);
                     $directory = $sftp->lstat($privateStagingDir);
                     // Existing 0700 and authenticated-principal ownership
                     // together protect the temporary bytes from first write.
@@ -314,6 +317,7 @@ trait StreamsSshFiles
                     }
 
                     $this->ensureStreamDeadline($deadline);
+                    $verifyStaging?->__invoke($sftp, $assertWriteAuthority);
                     if (! $overwrite) {
                         // Current permission, Target Pause and channel must
                         // all remain valid at the actual publication boundary.
@@ -357,9 +361,9 @@ trait StreamsSshFiles
                         'complete' => false,
                         'possible_remote_effect' => true,
                         'temporary_cleanup_confirmed' => $cleanup,
-                        // Internal Job caller retains native evidence; the
+                        // Compound operation callers retain native evidence; the
                         // public whole-file response contract stays unchanged.
-                        ...($admitRemoteEffect === null ? [] : [
+                        ...($admitRemoteEffect === null && $additionalPermissions === [] ? [] : [
                             '__diagnostic_context' => $this->writeStagingDiagnostics($exception),
                         ]),
                     ];
@@ -377,7 +381,7 @@ trait StreamsSshFiles
                     'overwrote' => $overwrite,
                     'published_mode' => sprintf('%04o', $publishedMode),
                 ];
-            }, $deadline, expectedTargetBinding: $expectedTargetBinding, expectedCredentialDispatch: $expectedCredentialDispatch, expectedExecution: $expectedExecution, admitRemoteEffect: $admitRemoteEffect);
+            }, $deadline, expectedTargetBinding: $expectedTargetBinding, expectedCredentialDispatch: $expectedCredentialDispatch, expectedExecution: $expectedExecution, admitRemoteEffect: $admitRemoteEffect, additionalPermissions: $additionalPermissions);
     }
 
     private function validateTransferLimit(int $maxBytes): void

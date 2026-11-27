@@ -329,8 +329,8 @@ database-backed Owner control, **not** an invented `.env` key. In particular,
 
 | Setting | Default | Owner range | Meaning |
 | --- | ---: | ---: | --- |
-| `ssh_command_timeout_seconds` | 15 s | 15–600 s | Selected synchronous SSH exec timeout; actual supported host/HTTP/MCP path must be qualified |
-| `ssh_command_max_kib` | 8 KiB | 8–512 KiB | Raw UTF-8 command input bytes |
+| `ssh_command_timeout_seconds` | 15 s | 15–600 s | Selected native SSH exec-phase or staged synchronous script whole-operation timeout; actual supported host/HTTP/MCP path must be qualified |
+| `ssh_command_max_kib` | 8 KiB | 8–512 KiB | Raw UTF-8 native command or staged synchronous script input bytes |
 | `ssh_command_stdout_kib` | 16 KiB | 16–512 KiB | Captured command stdout before discarding further output |
 | `ssh_command_stderr_kib` | 8 KiB | 8–512 KiB | Captured command stderr before discarding further output |
 | `ssh_job_max_script_kib` | 16 KiB | 16–512 KiB | Entire staged Job script bytes; internal verified SFTP chunks stay bounded |

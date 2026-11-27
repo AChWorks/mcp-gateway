@@ -250,6 +250,31 @@ try {
     ], 'ssh_after_input_probe');
     $check(($afterInput['result']['stdout'] ?? null) === 'after-input-probe'
         && ($afterInput['result']['exit_code'] ?? null) === 0, 'Native command after input probe failed.');
+    // Same admitted byte ceiling, explicitly staged instead of native argv.
+    $tail = "\n".'printf "staged-512k-ok"; printf "staged-512k-err" >&2; exit 7';
+    $script = '# '.str_repeat('x', 524288 - 2 - strlen($tail)).$tail;
+    $staged = $call($client, 'ssh-script-run', [
+        'target_id' => $state['ssh_target'], 'script' => $script, 'interpreter' => '/bin/sh',
+    ], 'ssh_staged_512k');
+    $stageResult = $staged['result'] ?? [];
+    $check(($staged['ok'] ?? false) === true && ($stageResult['status'] ?? null) === 'completed'
+        && ($stageResult['script_bytes'] ?? null) === 524288
+        && ($stageResult['script_staging_verified'] ?? false) === true
+        && ($stageResult['script_launch_attempted'] ?? false) === true
+        && ($stageResult['stdout'] ?? null) === 'staged-512k-ok'
+        && ($stageResult['stderr'] ?? null) === 'staged-512k-err'
+        && ($stageResult['exit_code'] ?? null) === 7
+        && ($stageResult['temporary_cleanup_confirmed'] ?? false) === true,
+        'Verified 512 KiB staged synchronous script failed: '.json_encode($staged, JSON_THROW_ON_ERROR));
+    $stageEvidence = [
+        'input_bytes' => strlen($script), 'interpreter' => '/bin/sh',
+        'script_staging_verified' => $stageResult['script_staging_verified'],
+        'script_launch_attempted' => $stageResult['script_launch_attempted'],
+        'stdout' => $stageResult['stdout'], 'stderr' => $stageResult['stderr'],
+        'exit_code' => $stageResult['exit_code'], 'temporary_cleanup_confirmed' => $stageResult['temporary_cleanup_confirmed'],
+        'duration_ms' => $stageResult['duration_ms'],
+    ];
+    unset($script, $staged, $stageResult);
     $bytes = random_bytes(524288);
     $file = '/home/'.getenv('MIXED_SSH_USER').'/mixed-'.bin2hex(random_bytes(8)).'.bin';
     try {
@@ -346,6 +371,7 @@ try {
         'wp_same_grant_direct_routed_input' => $wpInput,
         'ssh_command_output_windows' => $streamEvidence,
         'ssh_command_input_measurements' => $commandInputs,
+        'ssh_staged_script' => $stageEvidence,
         'ssh_extended_duration' => $extended,
         'http_wire_measurements' => $wire,
         'client_peak_memory_bytes' => memory_get_peak_usage(true),
