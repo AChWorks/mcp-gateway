@@ -128,6 +128,24 @@ includes actual wire body sizes, SFTP byte size, digest, representative latency 
   both routes must return the exact expected size, SHA-256 and identity.
 - Read a complete native Unicode document through source-bound 128 KiB windows
   and verify its SHA-256, completion and wrong-hash continuation rejection.
+- Compare native draft creation and updates under the same downstream grant:
+  independently observe stored author, draft status and content digest; reject
+  stale state and withdrawn Builder permission without changing stored state.
+  Enable the necessary Builder permission only in the disposable fixture.
+- Qualify the pinned provider's private-transfer input lifecycle (empty and
+  multi-window staging, invalid offset, verify, native stored digest, cancel).
+  A verified input is not a readable output. Separately create an authorized
+  native Media export, reconstruct it through both paths, verify every offset
+  and digest, and dispose of the verified export using `cancel`. The pinned
+  provider reserves `release` for native-effect receipts; verify that it
+  rejects release of an unconsumed verified export. Check actual cleanup.
+- Preserve the provider's mixed-effect classification even for its read action:
+  an operator without destructive authority must not read or cancel the lease.
+  Compare actual decoded MCP response envelopes against 64 KiB default and
+  96 KiB fixture Gateway ordinary budgets and the effective provider budget.
+  Require exact results within budget and truthful unknown-effect diagnostics
+  for over-budget mixed-effect replies, without blind retry or automatic budget
+  increases. Verify complete smaller-window reads under both Gateway budgets.
 - Verified OpenSSH host key, SSH command, real 512 KiB inline SFTP write/stat/read,
   byte and SHA-256 equality; denied path and cross-Target misuse.
 - Independently captured 512 KiB stdout and stderr through real HTTPS MCP,
@@ -146,7 +164,7 @@ includes actual wire body sizes, SFTP byte size, digest, representative latency 
 
 ## Boundaries and review gate
 
-The isolated clients can prove that **their own** authenticated inbound/outbound SSH file bytes are complete; they cannot prove full external OAuth client enrollment, every reverse-proxy/DNS topology, arbitrary third-party host compatibility, WordPress-native raw binary transfer or actual ChatGPT model-file ingestion. The near-1 MiB native read-only Ability is not a proof for every mutating Ability, arbitrary request encoding, SSH maximum command input or detached Job script size. The optional manual workflow dispatch with `extended=true` runs the same fixture on two separate disposable runners, additionally testing a real 350-second command with a 360-second selected timeout and a 590-second command with a 600-second selected timeout. The CLI HTTP worker and SDK deadlines are deliberately sized for this experiment; no production setting changes. Require the exact output marker, exit 7, complete result and measured duration. Host proxy limits, maximum concurrency and actual external client capacity require separate evidence. Use distinct real-host acceptance for those properties.
+The isolated clients can prove that **their own** authenticated inbound/outbound SSH file bytes are complete; they cannot prove full external OAuth client enrollment, every reverse-proxy/DNS topology, arbitrary third-party host compatibility, arbitrary WordPress-native raw binary transfer or actual ChatGPT model-file ingestion. The provider-private staging and Media export assertions cover the pinned provider's implemented lifecycle, not an arbitrary host file service or every Ability. The near-1 MiB native read-only Ability is not a proof for every mutating Ability, arbitrary request encoding, SSH maximum command input or detached Job script size. The optional manual workflow dispatch with `extended=true` runs the same fixture on two separate disposable runners, additionally testing a real 350-second command with a 360-second selected timeout and a 590-second command with a 600-second selected timeout. The CLI HTTP worker and SDK deadlines are deliberately sized for this experiment; no production setting changes. Require the exact output marker, exit 7, complete result and measured duration. Host proxy limits, maximum concurrency and actual external client capacity require separate evidence. Use distinct real-host acceptance for those properties.
 
 The Gateway source `VERSION` and public release tags must be reported
 separately from installed identities; passing tests is not deployment.

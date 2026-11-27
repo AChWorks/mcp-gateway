@@ -203,7 +203,8 @@ cleanup() {
 }
 trap cleanup EXIT
 [[ ! -d "/home/$MIXED_SSH_USER" ]] && ! getent passwd "$MIXED_SSH_USER" >/dev/null || { echo "Disposable SSH account name already exists." >&2; exit 2; }
-mkdir -p "$ROOT"/{wp,gateway,secrets,db,client,logs}
+mkdir -p "$ROOT"/{wp,gateway,secrets,db,client,logs,wp-private-tmp}
+chmod 700 "$ROOT/wp-private-tmp"
 chmod 700 "$ROOT" "$ROOT/secrets"
 # Export only version-controlled bytes from the exact commit. Git-ignored
 # sessions, .env, compiled views, private keys and untracked test data can
@@ -256,6 +257,7 @@ unzip -q "$WP_BRIDGE_ARCHIVE" -d "$ROOT/wp/wp-content/plugins"
 unzip -q "$WP_ADAPTER_ARCHIVE" -d "$ROOT/wp/wp-content/plugins"
 cp "$WP_CLI" "$ROOT/wp-cli.phar"
 cp "$ROOT/gateway/tests/Support/installed-mixed/client.php" "$ROOT/client/"
+cp "$ROOT/gateway/tests/Support/installed-mixed/wp-parity.php" "$ROOT/client/"
 cp "$ROOT/gateway/tests/Support/installed-mixed/file-client.php" "$ROOT/client/"
 cp "$ROOT/gateway/tests/Support/installed-mixed/file-client.py" "$ROOT/client/"
 cp "$ROOT/gateway/tests/Support/installed-mixed/dynamic-ability.php" "$ROOT/client/"
@@ -396,6 +398,9 @@ mysql --no-defaults -uroot --socket="$ROOT/db.sock" \
 runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
     config create --dbname=wordpress --dbuser=root --dbpass='' --dbhost="localhost:$ROOT/db.sock" \
     --skip-check >"$ROOT/logs/wp-config.log" 2>&1
+# Keep provider-private bytes and journals inside the existing disposal root.
+runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
+    config set WP_TEMP_DIR "$ROOT/wp-private-tmp" --type=constant >>"$ROOT/logs/wp-config.log" 2>&1
 runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
     core install --url="https://11.22.33.44" --title="Disposable real WP" \
     --admin_user=mixedadmin --admin_password="$(cat "$ROOT/secrets/wp-password")" \
