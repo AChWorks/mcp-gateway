@@ -8,6 +8,7 @@ use Mcp\Client\Transport\HttpTransport;
 
 $root = (string) getenv('MIXED_ROOT');
 require $root.'/gateway/vendor/autoload.php';
+require __DIR__.'/wp-parity.php';
 $state = json_decode((string) file_get_contents($root.'/secrets/state.json'), true, 512, JSON_THROW_ON_ERROR);
 $longSeconds = (int) (getenv('MIXED_SSH_LONG_SECONDS') ?: 0);
 $longTimeout = (int) (getenv('MIXED_SSH_LONG_TIMEOUT') ?: 0);
@@ -19,6 +20,9 @@ $http = new Http(['verify' => $root.'/secrets/tls.crt', 'proxy' => '', 'http_err
             'uploaded_bytes' => isset($native['size_upload']) ? (int) $native['size_upload'] : null,
             'downloaded_bytes' => isset($native['size_download']) ? (int) $native['size_download'] : null,
             'status' => $stats->getResponse()?->getStatusCode(),
+            'method' => $stats->getRequest()->getMethod(),
+            'decoded_response_bytes' => $stats->getResponse()?->getBody()->getSize(),
+            'content_type' => $stats->getResponse()?->getHeaderLine('Content-Type'),
         ];
     },
 ]);
@@ -48,12 +52,14 @@ $check($status($state['disabled_profile_token']) === 401, 'Disabled client profi
 $check(($state['never_granted_mint_denied'] ?? false) === true, 'Never-granted OAuth client was not rejected during bearer issuance.');
 $timings = [];
 $wire = [];
-$call = static function (Client $c, string $name, array $args, string $label, ?float $timeout = null) use (&$timings, &$wire, &$httpExchanges): array {
+$toolErrors = [];
+$call = static function (Client $c, string $name, array $args, string $label, ?float $timeout = null) use (&$timings, &$wire, &$httpExchanges, &$toolErrors): array {
     $before = count($httpExchanges);
     $start = hrtime(true);
     $result = $c->callTool($name, $args, timeoutSeconds: $timeout);
     $timings[$label] = round((hrtime(true) - $start) / 1000000, 2);
     $wire[$label] = array_slice($httpExchanges, $before);
+    $toolErrors[$label] = $result->isError;
 
     return $result->structuredContent ?? [];
 };
@@ -204,6 +210,7 @@ try {
             json_encode($routedResult['error'] ?? [], JSON_THROW_ON_ERROR));
         $wpInput = $expectedDigest;
         unset($payload, $directResult, $routedResult);
+        $wpParity = qualifyWordpressMutationAndTransfer($root, $state, $direct, $client, $connect, $call, $check, $wire, $toolErrors);
     } finally {
         $direct->disconnect();
     }
@@ -369,6 +376,7 @@ try {
         'operator_wp_only' => true, 'cross_target_denied' => true,
         'released_bridge_unicode' => $bridgeText,
         'wp_same_grant_direct_routed_input' => $wpInput,
+        'wp_mutation_transfer_parity' => $wpParity,
         'ssh_command_output_windows' => $streamEvidence,
         'ssh_command_input_measurements' => $commandInputs,
         'ssh_staged_script' => $stageEvidence,

@@ -174,6 +174,39 @@ if ($mode === 'init') {
     app(ClientProfileRegistry::class)->disable('ungranted');
     $save($state);
     echo "Real WordPress authorization-code + signed client assertion succeeded; three signed test bearer tokens persisted (redacted).\n";
+} elseif ($mode === 'wp-parity') {
+    $state = $read();
+    $owner = User::query()->findOrFail($state['owner_id']);
+    $target = Target::query()->where('target_id', $state['wp_target'])->firstOrFail();
+    $profile = $argv[2] ?? '';
+    $settings = app(OperationalSettings::class);
+    if ($profile === 'grant') {
+        $credential = TargetCredential::query()->where('target_record_id', $target->id)
+            ->where('purpose', WpAiBridgeTargetVault::PURPOSE)->sole();
+        $current = app(WpAiBridgeTargetVault::class)->openCredential($target, $credential);
+        $result = ['same_downstream_grant' => $current['client_id'] === 'https://11.22.33.45/oauth/client.json'
+            && $current['resource_url'] === $state['wp_direct']['resource']
+            && hash_equals($current['access_token'], $state['wp_direct']['access_token'])];
+    } elseif (in_array($profile, ['fixture', 'default'], true)) {
+        // Exercise the real default fallback, not a hardcoded 64 KiB override.
+        $settings->save($owner, ['wp_response_kib' => $profile === 'fixture' ? 96 : null], $settings->state()['version']);
+        $result = ['response_bytes' => $settings->responseLimitBytes(false),
+            'readonly_bytes' => $settings->responseLimitBytes(true)];
+    } elseif ($profile === 'diagnostic') {
+        $reference = $argv[3] ?? '';
+        if (! preg_match('/^[A-Za-z0-9_-]{1,128}$/D', $reference)) {
+            throw new RuntimeException('Invalid disposable diagnostic reference.');
+        }
+        $event = DB::table('activity_events')->where('correlation_id', $reference)
+            ->where('target_id', $target->target_id)->where('operation', 'wordpress-ability-execute')->sole();
+        $details = json_decode((string) $event->diagnostic_context, true, 512, JSON_THROW_ON_ERROR);
+        $result = ['outcome' => $event->outcome, 'error_code' => $event->error_code,
+            'failure_origin' => $details['failure_origin'] ?? null, 'limit_bytes' => $details['limit_bytes'] ?? null,
+            'retry_safe' => $details['retry_safe'] ?? null];
+    } else {
+        throw new RuntimeException('Unsupported disposable parity setting operation.');
+    }
+    echo json_encode($result, JSON_THROW_ON_ERROR)."\n";
 } elseif ($mode === 'disable') {
     $state = $read();
     DB::table('users')->where('id', $state['owner_id'])->update(['access_enabled' => false]);
