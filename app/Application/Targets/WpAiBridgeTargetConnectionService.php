@@ -14,9 +14,11 @@ use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeDiscovery;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use App\Infrastructure\Http\OutboundRequestException;
 use App\Infrastructure\Http\SafeHttpClient;
+use App\Infrastructure\Http\SafeHttpResponse;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Infrastructure\OAuth\GatewayBridgeClientIdentity;
 use App\Support\CorrelationId;
+use App\Support\OperationDiagnostics;
 use Closure;
 use DateTimeImmutable;
 use Exception;
@@ -216,15 +218,13 @@ final readonly class WpAiBridgeTargetConnectionService
         // automatically retry an ambiguous authorization-code exchange.
         try {
             $relay = $this->relays->httpRouteAtEpoch($recordId, $claim['route_epoch']);
-            $response = $this->http->postForm($claim['context']['token_url'], [
+            $response = $this->postOAuthForm($claim['context']['token_url'], [
                 'grant_type' => 'authorization_code',
                 'code' => $code,
                 'client_id' => $claim['context']['client_id'],
                 'redirect_uri' => $claim['context']['redirect_uri'],
                 'code_verifier' => $claim['context']['code_verifier'],
                 'resource' => $claim['context']['resource_url'],
-                'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
-                'client_assertion' => $this->identity->assertion($claim['context']['token_url']),
             ], relay: $relay, beforeDispatch: function () use ($recordId, $stateHash, $claim, $relay): void {
                 $this->relays->httpRouteAtEpoch($recordId, $claim['route_epoch'], $relay, true);
                 $current = Target::query()->find($recordId);
@@ -247,7 +247,10 @@ final readonly class WpAiBridgeTargetConnectionService
             $token = $this->parseToken($response->json());
         } catch (OutboundRequestException $exception) {
             $this->failClaim($recordId, $stateHash, $exception->reason, $exception->preDispatch);
-            throw new WpAiBridgeTargetConnectionException($exception->reason, 'WP AI Bridge token exchange could not complete safely.');
+            throw new WpAiBridgeTargetConnectionException($exception->reason, 'WP AI Bridge token exchange could not complete safely.', [
+                ...$exception->details,
+                'pre_dispatch' => $exception->preDispatch,
+            ]);
         } catch (WpAiBridgeTargetConnectionException $exception) {
             $this->failClaim($recordId, $stateHash, $exception->reason);
             throw $exception;
@@ -692,86 +695,61 @@ final readonly class WpAiBridgeTargetConnectionService
     private function exchangeRefresh(string $recordId, array $plan, ?Closure $authorize, ?Closure $admitRemoteEffect): array
     {
         try {
-            // Local assertion generation happens AFTER the exact refresh
-            // intent is recorded, but BEFORE any token exchange. Scope the
-            // exception conversion to this call: never treat an arbitrary
-            // exception from network I/O as proof of no dispatch. JWT signing
-            // can throw DomainException, not just RuntimeException; both are
-            // safe here because no outbound request has been constructed.
-            try {
-                $assertion = $this->identity->assertion($plan['token_url']);
-            } catch (Exception) {
-                throw new OutboundRequestException('client_assertion_unavailable',
-                    'WordPress OAuth client assertion could not be prepared.', [], true);
-            }
-
             // Exact old token + client + resource is the WP Bridge's bounded
             // single-use recovery identity after a lost rotating response.
-            try {
-                $relay = $this->relays->httpRouteAtEpoch($recordId, $plan['identity']->routeEpoch);
-                $response = $this->http->postForm($plan['token_url'], [
-                    'grant_type' => 'refresh_token',
-                    'refresh_token' => $plan['refresh_token'],
-                    'client_id' => $plan['client_id'],
-                    'resource' => $plan['resource_url'],
-                    'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
-                    'client_assertion' => $assertion,
-                ], relay: $relay, beforeDispatch: function () use ($recordId, $plan, $authorize, $relay, $admitRemoteEffect): void {
-                    $verify = function () use ($recordId, $plan, $authorize, $relay): void {
-                        if (! $plan['is_recovery'] && $authorize !== null && ! $authorize()) {
-                            throw new OutboundRequestException('forbidden', 'WordPress operation authority changed before refresh.', [], true);
-                        }
-                        $this->relays->httpRouteAtEpoch($recordId, $plan['identity']->routeEpoch, $relay, true);
-                        $current = Target::query()->find($recordId);
-                        $intent = DB::table('wp_ai_bridge_refresh_intents')->where('target_record_id', $recordId)->first();
-                        $credential = $current instanceof Target ? $this->credential($current) : null;
-                        if (! $current instanceof Target || ! $credential instanceof TargetCredential
-                            || $intent === null || ! $plan['identity']->matchesIntent($intent)
-                            || (int) $intent->attempts !== ($plan['is_recovery'] ? 2 : 1)
-                            || ! $plan['identity']->matchesGrant($current, $credential)
-                            || ! $plan['identity']->matchesMaterial($credential)
-                            || (int) DB::table('wp_ai_bridge_credential_metadata')
-                                ->where('credential_id', $credential->getKey())->value('generation') !== $plan['identity']->generation
-                            || $this->hasRevocationIntent($current)
-                            || ! hash_equals((string) $this->configuration($recordId)->oauth_token_url, $plan['token_url'])) {
-                            throw new OutboundRequestException('target_changed', 'WordPress refresh authority changed.', [], true);
-                        }
-                        if ($plan['is_recovery']
-                            && time() - $plan['refresh_started_at'] >= 45) {
-                            throw new OutboundRequestException('refresh_pending', 'WordPress refresh recovery window expired before dispatch.', [], true);
-                        }
-                        if (! $plan['is_recovery'] && $authorize !== null && $current->operations_paused) {
-                            throw new OutboundRequestException('target_paused', 'WordPress Target operations were paused.', [], true);
-                        }
-                    };
-                    // Exact old-token recovery is settlement of an already
-                    // admitted refresh, not authority for another operation.
-                    if ($plan['is_recovery'] || $admitRemoteEffect === null) {
-                        $verify();
-                    } elseif (! $admitRemoteEffect($verify)) {
-                        throw new OutboundRequestException('forbidden', 'WordPress durable attempt changed before refresh.', [], true);
+            $relay = $this->relays->httpRouteAtEpoch($recordId, $plan['identity']->routeEpoch);
+            $response = $this->postOAuthForm($plan['token_url'], [
+                'grant_type' => 'refresh_token',
+                'refresh_token' => $plan['refresh_token'],
+                'client_id' => $plan['client_id'],
+                'resource' => $plan['resource_url'],
+            ], relay: $relay, beforeDispatch: function () use ($recordId, $plan, $authorize, $relay, $admitRemoteEffect): void {
+                $verify = function () use ($recordId, $plan, $authorize, $relay): void {
+                    if (! $plan['is_recovery'] && $authorize !== null && ! $authorize()) {
+                        throw new OutboundRequestException('forbidden', 'WordPress operation authority changed before refresh.', [], true);
                     }
-                });
-            } catch (UnsafeOutboundTarget) {
-                // SafeHttpClient validates the entire destination before any
-                // HTTP dispatch; a fail-closed SSRF decision cannot consume a
-                // refresh token. Keep a separate safe machine cause code.
-                throw new OutboundRequestException('unsafe_target',
-                    'WordPress OAuth endpoint failed outbound security policy.', [], true);
-            }
+                    $this->relays->httpRouteAtEpoch($recordId, $plan['identity']->routeEpoch, $relay, true);
+                    $current = Target::query()->find($recordId);
+                    $intent = DB::table('wp_ai_bridge_refresh_intents')->where('target_record_id', $recordId)->first();
+                    $credential = $current instanceof Target ? $this->credential($current) : null;
+                    if (! $current instanceof Target || ! $credential instanceof TargetCredential
+                        || $intent === null || ! $plan['identity']->matchesIntent($intent)
+                        || (int) $intent->attempts !== ($plan['is_recovery'] ? 2 : 1)
+                        || ! $plan['identity']->matchesGrant($current, $credential)
+                        || ! $plan['identity']->matchesMaterial($credential)
+                        || (int) DB::table('wp_ai_bridge_credential_metadata')
+                            ->where('credential_id', $credential->getKey())->value('generation') !== $plan['identity']->generation
+                        || $this->hasRevocationIntent($current)
+                        || ! hash_equals((string) $this->configuration($recordId)->oauth_token_url, $plan['token_url'])) {
+                        throw new OutboundRequestException('target_changed', 'WordPress refresh authority changed.', [], true);
+                    }
+                    if ($plan['is_recovery']
+                        && time() - $plan['refresh_started_at'] >= 45) {
+                        throw new OutboundRequestException('refresh_pending', 'WordPress refresh recovery window expired before dispatch.', [], true);
+                    }
+                    if (! $plan['is_recovery'] && $authorize !== null && $current->operations_paused) {
+                        throw new OutboundRequestException('target_paused', 'WordPress Target operations were paused.', [], true);
+                    }
+                };
+                // Exact old-token recovery is settlement of an already
+                // admitted refresh, not authority for another operation.
+                if ($plan['is_recovery'] || $admitRemoteEffect === null) {
+                    $verify();
+                } elseif (! $admitRemoteEffect($verify)) {
+                    throw new OutboundRequestException('forbidden', 'WordPress durable attempt changed before refresh.', [], true);
+                }
+            });
         } catch (OutboundRequestException $exception) {
-            // Keep only the classified transport stage, never cURL messages,
-            // request URLs, rotating tokens, assertions or response bodies.
-            $stage = $exception->details['failure_stage'] ?? null;
-            $stage = in_array($stage, [
-                'dns_lookup', 'dns_timeout', 'deadline_before_dispatch',
-                'connection_setup', 'tcp_connect', 'tls_handshake',
-                'request_timeout', 'response_transfer', 'response_body',
-            ], true) ? $stage : 'unspecified';
+            // Preserve the canonical safe cause. Dispatch certainty here is
+            // about this attempt only, not the outcome of a prior rotation.
+            $diagnostics = OperationDiagnostics::safeContext($exception->details);
+            unset($diagnostics['request_not_sent'], $diagnostics['retry_safe'], $diagnostics['effect_unconfirmed']);
             $failureContext = [
+                ...$diagnostics,
+                'correlation_id' => CorrelationId::current(),
                 'target_record_id' => $recordId,
                 'cause_code' => $exception->reason,
-                'failure_stage' => $stage,
+                'failure_stage' => $diagnostics['failure_stage'] ?? 'unspecified',
                 'request_not_sent' => $exception->preDispatch,
                 'recovery_attempt' => $plan['is_recovery'],
             ];
@@ -788,16 +766,16 @@ final readonly class WpAiBridgeTargetConnectionService
                 }
                 Log::warning('WordPress OAuth refresh failed before dispatch.', $failureContext);
                 throw new WpAiBridgeTargetConnectionException('refresh_unavailable',
-                    'WordPress refresh request was not dispatched; retry after bounded backoff.');
+                    'WordPress refresh request was not dispatched; retry after bounded backoff.', $diagnostics);
             }
 
-            // Retain only the safe failure classification, never remote
-            // response bodies, OAuth requests, tokens or client assertions.
+            // A blocked recovery attempt does not resolve an earlier
+            // ambiguous rotation. Keep its safe cause without retry flags.
             Log::warning('WordPress OAuth refresh transport outcome ambiguous.', $failureContext);
             $this->recordRefreshFailure($recordId, $plan, 'refresh_ambiguous');
             throw new WpAiBridgeTargetConnectionException('refresh_ambiguous',
                 'The WordPress refresh outcome is unknown; do not retry an uncontrolled token rotation.',
-                refreshIdentity: $plan['identity']);
+                $diagnostics, refreshIdentity: $plan['identity']);
         }
 
         if ($response->status !== 200) {
@@ -1244,10 +1222,8 @@ final readonly class WpAiBridgeTargetConnectionService
                 }
                 $routeEpoch = (int) $currentRoute->transport_revision;
                 $relay = $this->relays->httpRouteAtEpoch($id, $routeEpoch);
-                $response = $this->http->postForm((string) $plan['revocation_url'], [
+                $response = $this->postOAuthForm((string) $plan['revocation_url'], [
                     'token' => $plan['tokens'][$index],
-                    'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
-                    'client_assertion' => $this->identity->assertion((string) $plan['revocation_url']),
                 ], relay: $relay, beforeDispatch: function () use ($id, $plan, $index, $authorize, $relay, $routeEpoch): void {
                     if ($authorize !== null && ! $authorize()) {
                         throw new OutboundRequestException('forbidden', 'WordPress control authority changed before revocation.', [], true);
@@ -1799,6 +1775,39 @@ final readonly class WpAiBridgeTargetConnectionService
             'last_failure_code' => $reason,
             'connected_at' => null,
         ])->save();
+    }
+
+    /**
+     * Prepare the downstream client assertion only after the caller has
+     * durably claimed its exact operation. The assertion call is entirely
+     * local (including JWT signing); outbound policy rejection is also
+     * proven pre-dispatch. Other transport, storage and settlement failures
+     * must retain their original certainty.
+     *
+     * @param  array<string, scalar|null>  $form
+     */
+    private function postOAuthForm(string $url, array $form, ?LocalSocks5Route $relay, Closure $beforeDispatch): SafeHttpResponse
+    {
+        try {
+            $assertion = $this->identity->assertion($url);
+        } catch (Exception) {
+            throw new OutboundRequestException('client_assertion_unavailable',
+                'WordPress OAuth client assertion could not be prepared.', [
+                    'failure_origin' => 'gateway_admission',
+                    'failure_stage' => 'admission',
+                ], true);
+        }
+
+        try {
+            return $this->http->postForm($url, [
+                ...$form,
+                'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
+                'client_assertion' => $assertion,
+            ], relay: $relay, beforeDispatch: $beforeDispatch);
+        } catch (UnsafeOutboundTarget $exception) {
+            throw new OutboundRequestException('unsafe_target',
+                'WordPress OAuth endpoint failed outbound security policy.', $exception->diagnostics(), true);
+        }
     }
 
     /** @param array<string,mixed> $document
