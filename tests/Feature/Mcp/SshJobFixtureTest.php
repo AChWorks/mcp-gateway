@@ -5,6 +5,7 @@ namespace Tests\Feature\Mcp;
 use App\Application\Access\AccessControl;
 use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\SshJobMcpToolHandlers;
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshJobCoordinator;
@@ -261,6 +262,9 @@ final class SshJobFixtureTest extends TestCase
         $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
         $client = hash('sha256', 'job-file-limit-fixture-client');
 
+        $settings = app(OperationalSettings::class);
+        $settings->save($owner, ['ssh_job_output_window_kib' => 512], $settings->state()['version']);
+
         // The former systemd-wide LimitFSIZE=1MiB terminated innocent package
         // extraction/writes. The temporary file is deliberately >1MiB, and
         // the script cleans only its own randomly named harmless fixture.
@@ -294,13 +298,25 @@ SH;
         self::assertSame(0, $status['result']['exit_code'] ?? null, json_encode($status));
 
         foreach (['stdout', 'stderr'] as $stream) {
-            $output = $jobs->output($owner, $target->target_id, $client, $id, $stream, 1048570, 16);
-            self::assertTrue($output['ok'], json_encode($output));
-            self::assertSame(1048576, $output['result']['size']);
-            self::assertSame(6, $output['result']['length']);
-            self::assertSame(str_repeat("\0", 6), base64_decode($output['result']['data'], true));
-            self::assertTrue($output['result']['end_of_file']);
-            self::assertTrue($output['result']['truncated']);
+            $digest = hash_init('sha256');
+            foreach ([0, 524288] as $offset) {
+                $output = $jobs->output($owner, $target->target_id, $client, $id, $stream, $offset, 524288);
+                self::assertTrue($output['ok'], $output['error']['code'] ?? '');
+                self::assertSame(1048576, $output['result']['size']);
+                self::assertSame(524288, $output['result']['length']);
+                $bytes = base64_decode($output['result']['data'], true);
+                self::assertSame(str_repeat("\0", 524288), $bytes);
+                hash_update($digest, $bytes);
+                self::assertSame($offset === 524288, $output['result']['end_of_file']);
+                self::assertSame($offset === 524288 ? true : null, $output['result']['truncated']);
+            }
+            self::assertSame(hash('sha256', str_repeat("\0", 1048576)), hash_final($digest));
+            $tail = $jobs->output($owner, $target->target_id, $client, $id, $stream, 1048570, 16);
+            self::assertTrue($tail['ok'], $tail['error']['code'] ?? '');
+            self::assertSame(6, $tail['result']['length']);
+            self::assertSame(str_repeat("\0", 6), base64_decode($tail['result']['data'], true));
+            self::assertTrue($tail['result']['end_of_file']);
+            self::assertTrue($tail['result']['truncated']);
         }
 
         $directory = '/var/tmp/.mcp-gateway-job-'.$id;

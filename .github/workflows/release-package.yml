@@ -150,7 +150,7 @@ jobs:
           mkdir -p dist/baseline
           mapfile -t versions < <(python3 bin/test-released-baseline-parity.py --list)
           expected_count="$(python3 bin/test-released-baseline-parity.py --count)"
-          [[ ${#versions[@]} -eq "$expected_count" ]] || { echo "Cannot select exactly three release baselines" >&2; exit 1; }
+          [[ ${#versions[@]} -eq "$expected_count" ]] || { echo "Cannot select the complete checked release baseline window" >&2; exit 1; }
           for version in "${versions[@]}"; do
             gh release download "v$version" \
               --pattern "mcp-gateway-v$version.zip*" \
@@ -174,7 +174,7 @@ jobs:
         run: |
           mapfile -t versions < <(python3 bin/test-released-baseline-parity.py --list)
           expected_count="$(python3 bin/test-released-baseline-parity.py --count)"
-          [[ ${#versions[@]} -eq "$expected_count" ]] || { echo "Cannot select exactly three release baselines" >&2; exit 1; }
+          [[ ${#versions[@]} -eq "$expected_count" ]] || { echo "Cannot select the complete checked release baseline window" >&2; exit 1; }
           for version in "${versions[@]}"; do
             bash bin/test-update-package.sh \
               "dist/$UPDATE_PACKAGE.zip" \
@@ -192,7 +192,7 @@ jobs:
         run: |
           mapfile -t versions < <(python3 bin/test-released-baseline-parity.py --list)
           expected_count="$(python3 bin/test-released-baseline-parity.py --count)"
-          [[ ${#versions[@]} -eq "$expected_count" ]] || { echo "Cannot select exactly three release baselines" >&2; exit 1; }
+          [[ ${#versions[@]} -eq "$expected_count" ]] || { echo "Cannot select the complete checked release baseline window" >&2; exit 1; }
           for version in "${versions[@]}"; do
             bash bin/test-update-backup-integrity.sh \
               "dist/$UPDATE_PACKAGE.zip" \
@@ -222,9 +222,10 @@ jobs:
 
           ## Supported direct upgrade window
 
-          Direct browser updates are verified only from the three most recent
-          preceding stable releases. Older installations need a verified intermediate
-          upgrade or separately approved backup-and-migration path.
+          Direct browser updates are verified from the most recent up to three actual
+          preceding stable releases in the same major version. Older or different-major
+          installations need a verified supported intermediate upgrade or a separately
+          approved backup-and-migration path.
 
           ## Simple browser update
 
