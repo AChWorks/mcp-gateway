@@ -207,6 +207,13 @@ if ($mode === 'init') {
         throw new RuntimeException('Unsupported disposable parity setting operation.');
     }
     echo json_encode($result, JSON_THROW_ON_ERROR)."\n";
+} elseif (in_array($mode, ['wp-oauth-lifecycle', 'wp-oauth-schedule'], true)) {
+    require __DIR__.'/wp-oauth-lifecycle.php';
+    $root = installedOAuthFixtureRoot($stateFile);
+    $result = $mode === 'wp-oauth-schedule'
+        ? installedOAuthScheduler($root)
+        : qualifyInstalledWordpressOAuth($root, $read(), $save);
+    echo json_encode($result, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT)."\n";
 } elseif ($mode === 'disable') {
     $state = $read();
     DB::table('users')->where('id', $state['owner_id'])->update(['access_enabled' => false]);

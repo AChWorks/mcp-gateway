@@ -146,6 +146,18 @@ includes actual wire body sizes, SFTP byte size, digest, representative latency 
   Require exact results within budget and truthful unknown-effect diagnostics
   for over-budget mixed-effect replies, without blind retry or automatic budget
   increases. Verify complete smaller-window reads under both Gateway budgets.
+- After the normal installed SDK and file-transfer cases, exercise the actual
+  downstream OAuth grant with controlled age shifts of its exact expiry records
+  in the disposable provider and Gateway only. No host-clock or provider-code
+  change. Verify the real 1-hour access / 30-day refresh lifetime, 15-day idle
+  renewal delay, expired direct bearer refusal, one on-demand refresh and two
+  successive due renewals through real `schedule:run` child processes. Non-due
+  scheduler dispatch must scan/rotate nothing, including when access has expired.
+  Preserve grant/route/scope identity and exact native principal; verify consumed
+  old refresh records and direct/routed reads with each actual successor.
+  Revoke the exact disposable provider refresh artifact and require terminal
+  rejection, retained no-replay fence and no later scheduled rotation. Record
+  sanitized `oauth-lifecycle.json` and fixture cleanup.
 - Verified OpenSSH host key, SSH command, real 512 KiB inline SFTP write/stat/read,
   byte and SHA-256 equality; denied path and cross-Target misuse.
 - Independently captured 512 KiB stdout and stderr through real HTTPS MCP,
@@ -165,6 +177,8 @@ includes actual wire body sizes, SFTP byte size, digest, representative latency 
 ## Boundaries and review gate
 
 The isolated clients can prove that **their own** authenticated inbound/outbound SSH file bytes are complete; they cannot prove full external OAuth client enrollment, every reverse-proxy/DNS topology, arbitrary third-party host compatibility, arbitrary WordPress-native raw binary transfer or actual ChatGPT model-file ingestion. The provider-private staging and Media export assertions cover the pinned provider's implemented lifecycle, not an arbitrary host file service or every Ability. The near-1 MiB native read-only Ability is not a proof for every mutating Ability, arbitrary request encoding, SSH maximum command input or detached Job script size. The optional manual workflow dispatch with `extended=true` runs the same fixture on two separate disposable runners, additionally testing a real 350-second command with a 360-second selected timeout and a 590-second command with a 600-second selected timeout. The CLI HTTP worker and SDK deadlines are deliberately sized for this experiment; no production setting changes. Require the exact output marker, exit 7, complete result and measured duration. Host proxy limits, maximum concurrency and actual external client capacity require separate evidence. Use distinct real-host acceptance for those properties.
+
+The OAuth fixture shifts stored expiry records rather than waiting actual days. It proves actual scheduled child-process dispatch and real provider rotation/terminal rejection in this isolated installation, not continuous operator-host Cron, elapsed idle time, or every lost-response/concurrency/recovery scenario. The exact pinned provider contract and targeted regressions cover separate ambiguity paths.
 
 The Gateway source `VERSION` and public release tags must be reported
 separately from installed identities; passing tests is not deployment.

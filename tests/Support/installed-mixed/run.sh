@@ -133,6 +133,9 @@ if [[ "${1:-}" == inside ]]; then
   runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
     python3 "$ROOT/client/file-client.py" >"$MIXED_EVIDENCE/python-file-client.json"
   runuser -u "$WORKER" -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" \
+    php -d curl.cainfo="$ROOT/secrets/tls.crt" -d openssl.cafile="$ROOT/secrets/tls.crt" \
+    tests/Support/installed-mixed/seed.php wp-oauth-lifecycle >"$MIXED_EVIDENCE/oauth-lifecycle.json"
+  runuser -u "$WORKER" -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" \
     php tests/Support/installed-mixed/seed.php disable
   runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" \
     php "$ROOT/client/client.php" revoked >"$MIXED_EVIDENCE/revoked.txt"
