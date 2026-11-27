@@ -13,19 +13,8 @@ interface TargetConnectorAdapter
     /** @return array<string, array<int, mixed>> */
     public function registrationRules(): array;
 
-    /**
-     * Only these non-secret registration fields may be flashed back to the
-     * browser after failed validation. Unknown future fields are private
-     * by default; every new connector must explicitly choose safe fields.
-     *
-     * @return list<string>
-     */
-    public function safeOldInputFields(): array;
-
     /** @param array<string, mixed> $input */
     public function register(array $input, ?User $creator = null, ?Closure $authorize = null): Target;
-
-    public function registrationStatus(): string;
 
     /**
      * Connector-specific actor reauthentication. Selecting a Relay always
@@ -51,12 +40,6 @@ interface TargetConnectorAdapter
     public function disconnect(Target $target, ?Closure $authorize = null): TargetConnectorResult;
 
     public function test(Target $target, ?Closure $authorize = null): TargetConnectorResult;
-
-    /** @return array<string, mixed> */
-    public function adminDetails(Target $target): array;
-
-    /** @return array<string, mixed> */
-    public function publicMetadata(Target $target): array;
 
     public function hasPendingDeletion(Target $target): bool;
 }

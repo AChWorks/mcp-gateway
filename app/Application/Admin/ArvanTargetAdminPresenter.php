@@ -4,6 +4,9 @@ namespace App\Application\Admin;
 
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetConfig;
+use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetVault;
 
 final class ArvanTargetAdminPresenter implements TargetConnectorAdminPresenter
 {
@@ -19,6 +22,25 @@ final class ArvanTargetAdminPresenter implements TargetConnectorAdminPresenter
             validationMessages: ArvanApiTargetFormCopy::messages(),
             validationAttributes: ArvanApiTargetFormCopy::attributes(),
         );
+    }
+
+    public function safeOldInputFields(): array
+    {
+        return ['api_base_url', 'api_spec_url', 'api_probe_path'];
+    }
+
+    public function registrationStatus(): string
+    {
+        return __('ArvanCloud API Target saved with an encrypted key. Use the unauthenticated HTTPS endpoint check now, or configure an optional known read-only GET probe to verify the key.');
+    }
+
+    public function details(Target $target): array
+    {
+        return [
+            'arvanConfig' => ArvanApiTargetConfig::query()->where('target_record_id', $target->getKey())->first(),
+            'arvanHasCredential' => TargetCredential::query()->where('target_record_id', $target->getKey())
+                ->where('connector_type', 'arvancloud')->where('purpose', ArvanApiTargetVault::PURPOSE)->exists(),
+        ];
     }
 
     public function inventory(array $targets): array

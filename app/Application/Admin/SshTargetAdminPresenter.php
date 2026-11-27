@@ -4,7 +4,11 @@ namespace App\Application\Admin;
 
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
+use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\SshDirect\SshHostKeyPin;
+use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetIdentity;
+use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 
 final class SshTargetAdminPresenter implements TargetConnectorAdminPresenter
 {
@@ -24,6 +28,37 @@ final class SshTargetAdminPresenter implements TargetConnectorAdminPresenter
                 'connection_relay_id.prohibited_if' => __('This connection method does not support a Relay.'),
             ],
         );
+    }
+
+    public function safeOldInputFields(): array
+    {
+        // ssh_host_key is the server's PUBLIC pin; no login secrets are flashed.
+        return [
+            'ssh_host', 'ssh_port', 'ssh_username', 'ssh_host_key',
+            'ssh_auth_method', 'ssh_trust_confirmed', 'ssh_route_mode',
+            'ssh_reverse_port', 'ssh_tunnel_identity',
+        ];
+    }
+
+    public function registrationStatus(): string
+    {
+        return __('SSH Target registered with encrypted credentials and an out-of-band host-key pin. Authentication has NOT yet been verified.');
+    }
+
+    public function details(Target $target): array
+    {
+        $id = $target->getKey();
+        $config = SshTargetConfig::query()->where('target_record_id', $id)->first();
+
+        return [
+            'sshConfig' => $config,
+            'sshFingerprint' => $config instanceof SshTargetConfig
+                ? SshHostKeyPin::fromLine($config->pinned_host_key)->fingerprint()
+                : null,
+            'sshHasCredential' => TargetCredential::query()
+                ->where('target_record_id', $id)->where('connector_type', 'ssh_direct')
+                ->where('purpose', SshTargetVault::PURPOSE)->exists(),
+        ];
     }
 
     public function inventory(array $targets): array

@@ -10,6 +10,7 @@ use App\Application\Targets\TargetEndpointPreflight;
 use App\Application\Targets\TargetEnrollmentPreflight;
 use App\Application\Targets\TargetOperationGate;
 use App\Application\Targets\TargetPreflightResult;
+use App\Application\Targets\TargetPublicMetadataContributor;
 use App\Application\Targets\TargetTransportBinding;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
@@ -33,7 +34,7 @@ use RuntimeException;
  * One registered Arvan HTTP API root per Target. Distinct products/regions may
  * register separate Targets, never a request-supplied host or credential.
  */
-final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, TargetEnrollmentPreflight
+final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, TargetEnrollmentPreflight, TargetPublicMetadataContributor
 {
     public function __construct(
         private OutboundTargetPolicy $policy,
@@ -58,11 +59,6 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
             'api_probe_path' => ['nullable', 'string', 'max:1024', 'starts_with:/'],
             'api_key' => ['required', 'string', 'max:4096'],
         ];
-    }
-
-    public function safeOldInputFields(): array
-    {
-        return ['api_base_url', 'api_spec_url', 'api_probe_path'];
     }
 
     public function preflightRules(): array
@@ -136,11 +132,6 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
     public function registrationRequiresPassword(array $input): bool
     {
         return true;
-    }
-
-    public function registrationStatus(): string
-    {
-        return __('ArvanCloud API Target saved with an encrypted key. Use the unauthenticated HTTPS endpoint check now, or configure an optional known read-only GET probe to verify the key.');
     }
 
     public function configurationRules(Target $target): array
@@ -443,21 +434,18 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         }
     }
 
-    public function adminDetails(Target $target): array
+    public function publicMetadata(array $targets): array
     {
-        return [
-            'arvanConfig' => ArvanApiTargetConfig::query()->where('target_record_id', $target->getKey())->first(),
-            'arvanHasCredential' => $this->credential($target) instanceof TargetCredential,
-        ];
-    }
+        $metadata = [];
+        $ids = array_map(static fn (Target $target): string => (string) $target->getKey(), $targets);
+        foreach (ArvanApiTargetConfig::query()->whereIn('target_record_id', $ids)
+            ->get(['target_record_id', 'base_url', 'spec_url']) as $config) {
+            $metadata[(string) $config->target_record_id] = [
+                'arvan_api' => ['base_url' => $config->base_url, 'has_openapi_spec' => $config->spec_url !== null],
+            ];
+        }
 
-    public function publicMetadata(Target $target): array
-    {
-        $config = ArvanApiTargetConfig::query()->where('target_record_id', $target->getKey())->first();
-
-        return $config instanceof ArvanApiTargetConfig ? [
-            'arvan_api' => ['base_url' => $config->base_url, 'has_openapi_spec' => $config->spec_url !== null],
-        ] : [];
+        return $metadata;
     }
 
     public function hasPendingDeletion(Target $target): bool

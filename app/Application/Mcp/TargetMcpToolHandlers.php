@@ -50,6 +50,7 @@ final readonly class TargetMcpToolHandlers
         }
 
         $targets = [];
+        $metadata = $this->connectors->publicMetadata($page['items']);
         foreach ($page['items'] as $target) {
             $state = $target->getAttribute('connection_state');
             $item = [
@@ -60,7 +61,7 @@ final readonly class TargetMcpToolHandlers
                 'connection_state' => $state instanceof TargetConnectionState ? $state->value : 'error',
                 'operations_paused' => (bool) $target->operations_paused,
             ];
-            $item = [...$this->connectors->publicMetadata($target), ...$item];
+            $item = [...($metadata[(string) $target->getKey()] ?? []), ...$item];
             $targets[] = $item;
         }
 
@@ -87,7 +88,7 @@ final readonly class TargetMcpToolHandlers
         }
 
         $target = $this->access
-            ->scopeTargets(Target::query()->with('sshConfig'), $user, GatewayPermission::TargetsView)
+            ->scopeTargets(Target::query()->with('sshConfig:target_record_id,host,port,username,observed_peer_ip,observed_at'), $user, GatewayPermission::TargetsView)
             ->where('target_id', $targetId)
             ->first();
 
@@ -112,7 +113,8 @@ final readonly class TargetMcpToolHandlers
             'last_error_code' => $target->last_error_code,
             'connected_at' => $connectedAt instanceof DateTimeInterface ? $connectedAt->format(DATE_ATOM) : null,
         ];
-        $context = [...$this->connectors->publicMetadata($target), ...$context];
+        $metadata = $this->connectors->publicMetadata([$target]);
+        $context = [...($metadata[(string) $target->getKey()] ?? []), ...$context];
         $context['file_transfer'] = $this->transfers->describe($user, $target);
 
         return ['ok' => true, 'target' => $context];

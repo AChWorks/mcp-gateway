@@ -16,14 +16,16 @@ A **Target** is one explicitly enrolled, individually authorizable downstream sy
 
 **Current built-in families (published in v2.7.0):** `wp_ai_bridge`, `ssh_direct` and `arvancloud`, explicitly allowlisted by [`TargetConnectorRegistry`](../app/Application/Targets/TargetConnectorRegistry.php). Unknown/stored unsupported types fail closed. ArvanCloud uses a distinct bound HTTPS Machine User REST adapter; see the [ArvanCloud connector guide](ARVANCLOUD-API-CONNECTOR.md). Source inclusion and publication do not prove installed-host or authenticated provider acceptance.
 
-The actual [`TargetConnectorAdapter`](../app/Application/Targets/TargetConnectorAdapter.php) currently covers these lifecycle/metadata responsibilities (use the live interface signature, not this prose, when implementing):
+The actual [`TargetConnectorAdapter`](../app/Application/Targets/TargetConnectorAdapter.php) currently covers these registration, configuration and lifecycle responsibilities (use the live interface signature, not this prose, when implementing):
 
 | Concern | Existing adapter method/family |
 | --- | --- |
-| identity / registration | `type`, `registrationRules`, `safeOldInputFields`, `register`, `registrationStatus` |
+| identity / registration | `type`, `registrationRules`, `registrationRequiresPassword`, `register` |
 | revision-safe changes | `configurationRules`, `configurationRevision`, `updateConfiguration` |
 | credential/connection lifecycle | `connect`, `reconnect`, `disconnect`, `test`, `hasPendingDeletion` |
-| bounded presentation | `adminDetails`, `publicMetadata` |
+
+
+The existing Admin companion owns form-only replay allowlists, registration feedback and local detail projection. Optional `TargetPublicMetadataContributor` implementations supply non-secret metadata in bounded batches for already authorized Targets, shared by MCP inventory and single-Target context. Neither presentation path grants execution authority.
 
 **These methods do not currently constitute a generic action dispatcher.** WordPress Ability, SSH command/file/Job and ArvanCloud REST execution remain family-specific; reusable execution/application use cases belong below human and MCP entry adapters where a real second consumer requires them, never in MCP Tool schemas or Blade controllers.
 

@@ -120,6 +120,21 @@ final class AdminConnectorPresentationTest extends TestCase
                 return new TargetConnectorAdminDefinition(type: 'synthetic_protocol', label: 'Synthetic <service>');
             }
 
+            public function safeOldInputFields(): array
+            {
+                return [];
+            }
+
+            public function registrationStatus(): string
+            {
+                return 'Synthetic registered';
+            }
+
+            public function details(Target $target): array
+            {
+                return [];
+            }
+
             public function inventory(array $targets): array
             {
                 return [];

@@ -5,6 +5,7 @@ namespace App\Application\Admin;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use Illuminate\Support\Facades\DB;
 
@@ -23,6 +24,45 @@ final class WordpressTargetAdminPresenter implements TargetConnectorAdminPresent
             recoveryActionsView: 'admin.targets.connectors.wordpress.recovery-actions',
             operationsView: 'admin.targets.connectors.wordpress.operations',
         );
+    }
+
+    public function safeOldInputFields(): array
+    {
+        return ['base_url'];
+    }
+
+    public function registrationStatus(): string
+    {
+        return __('WordPress Target registered. Connection authorization is not yet configured.');
+    }
+
+    public function details(Target $target): array
+    {
+        $id = $target->getKey();
+        $credential = TargetCredential::query()
+            ->where('target_record_id', $id)->where('connector_type', 'wp_ai_bridge')
+            ->where('purpose', WpAiBridgeTargetVault::PURPOSE)->first(['id']);
+        $revocation = DB::table('wp_ai_bridge_revocation_intents')
+            ->where('target_record_id', $id)
+            ->first(['id', 'kind', 'phase', 'credential_id', 'generation', 'token_total', 'token_confirmed', 'created_at', 'updated_at']);
+        $refresh = DB::table('wp_ai_bridge_refresh_intents')
+            ->where('target_record_id', $id)->first(['id', 'created_at']);
+
+        return [
+            'wpConfig' => WpAiBridgeTargetConfig::query()->where('target_record_id', $id)->first(),
+            'hasCredential' => $credential !== null,
+            // Read-only, non-secret expiry and generation help avoid offering
+            // a cancellation action when local proof already makes it impossible.
+            'credentialMetadata' => $credential === null ? null : DB::table('wp_ai_bridge_credential_metadata')
+                ->where('credential_id', $credential->getKey())
+                ->first(['credential_id', 'generation', 'access_expires_at']),
+            'revocationIntent' => $revocation,
+            'revocationPending' => $revocation !== null,
+            'oauthFlowPending' => DB::table('wp_ai_bridge_oauth_flows')
+                ->where('target_record_id', $id)->exists(),
+            'refreshIntent' => $refresh,
+            'refreshPending' => $refresh !== null,
+        ];
     }
 
     public function inventory(array $targets): array
