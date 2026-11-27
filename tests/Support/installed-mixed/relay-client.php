@@ -18,6 +18,8 @@ function qualifyInstalledRelay(
     Closure $connect,
     Closure $call,
     Closure $check,
+    int $longSeconds = 0,
+    int $longTimeout = 0,
 ): array {
     $check(in_array($phase, ['online', 'offline', 'recovered'], true), 'Unexpected Relay probe phase.');
     $relaySsh = $state['relay_ssh_target'];
@@ -78,6 +80,11 @@ function qualifyInstalledRelay(
         // Reuse exactly the Direct representative workloads and assertions.
         $result['sftp'] = qualifyInstalledInlineSftp($client, $relaySsh, 'relay_', $call, $check);
         $result['staged_script'] = qualifyInstalledStagedScript($client, $relaySsh, 'relay_', $call, $check);
+        if ($longSeconds > 0) {
+            $result['extended_staged_script'] = qualifyInstalledStagedScript(
+                $client, $relaySsh, 'relay_', $call, $check, $longSeconds, $longTimeout,
+            );
+        }
 
         return $result;
     } finally {

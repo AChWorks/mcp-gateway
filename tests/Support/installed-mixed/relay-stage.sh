@@ -26,6 +26,8 @@ run_installed_relay() {
     php -d "curl.cainfo=$secret/tls.crt" -d "openssl.cafile=$secret/tls.crt"
     "$ROOT/gateway/tests/Support/installed-mixed/seed.php")
   local -a sdk=(runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER"
+    MIXED_SSH_LONG_SECONDS="$MIXED_SSH_LONG_SECONDS" MIXED_SSH_LONG_TIMEOUT="$MIXED_SSH_LONG_TIMEOUT"
+    MIXED_SSH_LONG_MODE="$MIXED_SSH_LONG_MODE" MIXED_SSH_LONG_ROUTE="$MIXED_SSH_LONG_ROUTE"
     php "$ROOT/client/client.php")
   "${seed[@]}" relay prepare >"$secret/relay-prepared.json"
   install -d -o "$MIXED_SSH_USER" -g "$(id -gn "$MIXED_SSH_USER")" -m 0700 "$relay_home/.ssh"

@@ -22,7 +22,13 @@ case "$MIXED_SSH_LONG_SECONDS" in
   350|590) MIXED_SSH_LONG_TIMEOUT=$((MIXED_SSH_LONG_SECONDS + 10)) ;;
   *) echo 'Invalid extended qualification duration (0, 350 or 590 seconds).' >&2; exit 2 ;;
 esac
-export MIXED_SSH_LONG_SECONDS MIXED_SSH_LONG_TIMEOUT
+MIXED_SSH_LONG_MODE="${MIXED_SSH_LONG_MODE:-native}"
+MIXED_SSH_LONG_ROUTE="${MIXED_SSH_LONG_ROUTE:-direct}"
+case "$MIXED_SSH_LONG_MODE:$MIXED_SSH_LONG_ROUTE" in
+  native:direct|staged:direct|staged:relay) ;;
+  *) echo 'Invalid extended fixture mode/route.' >&2; exit 2 ;;
+esac
+export MIXED_SSH_LONG_SECONDS MIXED_SSH_LONG_TIMEOUT MIXED_SSH_LONG_MODE MIXED_SSH_LONG_ROUTE
 MIXED_PHP_EXEC_SECONDS=default
 gateway_php_options=()
 if (( MIXED_SSH_LONG_TIMEOUT > 0 )); then
@@ -127,6 +133,7 @@ if [[ "${1:-}" == inside ]]; then
     php tests/Support/installed-mixed/seed.php report >"$MIXED_EVIDENCE/report.json"
   runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
     MIXED_SSH_LONG_SECONDS="$MIXED_SSH_LONG_SECONDS" MIXED_SSH_LONG_TIMEOUT="$MIXED_SSH_LONG_TIMEOUT" \
+    MIXED_SSH_LONG_MODE="$MIXED_SSH_LONG_MODE" MIXED_SSH_LONG_ROUTE="$MIXED_SSH_LONG_ROUTE" \
     php "$ROOT/client/client.php" positive >"$MIXED_EVIDENCE/client.json"
   runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
     php "$ROOT/client/file-client.php" >"$MIXED_EVIDENCE/file-client.json"
@@ -475,6 +482,8 @@ echo "PASS installed fresh WordPress 6.9, WP AI Bridge, MCP Adapter, private Mar
   printf 'vendor_identity=committed_composer_lock_fresh_install\n'
   printf 'gateway_php_exec_limit_seconds=%s\n' "$MIXED_PHP_EXEC_SECONDS"
   printf 'extended_command_sleep_seconds=%s\n' "$MIXED_SSH_LONG_SECONDS"
+  printf 'extended_execution_mode=%s\n' "$MIXED_SSH_LONG_MODE"
+  printf 'extended_execution_route=%s\n' "$MIXED_SSH_LONG_ROUTE"
   printf 'php_version=%s\n' "$(php -r 'echo PHP_VERSION;')"
   printf 'mariadb_version=%s\n' "$(mariadbd --version | head -1)"
   printf 'installed_identity=source-copy-plus-ephemeral-client-provider-only\n'
