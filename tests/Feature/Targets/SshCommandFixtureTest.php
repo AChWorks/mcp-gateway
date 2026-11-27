@@ -3,6 +3,7 @@
 namespace Tests\Feature\Targets;
 
 use App\Application\Mcp\SshCommandMcpToolHandlers;
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshTargetRegistration;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
@@ -65,6 +66,28 @@ final class SshCommandFixtureTest extends TestCase
         self::assertSame('/wA=', $result['result']['stdout']);
         self::assertSame(2, $result['result']['stdout_bytes']);
         self::assertSame(0, $result['result']['exit_code']);
+    }
+
+    public function test_owner_512_kib_stdout_and_stderr_windows_preserve_real_remote_exit(): void
+    {
+        $target = $this->target('password');
+        DB::table('operational_settings')->where('id', 1)->update([
+            'ssh_command_stdout_kib' => 512,
+            'ssh_command_stderr_kib' => 512,
+        ]);
+        $this->app->forgetInstance(OperationalSettings::class);
+        $result = app(SshCommandMcpToolHandlers::class)->run($this->owner(), $target->target_id,
+            "head -c 524289 /dev/zero | tr '\\000' x; head -c 524288 /dev/zero | tr '\\000' e >&2; exit 7");
+        self::assertTrue($result['ok'], $result['error']['code'] ?? '');
+        $data = $result['result'];
+        self::assertSame('completed', $data['status']);
+        self::assertSame(str_repeat('x', 524288), $data['stdout']);
+        self::assertSame(str_repeat('e', 524288), $data['stderr']);
+        self::assertSame(524289, $data['stdout_total_bytes']);
+        self::assertSame(524288, $data['stderr_total_bytes']);
+        self::assertTrue($data['stdout_truncated']);
+        self::assertFalse($data['stderr_truncated']);
+        self::assertSame(7, $data['exit_code']);
     }
 
     public function test_output_flood_drains_safely_and_retains_proven_remote_exit(): void

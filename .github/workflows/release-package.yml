@@ -164,6 +164,7 @@ jobs:
       - name: Verify released-baseline browser updates
         env:
           UPDATE_PACKAGE: ${{ steps.release.outputs.update_package }}
+          UPDATE_TEST_DB_CONTAINER: ${{ job.services.mariadb.id }}
           UPDATE_TEST_DB_HOST: 127.0.0.1
           UPDATE_TEST_DB_PORT: 3306
           UPDATE_TEST_DB_DATABASE: mcp_gateway_test

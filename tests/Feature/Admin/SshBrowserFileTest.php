@@ -108,8 +108,7 @@ final class SshBrowserFileTest extends TestCase
             'browser-real', 'Browser real fixture', 'fixture.example.test',
             (int) getenv('SSH_FIXTURE_PORT_MODERN'), (string) getenv('SSH_FIXTURE_USER'),
             trim((string) file_get_contents((string) getenv('SSH_FIXTURE_ED25519_HOST_PUB'))),
-            'private_key', (string) file_get_contents((string) getenv('SSH_FIXTURE_RSA_LOGIN_KEY')),
-            (string) getenv('SSH_FIXTURE_KEY_PASSPHRASE'),
+            'private_key', (string) file_get_contents((string) getenv('SSH_FIXTURE_RSA_LOGIN_KEY_PLAIN')), null,
         );
         $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
         config()->set('ssh.file_transfer.enabled', true);

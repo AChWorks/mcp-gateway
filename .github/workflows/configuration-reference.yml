@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - 'docs/CONFIGURATION.md'
+      - '.env.example'
+      - 'bin/test-configuration-docs.py'
       - '.github/workflows/configuration-reference.yml'
   pull_request:
     types:
@@ -15,6 +17,8 @@ on:
       - ready_for_review
     paths:
       - 'docs/CONFIGURATION.md'
+      - '.env.example'
+      - 'bin/test-configuration-docs.py'
       - '.github/workflows/configuration-reference.yml'
 
 permissions:

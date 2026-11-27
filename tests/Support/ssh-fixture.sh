@@ -119,6 +119,13 @@ ssh-keygen -q -t ed25519 -N '' -f "${root}/control_host_ed25519"
 ssh-keygen -q -t rsa -b 3072 -N '' -f "${root}/control_host_rsa"
 ssh-keygen -q -t ed25519 -N '' -f "${root}/wrong_ed25519"
 ssh-keygen -q -t rsa -b 3072 -N "${key_passphrase}" -f "${root}/login_rsa"
+# Same disposable login identity, no passphrase, for tests of unrelated
+# transport/data-plane behavior. Never copy or change an installed key.
+install -m 600 "${root}/login_rsa" "${root}/login_rsa_plain"
+ssh-keygen -q -p -P "${key_passphrase}" -N '' -f "${root}/login_rsa_plain" >/dev/null
+[[ "$(ssh-keygen -y -f "${root}/login_rsa_plain" | awk '{print $1, $2}')" == "$(awk '{print $1, $2}' "${root}/login_rsa.pub")" ]] ||
+  { echo 'Fixture login identity changed unexpectedly.' >&2; exit 1; }
+
 # Disposable no-pass key only for the restricted remote-forward control login.
 ssh-keygen -q -t ed25519 -N '' -f "${root}/reverse_tunnel_key"
 # Separate client principal for -D (neither Target login nor Reverse).
@@ -388,6 +395,7 @@ SSH_FIXTURE_USER=${fixture_user}
 SSH_FIXTURE_PASSWORD=${password}
 SSH_FIXTURE_KEY_PASSPHRASE=${key_passphrase}
 SSH_FIXTURE_RSA_LOGIN_KEY=${root}/login_rsa
+SSH_FIXTURE_RSA_LOGIN_KEY_PLAIN=${root}/login_rsa_plain
 SSH_FIXTURE_ED25519_HOST_PUB=${root}/host_ed25519.pin
 SSH_FIXTURE_RSA_HOST_PUB=${root}/host_rsa.pin
 SSH_FIXTURE_WRONG_ED25519_HOST_PUB=${root}/wrong_ed25519.pin

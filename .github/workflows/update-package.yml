@@ -5,37 +5,24 @@ on:
     branches:
       - main
     paths:
-      - VERSION
-      - RELEASE_NOTES.md
-      - 'database/migrations/**'
-      - 'database/schema/**'
+      - 'app/**'
+      - 'bootstrap/**'
+      - 'config/**'
+      - 'database/**'
+      - 'routes/**'
+      - 'artisan'
       - '.env.example'
-      - 'app/Support/SimpleWebInstaller.php'
-      - 'config/ssh.php'
-      - composer.json
-      - composer.lock
-      - LICENSE
-      - NOTICE
-      - 'bin/test_project_license.py'
-      - 'bin/verify-release-package.sh'
-      - 'bin/build-release-package.sh'
-      - 'bin/build-update-package.sh'
-      - 'bin/validate-version.sh'
-      - 'bin/released-baselines.txt'
-      - 'bin/test-released-baseline-parity.py'
-      - 'bin/test_released_baseline_parity.py'
-      - 'bin/check-candidate-artifact-reuse.sh'
-      - 'bin/mcp-gateway-web-updater.php'
-      - 'bin/mcp-gateway-web-recovery.php'
-      - 'bin/update-managed-public-paths.txt'
-      - 'bin/mcp-gateway-web-update-index.php'
-      - 'public/.htaccess'
-      - 'bin/prune-production-vendor.php'
-      - 'bin/test-update-package.sh'
-      - 'bin/test-updater-recovery.php'
-      - 'bin/test-updater-postflight.php'
-      - 'bin/test-update-backup-integrity.sh'
-      - 'bin/verify-update-package.sh'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'phpunit.xml'
+      - 'resources/**'
+      - 'public/**'
+      - 'VERSION'
+      - 'RELEASE_NOTES.md'
+      - 'LICENSE'
+      - 'NOTICE'
+      - 'bin/**'
+      - 'tests/Support/populated-migration-fixture.php'
       - '.github/workflows/update-package.yml'
       - '.github/workflows/release-package.yml'
   pull_request:
@@ -45,37 +32,24 @@ on:
       - reopened
       - ready_for_review
     paths:
-      - VERSION
-      - RELEASE_NOTES.md
-      - 'database/migrations/**'
-      - 'database/schema/**'
+      - 'app/**'
+      - 'bootstrap/**'
+      - 'config/**'
+      - 'database/**'
+      - 'routes/**'
+      - 'artisan'
       - '.env.example'
-      - 'app/Support/SimpleWebInstaller.php'
-      - 'config/ssh.php'
-      - composer.json
-      - composer.lock
-      - LICENSE
-      - NOTICE
-      - 'bin/test_project_license.py'
-      - 'bin/verify-release-package.sh'
-      - 'bin/build-release-package.sh'
-      - 'bin/build-update-package.sh'
-      - 'bin/validate-version.sh'
-      - 'bin/released-baselines.txt'
-      - 'bin/test-released-baseline-parity.py'
-      - 'bin/test_released_baseline_parity.py'
-      - 'bin/check-candidate-artifact-reuse.sh'
-      - 'bin/mcp-gateway-web-updater.php'
-      - 'bin/mcp-gateway-web-recovery.php'
-      - 'bin/update-managed-public-paths.txt'
-      - 'bin/mcp-gateway-web-update-index.php'
-      - 'public/.htaccess'
-      - 'bin/prune-production-vendor.php'
-      - 'bin/test-update-package.sh'
-      - 'bin/test-updater-recovery.php'
-      - 'bin/test-updater-postflight.php'
-      - 'bin/test-update-backup-integrity.sh'
-      - 'bin/verify-update-package.sh'
+      - 'composer.json'
+      - 'composer.lock'
+      - 'phpunit.xml'
+      - 'resources/**'
+      - 'public/**'
+      - 'VERSION'
+      - 'RELEASE_NOTES.md'
+      - 'LICENSE'
+      - 'NOTICE'
+      - 'bin/**'
+      - 'tests/Support/populated-migration-fixture.php'
       - '.github/workflows/update-package.yml'
       - '.github/workflows/release-package.yml'
 
@@ -200,6 +174,7 @@ jobs:
 
       - name: Verify released-baseline browser updates
         env:
+          UPDATE_TEST_DB_CONTAINER: ${{ job.services.mariadb.id }}
           UPDATE_TEST_DB_HOST: 127.0.0.1
           UPDATE_TEST_DB_PORT: 3306
           UPDATE_TEST_DB_DATABASE: mcp_gateway_test

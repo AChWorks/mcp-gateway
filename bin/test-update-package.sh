@@ -7,6 +7,7 @@ set -euo pipefail
 for tool in unzip php curl sha256sum mktemp grep sed awk; do
   command -v "$tool" >/dev/null || { echo "Missing test prerequisite: $tool" >&2; exit 2; }
 done
+fixture="$(realpath "$(dirname "$0")/../tests/Support/populated-migration-fixture.php")"
 update_zip="$(realpath "$1")"
 baseline_zip="$(realpath "$2")"
 [[ -f "$update_zip" && -f "$baseline_zip" ]] || { echo "Missing update/baseline ZIP." >&2; exit 2; }
@@ -19,6 +20,19 @@ db_port="${UPDATE_TEST_DB_PORT:-3306}"
     -n "$db_user" && -n "$db_pass" && "$db_port" =~ ^[0-9]+$ ]] || {
   echo "Only an explicitly configured disposable loopback *_test database is accepted." >&2
   exit 2
+}
+# Native database tooling must use the very same disposable server. In CI
+# the pinned MariaDB service supplies the matching client and dump binaries.
+db_native() {
+  local tool="$1"
+  shift
+  if [[ -n "${UPDATE_TEST_DB_CONTAINER:-}" ]]; then
+    [[ "$UPDATE_TEST_DB_CONTAINER" =~ ^[a-f0-9]{12,64}$ ]] || return 2
+    MYSQL_PWD="$db_pass" docker exec -i -e MYSQL_PWD "$UPDATE_TEST_DB_CONTAINER" "$tool" \
+      --protocol=tcp -h 127.0.0.1 -u "$db_user" "$@" "$db_name"
+  else
+    MYSQL_PWD="$db_pass" "$tool" --protocol=tcp -h "$db_host" -P "$db_port" -u "$db_user" "$@" "$db_name"
+  fi
 }
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/gateway-v3-browser-qa-XXXXXXXX")"
 server_pid=""
@@ -116,6 +130,18 @@ EOF_ENV
   php artisan gateway:check --no-interaction >/dev/null
 )
 
+# Seed real native credentials, exact and stale queued admissions, dispatched
+# evidence, provider intents and transport generations using released code.
+php "$fixture" "$site" seed "$tmp/populated.json"
+php "$fixture" "$site" verify "$tmp/populated.json"
+# Preserve a transaction-consistent database backup independently of the
+# web updater's managed-file backup; verify recovery later from an empty DB.
+( umask 077; db_native mariadb-dump --single-transaction --skip-lock-tables --no-tablespaces > "$tmp/baseline.sql" )
+baseline_digest="$(php "$fixture" "$site" digest "$tmp/populated.json")"
+test -s "$tmp/baseline.sql"
+# Restore validation must boot the actual baseline, with the original key.
+cp -a "$site" "$tmp/baseline"
+
 # Snapshot real app data, encryption recovery, migration ledger and host-owned files.
 cat > "$tmp/snapshot.php" <<'PHP'
 <?php
@@ -186,5 +212,21 @@ bash "$(dirname "$0")/test-v3-updater-http.sh" "$site" "$tmp" "$from" "$to"
 [[ "$(php "$tmp/snapshot.php" "$site")" == "$before_data" ]] || { echo "Update altered existing authorization or credentials." >&2; exit 1; }
 ( cd "$site" && sha256sum --check --strict "$tmp/preserve.sha256" >/dev/null )
 ( cd "$site" && php artisan gateway:check --no-interaction >/dev/null )
+php "$fixture" "$site" verify "$tmp/populated.json"
+# Reconstruct the original schema from the backup, not by overlaying a dump
+# onto the new tables. The explicit disposable-db guard above also governs
+# the existing migrate:fresh. Never do this against an installed Gateway.
+( cd "$site" && php artisan db:wipe --force --no-interaction >/dev/null )
+db_native mariadb < "$tmp/baseline.sql"
+[[ "$(php "$fixture" "$tmp/baseline" digest "$tmp/populated.json")" == "$baseline_digest" ]] || {
+  echo "Restored database does not match the pre-upgrade records/schema." >&2; exit 1;
+}
+php "$fixture" "$tmp/baseline" verify "$tmp/populated.json"
+[[ "$(php "$tmp/snapshot.php" "$tmp/baseline")" == "$before_data" ]] || { echo "Restored baseline identity mismatch." >&2; exit 1; }
+# Reapply the candidate migrations to the restored released schema, proving
+# recovery is usable and the translated authorities remain deterministic.
+( cd "$site" && php artisan migrate --force --no-interaction >/dev/null )
+php "$fixture" "$site" verify "$tmp/populated.json"
+echo "PASS: native MariaDB backup restored to an empty schema, exact row digest and original native vaults verified, then migrated again."
 [[ -d "$site/storage/app/private/update-backups" ]] || { echo "Code backup not retained." >&2; exit 1; }
 printf 'PASS: verified released v%s -> v%s v3 browser updater stage+finish; persistent data, keys, grants, public host state, and health intact.\n' "$from" "$to"
