@@ -26,12 +26,22 @@ use App\Infrastructure\OAuth\League\Repositories\AccessTokenRepository;
 use App\Infrastructure\OAuth\OAuthAuthorizationStore;
 use App\Models\User;
 use Illuminate\Contracts\Console\Kernel;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Support\Facades\DB;
 use League\OAuth2\Server\CryptKey;
+use Symfony\Component\Console\Output\ConsoleOutput;
 
 require dirname(__DIR__, 3).'/vendor/autoload.php';
 $app = require dirname(__DIR__, 3).'/bootstrap/app.php';
 $app->make(Kernel::class)->bootstrap();
+// Laravel's CLI exception renderer can return control to PHP without a
+// nonzero process status. An installed fixture must stop at the failed stage.
+set_exception_handler(static function (Throwable $error): never {
+    app(ExceptionHandler::class)->renderForConsole(
+        new ConsoleOutput, $error,
+    );
+    exit(1);
+});
 $stateFile = (string) getenv('MIXED_STATE_FILE');
 if ($stateFile === '' || ! str_starts_with($stateFile, '/')) {
     throw new RuntimeException('MIXED_STATE_FILE must be an absolute disposable fixture path.');
@@ -74,12 +84,12 @@ if ($mode === 'init') {
     $owner = app(UserAccessManager::class)->create([
         'name' => 'Installed mixed owner', 'email' => 'mixed-owner@example.invalid',
         'password' => bin2hex(random_bytes(20)),
-        'role' => 'owner', 'target_scope_mode' => 'all', 'access_enabled' => true,
+        'role' => 'owner', 'target_scope_mode' => 'all', 'access_enabled' => true, 'ai_access_enabled' => true,
     ], []);
     $operator = app(UserAccessManager::class)->create([
         'name' => 'Installed mixed operator', 'email' => 'mixed-operator@example.invalid',
         'password' => bin2hex(random_bytes(20)),
-        'role' => 'operator', 'target_scope_mode' => 'selected', 'access_enabled' => true,
+        'role' => 'operator', 'target_scope_mode' => 'selected', 'access_enabled' => true, 'ai_access_enabled' => true,
     ], []);
 
     // Exercise the real Owner-configurable DB settings, not just .env defaults.
