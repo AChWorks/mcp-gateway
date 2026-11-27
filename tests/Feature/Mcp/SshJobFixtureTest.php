@@ -475,8 +475,11 @@ SH;
         $start = $tools->start($actor, $target->target_id, $client, $request, $script, 60);
         self::assertTrue($start['ok'], json_encode($start));
         $id = $start['result']['job_id'];
-        $row = DB::table('ssh_command_jobs')->where('id', $id);
-        $binding = $row->value('target_binding_hash');
+        // Use a fresh builder: SQLite limited updates mutate the selected
+        // columns to rowid, so reusing a builder after value()/update()
+        // can read rowid instead of the requested journal field.
+        $row = static fn () => DB::table('ssh_command_jobs')->where('id', $id);
+        $binding = $row()->value('target_binding_hash');
         for ($i = 0; $i < 10; $i++) {
             $status = $tools->status($actor, $target->target_id, $client, $id);
             if (($status['result']['status'] ?? null) === 'completed') {
@@ -545,13 +548,14 @@ SH;
 
         // Simulate a remote-completed Job whose last local status response
         // was lost. Its actual exit marker exists on the disposable host.
-        $row->update(['status' => 'running', 'exit_code' => null, 'terminal_reason' => null]);
+        self::assertSame(1, $row()->update(['status' => 'running', 'exit_code' => null, 'terminal_reason' => null]));
+        self::assertNull($row()->value('exit_code'));
         foreach (['status', 'cancel'] as $operation) {
             try {
                 $rejected = $atFence(3, static fn () => $tools->{$operation}($actor, $target->target_id, $client, $id));
                 self::assertFalse($rejected['result']['remote_observed']);
-                self::assertNull($row->value('exit_code'));
-                self::assertSame($operation === 'cancel' ? 'cancel_requested' : 'running', $row->value('status'));
+                self::assertNull($row()->value('exit_code'));
+                self::assertSame($operation === 'cancel' ? 'cancel_requested' : 'running', $row()->value('status'));
             } finally {
                 $grant(GatewayPermission::SshCommandRun)->delete();
             }
@@ -588,11 +592,12 @@ SH;
         self::assertTrue($positive['ok'], json_encode($positive));
         self::assertSame(base64_encode(str_repeat("\0", 6)), $positive['result']['data']);
         self::assertTrue($positive['result']['truncated']);
-        $row->update(['status' => 'running', 'exit_code' => null, 'terminal_reason' => null]);
+        self::assertSame(1, $row()->update(['status' => 'running', 'exit_code' => null, 'terminal_reason' => null]));
+        self::assertNull($row()->value('exit_code'));
         try {
             $rejected = $atFence(6, static fn () => $tools->status($actor, $target->target_id, $client, $id));
             self::assertFalse($rejected['result']['remote_observed']);
-            self::assertNull($row->value('exit_code'));
+            self::assertNull($row()->value('exit_code'));
         } finally {
             $grant(GatewayPermission::SshCommandRun)->delete();
         }
