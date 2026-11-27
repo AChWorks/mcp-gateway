@@ -70,6 +70,8 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
 
     private bool $failTokenExchange = false;
 
+    private bool $loseCallbackResponse = false;
+
     private bool $failMetadata = false;
 
     private bool $failRefresh = false;
@@ -644,6 +646,213 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $this->failTokenExchange = false;
         $this->pair($alpha);
         self::assertSame(TargetConnectionState::Connected, $alpha->refresh()->connection_state);
+    }
+
+    /** @return array<string, array{string, string}> */
+    public static function oauthPreparationFailures(): array
+    {
+        return [
+            'missing key' => ['missing', 'client_assertion_unavailable'],
+            'invalid key' => ['invalid', 'client_assertion_unavailable'],
+            'mismatched key' => ['mismatch', 'client_assertion_unavailable'],
+            'unsafe DNS' => ['dns', 'unsafe_target'],
+        ];
+    }
+
+    #[DataProvider('oauthPreparationFailures')]
+    public function test_oauth_callback_local_preparation_failure_preserves_exact_flow(string $failure, string $reason): void
+    {
+        $target = $this->target('alpha');
+        $url = app(WpAiBridgeTargetConnectionService::class)->begin($target);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $args);
+        $before = DB::table('wp_ai_bridge_oauth_flows')->first();
+        $requestCount = Http::recorded()->count();
+
+        $this->withOAuthPreparationFailure($failure, function (callable $breakPreparation) use ($args, $reason, $failure): void {
+            $service = app(WpAiBridgeTargetConnectionService::class);
+            $breakPreparation();
+            try {
+                $service->completeCallback($args['state'], 'alpha-code', 'https://alpha.example.test', null);
+                self::fail('Local preparation failure must be a typed, recoverable callback failure.');
+            } catch (WpAiBridgeTargetConnectionException $exception) {
+                self::assertSame($reason, $exception->reason);
+                self::assertTrue($exception->diagnostics['pre_dispatch'] ?? false);
+                if ($failure === 'dns') {
+                    self::assertMixedDnsDiagnostic($exception->diagnostics);
+                }
+            }
+        });
+
+        self::assertSame($requestCount, Http::recorded()->count());
+        $after = DB::table('wp_ai_bridge_oauth_flows')->first();
+        self::assertSame($before->id, $after->id);
+        self::assertSame($before->state_hash, $after->state_hash);
+        self::assertSame($before->encrypted_context, $after->encrypted_context);
+        self::assertSame($before->expires_at, $after->expires_at);
+        self::assertNull($after->consumed_at);
+        self::assertSame(TargetConnectionState::Pending, $target->refresh()->connection_state);
+        self::assertSame($reason, $target->last_error_code);
+        self::assertSame(0, DB::table('target_credentials')->count());
+
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        try {
+            $service->completeCallback($args['state'], 'alpha-code', 'https://beta.example.test', null);
+            self::fail('Repair must not permit a different issuer.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('issuer_mismatch', $exception->reason);
+        }
+        self::assertSame($requestCount, Http::recorded()->count());
+        $service->completeCallback($args['state'], 'alpha-code', 'https://alpha.example.test', null);
+        self::assertSame($requestCount + 1, Http::recorded()->count());
+        self::assertSame('alpha-access', $service->accessToken($target->fresh()));
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        self::assertSame(0, DB::table('wp_ai_bridge_oauth_flows')->count());
+    }
+
+    /** @return array<string,array{string,string,bool}> */
+    public static function callbackPreparationDiagnostics(): array
+    {
+        return [
+            'signed-in signing failure' => ['missing', 'client_assertion_unavailable', true],
+            'guest mixed DNS failure' => ['dns', 'unsafe_target', false],
+        ];
+    }
+
+    #[DataProvider('callbackPreparationDiagnostics')]
+    public function test_callback_preparation_failure_uses_safe_existing_diagnostic_and_exact_retry(string $failure, string $reason, bool $signedIn): void
+    {
+        $target = $this->target('alpha');
+        if ($signedIn) {
+            $this->actingAs($this->user('owner', 'all'));
+        }
+        $url = app(WpAiBridgeTargetConnectionService::class)->begin($target);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $args);
+        $callback = '/oauth/targets/callback?'.http_build_query([
+            'state' => $args['state'],
+            'code' => 'private-fixture-authorization-code',
+            'iss' => 'https://alpha.example.test',
+        ]);
+        $requestCount = Http::recorded()->count();
+        Log::spy();
+
+        $this->withOAuthPreparationFailure($failure, function (callable $breakPreparation) use ($callback, $args, $failure, $reason, $target): void {
+            $breakPreparation();
+            $response = $this->get($callback)->assertAdminRedirect('/admin/targets')
+                ->assertSessionHas('target_connection_failed', true)
+                ->assertSessionHas('diagnostic_code', $reason)
+                ->assertSessionMissing('diagnostic_context')
+                ->assertSessionMissing('diagnostic_stage');
+            $reference = (string) session('diagnostic_reference');
+            self::assertTrue(Str::isUuid($reference));
+            $response->assertHeader('X-Correlation-ID', $reference);
+            $keyPath = (string) config('bridge.keys.private');
+            Log::shouldHaveReceived('warning')->once()->withArgs(
+                static function (string $message, array $context) use ($reference, $args, $keyPath, $failure, $reason, $target): bool {
+                    $serialized = json_encode($context, JSON_THROW_ON_ERROR);
+
+                    return $message === 'Gateway operation failure.'
+                        && ($context['operation'] ?? null) === 'wordpress-oauth-callback'
+                        && ($context['error_code'] ?? null) === $reason
+                        && ($context['correlation_id'] ?? null) === $reference
+                        && ($context['request_not_sent'] ?? null) === true
+                        && ($context['failure_origin'] ?? null) === 'gateway_admission'
+                        && ($context['failure_stage'] ?? null) === ($failure === 'dns' ? 'dns_lookup' : 'admission')
+                        && ($context['outbound_rejection_reason'] ?? null) === ($failure === 'dns' ? 'dns_non_public' : null)
+                        && ($context['target_id'] ?? null) === null
+                        && ($context['connector_type'] ?? null) === null
+                        && ! array_key_exists('outbound_rejected_address', $context)
+                        && ! array_key_exists('gateway_error_message', $context)
+                        && ! str_contains($serialized, $args['state'])
+                        && ! str_contains($serialized, 'private-fixture-authorization-code')
+                        && ! str_contains($serialized, $keyPath)
+                        && ! str_contains($serialized, '10.0.0.8')
+                        && ! str_contains($serialized, 'alpha.example.test')
+                        && ! str_contains($serialized, (string) $target->getKey());
+                },
+            );
+        });
+
+        self::assertSame($requestCount, Http::recorded()->count());
+        $this->get($callback)->assertAdminRedirect('/admin/targets/alpha');
+        self::assertSame($requestCount + 1, Http::recorded()->count());
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+    }
+
+    /** @return array<string, array{string}> */
+    public static function retiredCallbackFlows(): array
+    {
+        return ['expired' => ['expired'], 'superseded' => ['superseded']];
+    }
+
+    #[DataProvider('retiredCallbackFlows')]
+    public function test_callback_preparation_repair_cannot_reopen_retired_flow(string $retirement): void
+    {
+        $target = $this->target('alpha');
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $url = $service->begin($target);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $args);
+        $this->withOAuthPreparationFailure('missing', function (callable $breakPreparation) use ($service, $args): void {
+            $breakPreparation();
+            try {
+                $service->completeCallback($args['state'], 'alpha-code', 'https://alpha.example.test', null);
+                self::fail('Expected local signing failure.');
+            } catch (WpAiBridgeTargetConnectionException $exception) {
+                self::assertSame('client_assertion_unavailable', $exception->reason);
+            }
+        });
+
+        if ($retirement === 'expired') {
+            $this->travelTo(now()->addSeconds((int) config('bridge.oauth.flow_ttl_seconds') + 1));
+        } else {
+            $service->begin($target->fresh());
+        }
+        $before = (array) DB::table('wp_ai_bridge_oauth_flows')->first();
+        $requestCount = Http::recorded()->count();
+        try {
+            $service->completeCallback($args['state'], 'alpha-code', 'https://alpha.example.test', null);
+            self::fail('Repair reopened an expired or superseded flow.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('invalid_state', $exception->reason);
+        } finally {
+            $this->travelBack();
+        }
+        self::assertSame($before, (array) DB::table('wp_ai_bridge_oauth_flows')->first());
+        self::assertSame($requestCount, Http::recorded()->count());
+        self::assertSame(0, DB::table('target_credentials')->count());
+    }
+
+    public function test_callback_lost_remote_response_does_not_allow_retry(): void
+    {
+        $target = $this->target('alpha');
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        $url = $service->begin($target);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $args);
+        $this->loseCallbackResponse = true;
+        $observed = false;
+        $this->duringBridgeRequest = static function (Request $request) use (&$observed): void {
+            self::assertStringEndsWith('/oauth/token', $request->url());
+            $observed = true;
+        };
+        try {
+            $service->completeCallback($args['state'], 'alpha-code', 'https://alpha.example.test', null);
+            self::fail('Lost response must not become a successful callback.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('network_failure', $exception->reason);
+        }
+        self::assertTrue($observed);
+        self::assertSame(TargetConnectionState::ReconnectRequired, $target->refresh()->connection_state);
+        self::assertSame(0, DB::table('wp_ai_bridge_oauth_flows')->count());
+        self::assertSame(0, DB::table('target_credentials')->count());
+        $this->loseCallbackResponse = false;
+        $this->duringBridgeRequest = static function (): void {
+            self::fail('A possibly consumed authorization code was replayed.');
+        };
+        try {
+            $service->completeCallback($args['state'], 'alpha-code', 'https://alpha.example.test', null);
+            self::fail('Lost response reopened callback state.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('invalid_state', $exception->reason);
+        }
     }
 
     public function test_public_metadata_checks_preserve_settled_oauth_failure_diagnostics(): void
@@ -1239,13 +1448,22 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             self::fail('Private DNS must be rejected before the token exchange.');
         } catch (WpAiBridgeTargetConnectionException $exception) {
             self::assertSame('refresh_unavailable', $exception->reason);
+            self::assertMixedDnsDiagnostic($exception->diagnostics);
         }
 
         self::assertSame(0, $this->refreshCalls);
         self::assertSame(0, $this->refreshHandledByBridge);
-        Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'WordPress OAuth refresh failed before dispatch.'
-            && ($context['cause_code'] ?? null) === 'unsafe_target'
-        )->once();
+        Log::shouldHaveReceived('warning')->withArgs(static function (string $message, array $context): bool {
+            if ($message !== 'WordPress OAuth refresh failed before dispatch.' || ($context['cause_code'] ?? null) !== 'unsafe_target') {
+                return false;
+            }
+            self::assertMixedDnsDiagnostic($context);
+            self::assertTrue(Str::isUuid($context['correlation_id'] ?? ''));
+            self::assertTrue($context['request_not_sent']);
+            self::assertFalse($context['recovery_attempt']);
+
+            return true;
+        })->once();
         $this->assertDeferredFirstRefreshIsUnconsumed($target, $before['refresh_token']);
 
         $dns->reject = false;
@@ -1357,12 +1575,14 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $recordId = (string) $target->getKey();
         Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'WordPress OAuth refresh failed before dispatch.'
             && array_keys($context) === [
-                'target_record_id', 'cause_code', 'failure_stage',
-                'request_not_sent', 'recovery_attempt',
+                'failure_origin', 'failure_stage', 'correlation_id',
+                'target_record_id', 'cause_code', 'request_not_sent', 'recovery_attempt',
             ]
+            && Str::isUuid($context['correlation_id'] ?? '')
             && ($context['target_record_id'] ?? null) === $recordId
             && ($context['cause_code'] ?? null) === 'client_assertion_unavailable'
-            && ($context['failure_stage'] ?? null) === 'unspecified'
+            && ($context['failure_origin'] ?? null) === 'gateway_admission'
+            && ($context['failure_stage'] ?? null) === 'admission'
             && ($context['request_not_sent'] ?? null) === true
         )->once();
 
@@ -1434,12 +1654,14 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $recordId = (string) $target->getKey();
         Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'WordPress OAuth refresh transport outcome ambiguous.'
             && array_keys($context) === [
-                'target_record_id', 'cause_code', 'failure_stage',
-                'request_not_sent', 'recovery_attempt',
+                'failure_origin', 'failure_stage', 'correlation_id',
+                'target_record_id', 'cause_code', 'request_not_sent', 'recovery_attempt',
             ]
+            && Str::isUuid($context['correlation_id'] ?? '')
             && ($context['target_record_id'] ?? null) === $recordId
             && ($context['cause_code'] ?? null) === 'client_assertion_unavailable'
-            && ($context['failure_stage'] ?? null) === 'unspecified'
+            && ($context['failure_origin'] ?? null) === 'gateway_admission'
+            && ($context['failure_stage'] ?? null) === 'admission'
             && ($context['request_not_sent'] ?? null) === true
         )->once();
 
@@ -1473,12 +1695,27 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $dns = $this->installSwitchablePrivateDnsFixture();
         $dns->reject = true;
         $recover = app(WpAiBridgeTargetConnectionService::class);
+        Log::spy();
         try {
             $recover->accessToken($target);
             self::fail('A blocked second attempt cannot clear the unknown first rotation.');
         } catch (WpAiBridgeTargetConnectionException $exception) {
             self::assertSame('refresh_ambiguous', $exception->reason);
+            self::assertMixedDnsDiagnostic($exception->diagnostics);
+            self::assertArrayNotHasKey('request_not_sent', $exception->diagnostics);
+            self::assertArrayNotHasKey('retry_safe', $exception->diagnostics);
         }
+        Log::shouldHaveReceived('warning')->withArgs(static function (string $message, array $context): bool {
+            if ($message !== 'WordPress OAuth refresh transport outcome ambiguous.' || ($context['cause_code'] ?? null) !== 'unsafe_target') {
+                return false;
+            }
+            self::assertMixedDnsDiagnostic($context);
+            self::assertTrue(Str::isUuid($context['correlation_id'] ?? ''));
+            self::assertTrue($context['request_not_sent'], 'Only the current recovery request was not sent.');
+            self::assertTrue($context['recovery_attempt']);
+
+            return true;
+        })->once();
 
         self::assertSame(1, $this->refreshCalls);
         self::assertSame(2, (int) DB::table('wp_ai_bridge_refresh_intents')->value('attempts'));
@@ -2836,6 +3073,21 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             ->update(['refresh_due_at' => now()->subSecond()]);
     }
 
+    /** @param array<string,mixed> $context */
+    private static function assertMixedDnsDiagnostic(array $context): void
+    {
+        self::assertSame('gateway_admission', $context['failure_origin'] ?? null);
+        self::assertSame('dns_lookup', $context['failure_stage'] ?? null);
+        self::assertSame('dns_non_public', $context['outbound_rejection_reason'] ?? null);
+        self::assertSame('10.0.0.8', $context['outbound_rejected_address'] ?? null);
+        self::assertSame('private', $context['outbound_address_class'] ?? null);
+        self::assertSame('dns', $context['outbound_address_source'] ?? null);
+        $serialized = json_encode($context, JSON_THROW_ON_ERROR);
+        foreach (['alpha-refresh', 'alpha-access', 'alpha-code', 'client_assertion', 'code_verifier', 'PRIVATE KEY'] as $secret) {
+            self::assertStringNotContainsString($secret, $serialized);
+        }
+    }
+
     private function installSwitchablePrivateDnsFixture(): DnsResolver
     {
         $dns = new class implements DnsResolver
@@ -2852,6 +3104,153 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $this->app->instance(DnsResolver::class, $dns);
 
         return $dns;
+    }
+
+    /**
+     * Install only disposable test preparation failures. The caller chooses
+     * the exact failure boundary, including after the first revoke request.
+     */
+    private function withOAuthPreparationFailure(string $failure, callable $callback): void
+    {
+        if ($failure === 'dns') {
+            $dns = $this->installSwitchablePrivateDnsFixture();
+            try {
+                $callback(static function () use ($dns): void {
+                    $dns->reject = true;
+                });
+            } finally {
+                $dns->reject = false;
+            }
+
+            return;
+        }
+
+        $original = (string) config('bridge.keys.private');
+        $path = tempnam(sys_get_temp_dir(), 'gateway-oauth-preparation-');
+        self::assertNotFalse($path);
+        try {
+            if ($failure === 'missing') {
+                self::assertTrue(unlink($path));
+            } elseif ($failure === 'mismatch') {
+                $key = openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]);
+                self::assertNotFalse($key);
+                self::assertTrue(openssl_pkey_export($key, $pem));
+                self::assertNotFalse(file_put_contents($path, $pem));
+            } else {
+                self::assertSame('invalid', $failure);
+                self::assertNotFalse(file_put_contents($path, 'invalid fixture key'));
+            }
+            $callback(static function () use ($path): void {
+                config()->set('bridge.keys.private', $path);
+            });
+        } finally {
+            config()->set('bridge.keys.private', $original);
+            if (is_file($path)) {
+                unlink($path);
+            }
+        }
+    }
+
+    /** @return array<string, array{string, string, int}> */
+    public static function revokePreparationFailures(): array
+    {
+        $cases = [];
+        foreach (self::oauthPreparationFailures() as $name => [$failure, $reason]) {
+            foreach ([0, 1] as $confirmed) {
+                $cases[$name.' after '.$confirmed.' acknowledgments'] = [$failure, $reason, $confirmed];
+            }
+        }
+
+        return $cases;
+    }
+
+    #[DataProvider('revokePreparationFailures')]
+    public function test_revoke_local_preparation_failure_preserves_exact_progress(string $failure, string $reason, int $confirmed): void
+    {
+        $target = $this->target('alpha');
+        $this->pair($target);
+        $credentialId = $this->credential($target)->getKey();
+        $requestCount = Http::recorded()->count();
+
+        $this->withOAuthPreparationFailure($failure, function (callable $breakPreparation) use ($target, $confirmed, $reason, $failure): void {
+            $service = app(WpAiBridgeTargetConnectionService::class);
+            if ($confirmed === 0) {
+                $breakPreparation();
+            } else {
+                $this->duringBridgeRequest = static function (Request $request) use ($breakPreparation): void {
+                    self::assertStringEndsWith('/oauth/revoke', $request->url());
+                    self::assertSame('alpha-refresh', $request->data()['token']);
+                    $breakPreparation();
+                };
+            }
+            if ($failure === 'dns') {
+                $this->actingAs($this->user('owner', 'all'));
+                Log::spy();
+                $result = $this->post('/admin/targets/alpha/disconnect')
+                    ->assertAdminRedirect('/admin/targets/alpha')
+                    ->assertSessionHasErrors('target')
+                    ->assertSessionHas('diagnostic_code', $reason)
+                    ->assertSessionHas('diagnostic_stage', 'dns_lookup');
+                $context = session('diagnostic_context');
+                self::assertMixedDnsDiagnostic($context);
+                self::assertTrue($context['request_not_sent']);
+                self::assertTrue($context['retry_safe']);
+                $reference = (string) session('diagnostic_reference');
+                self::assertTrue(Str::isUuid($reference));
+                $result->assertHeader('X-Correlation-ID', $reference);
+                Log::shouldHaveReceived('warning')->once()->withArgs(static function (string $message, array $context) use ($reference): bool {
+                    if ($message !== 'Gateway operation failure.' || ($context['correlation_id'] ?? null) !== $reference
+                        || ($context['operation'] ?? null) !== 'target-disconnect' || ($context['error_code'] ?? null) !== 'unsafe_target') {
+                        return false;
+                    }
+                    self::assertMixedDnsDiagnostic($context);
+                    self::assertTrue($context['request_not_sent']);
+                    self::assertTrue($context['retry_safe']);
+
+                    return true;
+                });
+            } else {
+                try {
+                    $service->disconnect($target);
+                    self::fail('Local preparation failure must preserve revocation progress.');
+                } catch (WpAiBridgeTargetConnectionException $exception) {
+                    self::assertSame($reason, $exception->reason);
+                    self::assertTrue($exception->diagnostics['pre_dispatch']);
+                    self::assertTrue($exception->diagnostics['retry_safe']);
+                }
+            }
+        });
+
+        self::assertSame($requestCount + $confirmed, Http::recorded()->count());
+        self::assertSame(array_slice(['alpha-refresh'], 0, $confirmed), $this->revocationTokenAttempts);
+        $intent = DB::table('wp_ai_bridge_revocation_intents')->first();
+        self::assertSame('retryable', $intent->phase);
+        self::assertSame($confirmed, (int) $intent->token_confirmed);
+        self::assertSame($credentialId, $this->credential($target)->getKey());
+        self::assertSame(TargetConnectionState::Error, $target->refresh()->connection_state);
+        self::assertSame($reason, $target->last_error_code);
+
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        try {
+            $service->disconnect($target, (string) Str::ulid());
+            self::fail('Repair must not accept a stale intent.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('revocation_conflict', $exception->reason);
+        }
+        try {
+            $service->disconnect($target, (string) $intent->id, static fn (): bool => false);
+            self::fail('Repair must not restore revoked control authority.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('forbidden', $exception->reason);
+        }
+        self::assertSame($requestCount + $confirmed, Http::recorded()->count());
+        self::assertSame('retryable', DB::table('wp_ai_bridge_revocation_intents')->value('phase'));
+        self::assertTrue($service->disconnect($target, (string) $intent->id));
+        self::assertSame(['alpha-refresh', 'alpha-access'], $this->revocationTokenAttempts);
+        self::assertSame($requestCount + 2, Http::recorded()->count());
+        self::assertSame(0, DB::table('target_credentials')->count());
+        self::assertSame(0, DB::table('wp_ai_bridge_revocation_intents')->count());
+        self::assertSame(TargetConnectionState::Disconnected, $target->refresh()->connection_state);
     }
 
     public function test_predispatch_retry_completes_only_same_intent_and_prevents_double_submit(): void
@@ -3874,6 +4273,12 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
                     self::assertSame('callback_pending', $exception->reason);
                     $this->sawCallbackFence = true;
                 }
+            }
+            if ($this->loseCallbackResponse) {
+                return Create::rejectionFor(new GuzzleNetworkTimeoutException(
+                    'Response timed out after authorization code request bytes were sent.',
+                    $request->toPsrRequest(),
+                ));
             }
             if ($this->failTokenExchange) {
                 return Http::response(['error' => 'invalid_grant'], 400);
