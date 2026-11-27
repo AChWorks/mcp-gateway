@@ -7,6 +7,9 @@ use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetConfig;
 use App\Infrastructure\Connectors\ArvanCloud\ArvanApiTargetVault;
+use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\Relay\ConnectionRelayOnboarding;
+use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
@@ -286,6 +289,26 @@ if ($argv[2] === 'seed') {
     fixtureInsert('connection_relays', ['id' => $relay, 'relay_id' => 'qa-pop-relay',
         'display_name' => 'QA Relay', 'control_host' => 'relay.example.test', 'control_port' => 22,
         'control_user' => 'fixture', 'control_host_key' => $pin, 'local_socks_port' => 18421, 'enabled' => true]);
+    $registration = ConnectionRelay::query()->findOrFail($relay);
+    $onboarding = app(ConnectionRelayOnboarding::class);
+    $onboarding->prepare($registration);
+    $registration->refresh();
+    requireFixture(is_string($registration->login_public_key) && $registration->login_public_key !== ''
+        && is_string($registration->login_private_key_encrypted) && $registration->login_private_key_encrypted !== '',
+        'Native Relay onboarding identity was not persisted.');
+    // The exact public registration and ciphertext are already in rows.
+    // Retain only a digest of the opened private identity, not the key.
+    $relayIdentity = ['id' => $relay, 'private_key_sha256' => hash('sha256', $onboarding->privateKey($registration))];
+
+    // Persist representative active provider configuration, without
+    // provisioning a host, publishing keys or contacting a provider.
+    SshManagedReverseGateway::query()->create([
+        'id' => 1, 'enabled' => true, 'publication_pending' => false,
+        'control_host' => 'reverse.example.test', 'control_port' => 7770,
+        'control_user' => 'mcp-reverse', 'control_host_key' => $pin, 'revision' => 5,
+    ]);
+    requireFixture(SshManagedReverseGateway::active(), 'Managed Reverse provider fixture is not configured and enabled.');
+    echo "Seeded native Relay onboarding identity and active Managed Reverse provider settings.\n";
     $targets = [];
     $converted = [];
     foreach (['direct', 'relay', 'reverse', 'managed'] as $index => $kind) {
@@ -419,7 +442,8 @@ if ($argv[2] === 'seed') {
         'overrides' => json_encode(['wp_response_kib' => 128], JSON_THROW_ON_ERROR),
     ]);
 
-    $data = ['legacy' => $legacy, 'targets' => $targets, 'converted' => $converted, 'denials' => $denials, 'rows' => []];
+    $data = ['legacy' => $legacy, 'relay' => $relayIdentity, 'targets' => $targets,
+        'converted' => $converted, 'denials' => $denials, 'rows' => []];
     foreach ([...$tables, 'targets', 'ssh_direct_target_configs', 'target_credentials', 'ssh_reverse_managed_enrollments',
         'target_batch_items', 'ssh_command_jobs'] as $table) {
         $data['rows'][$table] = fixtureRows($table);
@@ -432,6 +456,11 @@ if ($argv[2] === 'seed') {
 
 $data = json_decode(file_get_contents($argv[3]), true, 512, JSON_THROW_ON_ERROR);
 $upgrade = $data['legacy'] && ! $legacy;
+$registration = ConnectionRelay::query()->findOrFail($data['relay']['id']);
+requireFixture(hash_equals($data['relay']['private_key_sha256'],
+    hash('sha256', app(ConnectionRelayOnboarding::class)->privateKey($registration))),
+    'Native Relay private identity changed.');
+requireFixture(SshManagedReverseGateway::active(), 'Managed Reverse provider lost active configuration.');
 foreach ($data['targets'] as $id => $expected) {
     $target = Target::query()->findOrFail($id);
     $credential = TargetCredential::query()->findOrFail($expected['credential_id']);
@@ -517,4 +546,5 @@ if ($upgrade) {
         && Carbon::parse($observation->observed_at)->equalTo(Carbon::parse($metadataError->last_tested_at)),
         'Metadata-only error provenance or observation was lost.');
 }
+echo "Verified exact Relay registration/ciphertext and native private identity, plus active Managed Reverse provider settings.\n";
 echo "Verified populated installed identities, native secrets, protocol intents and retained journals.\n";

@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - 'docs/CONFIGURATION.md'
+      - 'README.md'
+      - 'docs/DEPLOYMENT.md'
       - '.env.example'
       - 'bin/test-configuration-docs.py'
       - '.github/workflows/configuration-reference.yml'
@@ -17,6 +19,8 @@ on:
       - ready_for_review
     paths:
       - 'docs/CONFIGURATION.md'
+      - 'README.md'
+      - 'docs/DEPLOYMENT.md'
       - '.env.example'
       - 'bin/test-configuration-docs.py'
       - '.github/workflows/configuration-reference.yml'
