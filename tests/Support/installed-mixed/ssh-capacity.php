@@ -4,15 +4,13 @@ declare(strict_types=1);
 
 use Mcp\Client;
 
-/** Identical representative capacity assertions for the Direct and Relay routes. */
-function qualifyInstalledStagedScript(Client $client, string $target, string $prefix, Closure $call, Closure $check): array
+/** Identical staged-script workload and assertions across actual SSH routes. */
+function qualifyStagedScript(Closure $run, Closure $check): array
 {
     // Same admitted byte ceiling, explicitly staged instead of native argv.
     $tail = "\n".'printf "staged-512k-ok"; printf "staged-512k-err" >&2; exit 7';
     $script = '# '.str_repeat('x', 524288 - 2 - strlen($tail)).$tail;
-    $staged = $call($client, 'ssh-script-run', [
-        'target_id' => $target, 'script' => $script, 'interpreter' => '/bin/sh',
-    ], $prefix.'ssh_staged_512k');
+    $staged = $run($script, '/bin/sh');
     $stageResult = $staged['result'] ?? [];
     $check(($staged['ok'] ?? false) === true && ($stageResult['status'] ?? null) === 'completed'
         && ($stageResult['script_bytes'] ?? null) === 524288
@@ -33,6 +31,16 @@ function qualifyInstalledStagedScript(Client $client, string $target, string $pr
     ];
 
     return $stageEvidence;
+}
+
+function qualifyInstalledStagedScript(Client $client, string $target, string $prefix, Closure $call, Closure $check): array
+{
+    return qualifyStagedScript(
+        static fn (string $script, string $interpreter): array => $call($client, 'ssh-script-run', [
+            'target_id' => $target, 'script' => $script, 'interpreter' => $interpreter,
+        ], $prefix.'ssh_staged_512k'),
+        $check,
+    );
 }
 
 function qualifyInstalledInlineSftp(Client $client, string $target, string $prefix, Closure $call, Closure $check): array

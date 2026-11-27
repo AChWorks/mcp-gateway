@@ -348,6 +348,9 @@ composer test
 
 Keep encrypted-key verification in dedicated real OpenSSH cases. Other native authority/transfer tests may use the private same-key fixture copy without repeated passphrase derivation, only after its public identity is verified against the original. Never reuse a production key or relax production decryption or admission semantics for speed.
 
+The real systemd Job lane also qualifies a 512 KiB retained script through the registered native Relay using its existing pinned loopback SOCKS fixture. It verifies stored script length and SHA-256 from an independent Direct Target, both complete output streams and exit, original Job history, no remote output during administrative Relay disable, exact-request recovery without relaunch, re-enabled-route continuation and product pruning with independent absence checks. The SOCKS listener stays running during this authority test; the installed mixed suite separately proves actual listener outage. The managed Reverse enrollment lane invokes the same 512 KiB staged synchronous script assertions as installed Direct/Relay, through the actual enrolled Reverse listener and application MCP handler. These two fixture lanes exercise real OpenSSH/systemd or Reverse transport, not external HTTPS SDK deadlines, production WAN, physical multi-host throughput, or actual operator-host acceptance.
+
+
 Do not shard a retained long-running suite by default. First compare fixed runner/service/setup cost with the test body. Introduce shards only when non-overlapping isolated shards materially shorten the same-workload critical path after trigger/duplication cleanup, and verify aggregate completeness and isolation. Keep exact timing evidence in the active optimization Issue/PR rather than hard-coding transient runner measurements into this durable workflow guide.
 
 ## Release package validation
