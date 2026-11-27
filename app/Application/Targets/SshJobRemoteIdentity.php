@@ -9,10 +9,7 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use Closure;
-use phpseclib4\Exception\FileSystemException;
 use phpseclib4\Net\SFTP;
-use phpseclib4\Net\SFTP\FileType;
-use Throwable;
 
 /** Fresh route/material for one follow-up, never the old Job's dispatch authority. */
 final readonly class SshJobRemoteIdentity
@@ -88,17 +85,9 @@ final readonly class SshJobRemoteIdentity
             return $command;
         }
 
-        $directory = escapeshellarg($this->directory);
-        $marker = escapeshellarg($this->directory.'/'.self::MARKER);
+        $artifact = new SshPrivateArtifactWitness($this->directory, self::MARKER, $this->witness, 'job_identity_unverified');
 
-        return 'if ! { test -d '.$directory.' && test ! -L '.$directory
-            .' && test "$(stat -c %a -- '.$directory.')" = 700'
-            .' && test "$(stat -c %u -- '.$directory.')" = "$(id -u)"'
-            .' && test -f '.$marker.' && test ! -L '.$marker
-            .' && test "$(stat -c %a -- '.$marker.')" = 600'
-            .' && test "$(stat -c %u -- '.$marker.')" = "$(id -u)"'
-            .' && test "$(stat -c %s -- '.$marker.')" = 64'
-            .' && test "$(cat -- '.$marker.')" = '.escapeshellarg($this->witness)
+        return 'if ! { '.$artifact->shellCheck()
             .'; }; then printf "ssh_job_identity_unverified\n" >&2; exit 1; fi; '.$command;
     }
 
@@ -109,42 +98,6 @@ final readonly class SshJobRemoteIdentity
             return null;
         }
 
-        return function (SFTP $sftp, Closure $assertAuthority): void {
-            $sftp->disableStatCache();
-            $path = $this->directory.'/'.self::MARKER;
-            try {
-                $assertAuthority();
-                $dir = $sftp->lstat($this->directory);
-                $assertAuthority();
-                $marker = $sftp->lstat($path);
-                $version = $sftp->getNegotiatedVersion();
-                $ownerField = $version <= 3 ? 'uid' : 'owner';
-                $owner = $dir[$ownerField] ?? null;
-                $sameOwner = ($version <= 3 ? is_int($owner) : is_string($owner) && $owner !== '')
-                    && $owner === ($marker[$ownerField] ?? null);
-                if (($dir['type'] ?? null) !== FileType::DIRECTORY
-                    || ($marker['type'] ?? null) !== FileType::REGULAR
-                    || ! is_int($dir['mode'] ?? null) || ($dir['mode'] & 0777) !== 0700
-                    || ! is_int($marker['mode'] ?? null) || ($marker['mode'] & 0777) !== 0600
-                    || ! $sameOwner || ($marker['size'] ?? null) !== strlen($this->witness)) {
-                    throw new SshTargetConnectionException('job_identity_unverified');
-                }
-                $assertAuthority();
-                $contents = $sftp->get($path, null, 0, strlen($this->witness));
-                if (! hash_equals($this->witness, (string) $contents)) {
-                    throw new SshTargetConnectionException('job_identity_unverified');
-                }
-            } catch (SshTargetConnectionException $exception) {
-                throw $exception;
-            } catch (FileSystemException $exception) {
-                throw new SshTargetConnectionException('job_identity_unverified', [
-                    'exception_class' => $exception::class,
-                    'source_error_code' => $exception->getCode(),
-                    'source_error_message' => $exception->getMessage(),
-                ]);
-            } catch (Throwable $exception) {
-                throw new SshTargetConnectionException('job_identity_unverified', ['exception_class' => $exception::class]);
-            }
-        };
+        return (new SshPrivateArtifactWitness($this->directory, self::MARKER, $this->witness, 'job_identity_unverified'))->sftpVerifier();
     }
 }

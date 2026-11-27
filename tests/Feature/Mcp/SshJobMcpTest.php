@@ -759,6 +759,10 @@ final class SshJobMcpTest extends TestCase
         self::assertTrue($byName['ssh-file-patch']['annotations']['destructiveHint']);
         self::assertSame(16384, $byName['ssh-file-patch']['inputSchema']['properties']['find']['maxLength']);
         self::assertSame(16384, $byName['ssh-logs-query']['inputSchema']['properties']['length']['maximum']);
+        self::assertSame(8192, $byName['ssh-script-run']['inputSchema']['properties']['script']['maxLength']);
+        self::assertSame(['target_id', 'script', 'interpreter'], $byName['ssh-script-run']['inputSchema']['required']);
+        self::assertFalse($byName['ssh-script-run']['annotations']['readOnlyHint']);
+        self::assertTrue($byName['ssh-script-run']['annotations']['destructiveHint']);
         self::assertSame(16384, $byName['ssh-job-start']['inputSchema']['properties']['script']['maxLength']);
         self::assertSame(300, $byName['ssh-job-start']['inputSchema']['properties']['max_runtime_seconds']['maximum']);
         self::assertFalse($byName['ssh-job-start']['annotations']['readOnlyHint']);
@@ -798,6 +802,8 @@ final class SshJobMcpTest extends TestCase
         self::assertSame(524288, $changed['ssh-job-start']['inputSchema']['properties']['script']['maxLength']);
         self::assertSame(360, $changed['ssh-command-run']['inputSchema']['properties']['timeout_seconds']['maximum']);
         self::assertSame(524288, $changed['ssh-command-run']['inputSchema']['properties']['command']['maxLength']);
+        self::assertSame(524288, $changed['ssh-script-run']['inputSchema']['properties']['script']['maxLength']);
+        self::assertSame(360, $changed['ssh-script-run']['inputSchema']['properties']['timeout_seconds']['maximum']);
         self::assertSame(524288, $changed['ssh-job-output']['inputSchema']['properties']['length']['maximum']);
         self::assertSame(524288, $changed['ssh-file-read']['inputSchema']['properties']['length']['maximum']);
         self::assertSame(699052, $changed['ssh-file-write']['inputSchema']['properties']['content_base64']['maxLength']);
@@ -845,6 +851,11 @@ final class SshJobMcpTest extends TestCase
         ]);
         self::assertArrayHasKey('result', $command, json_encode($command, JSON_THROW_ON_ERROR));
         self::assertSame('egress_denied', $command['result']['structuredContent']['error']['code']);
+        $staged = $call('ssh-script-run', [
+            'target_id' => $target->target_id, 'script' => str_repeat('x', 524288), 'interpreter' => '/bin/sh',
+        ]);
+        self::assertSame('egress_denied', $staged['result']['structuredContent']['error']['code']);
+        self::assertFalse($staged['result']['structuredContent']['result']['script_launch_attempted']);
         $encoded = base64_encode(str_repeat("\xff", 524288));
         // PHP's default JSON encoder escapes "/" in Base64 and can double
         // the whole request; that is correctly beyond the 1 MiB transport

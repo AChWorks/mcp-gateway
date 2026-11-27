@@ -39,7 +39,7 @@ final class ActivityRecorder
                     ...($outcome === 'unknown' ? ['retry_safe' => false] : []),
                 ])
                 : ($outcome === 'success' && (isset($diagnostics['timing']) || isset($diagnostics['api_operation'])
-                    || $attribution !== null)
+                    || ($operation === 'ssh-script-run' && isset($diagnostics['script_stage'])) || $attribution !== null)
                     ? OperationDiagnostics::safeContext($diagnostics)
                     : []);
             $this->persist($correlationId, $operation, $outcome, $target, $errorCode, $safeDetails, $attribution);

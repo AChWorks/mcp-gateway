@@ -19,7 +19,7 @@ final class Socks5NumericDialer
      */
     public function connect(
         int $loopbackPort, string $destinationIp, int $destinationPort,
-        int $timeoutSeconds = 5,
+        int $timeoutSeconds = 5, ?int $overallDeadlineNs = null,
     ): mixed {
         $packed = @inet_pton($destinationIp);
         if ($loopbackPort < 1024 || $loopbackPort > 65535
@@ -31,12 +31,16 @@ final class Socks5NumericDialer
 
         // One absolute handshake budget. A peer that trickles bytes must not
         // extend the deadline by receiving a fresh timeout on every read.
-        $deadlineNs = hrtime(true) + ($timeoutSeconds * 1_000_000_000);
+        $deadlineNs = min(hrtime(true) + ($timeoutSeconds * 1_000_000_000), $overallDeadlineNs ?? PHP_INT_MAX);
+        $remaining = $deadlineNs - hrtime(true);
+        if ($remaining <= 0) {
+            throw new RuntimeException('relay_handshake_failed');
+        }
         $errorNumber = 0;
         $errorText = '';
         $socket = @stream_socket_client(
             'tcp://127.0.0.1:'.$loopbackPort, $errorNumber, $errorText,
-            $timeoutSeconds, STREAM_CLIENT_CONNECT,
+            min($timeoutSeconds, $remaining / 1_000_000_000), STREAM_CLIENT_CONNECT,
         );
         if (! is_resource($socket)) {
             throw new RuntimeException('relay_unavailable');

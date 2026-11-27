@@ -35,6 +35,8 @@ final readonly class SshCommandRuntime
         private SshExecutionAdmission $executionAdmission,
         private SshReverseRoutePolicy $reverseRoutes,
         private ConnectionRelayRoutes $relayRoutes,
+        private SshFileRuntime $files,
+        private SshStagedScriptExecution $scripts,
     ) {}
 
     /** @return array<string,mixed> */
@@ -44,6 +46,27 @@ final readonly class SshCommandRuntime
         ?Closure $beforeRemoteEffect = null,
         ?string $expectedCredentialDispatch = null,
         ?Closure $admitRemoteEffect = null,
+    ): array {
+        return $this->runAdmitted($user, $target, $command, $timeoutSeconds, $expectedTargetBinding,
+            $beforeRemoteEffect, $expectedCredentialDispatch, $admitRemoteEffect);
+    }
+
+    /** @return array<string,mixed> */
+    public function runScript(User $user, Target $target, string $script, string $interpreter, int $timeoutSeconds = 10): array
+    {
+        if (! SshStagedScriptExecution::validInterpreter($interpreter) || ! mb_check_encoding($script, 'UTF-8')) {
+            throw new SshTargetConnectionException('invalid_input');
+        }
+
+        return $this->runAdmitted($user, $target, $script, $timeoutSeconds, interpreter: $interpreter);
+    }
+
+    /** @return array<string,mixed> */
+    private function runAdmitted(
+        User $user, Target $target, string $command, int $timeoutSeconds,
+        ?string $expectedTargetBinding = null, ?Closure $beforeRemoteEffect = null,
+        ?string $expectedCredentialDispatch = null, ?Closure $admitRemoteEffect = null,
+        ?string $interpreter = null,
     ): array {
         if ($target->connector_type !== 'ssh_direct') {
             throw new SshTargetConnectionException('unsupported_connector');
@@ -65,12 +88,19 @@ final readonly class SshCommandRuntime
             throw new SshTargetConnectionException('timeout_unsupported');
         }
 
+        // Unlike native exec's execution-phase budget, staged scripts share
+        // one absolute deadline from admission through preparation, upload,
+        // execution and best-effort cleanup. No per-stage timeout reset.
+        $deadline = $interpreter === null ? null : new SshCommandExecutionDeadline($timeoutSeconds);
+        $permissions = $interpreter === null
+            ? [GatewayPermission::SshCommandRun]
+            : [GatewayPermission::SshCommandRun, GatewayPermission::SshFileWrite];
         $context = $this->operationAdmission->capture($user, $beforeRemoteEffect);
-        if (! $this->access->allows($user, GatewayPermission::SshCommandRun, $target)) {
+        if (in_array(false, $this->access->allowsTargetPermissions($user, $target, $permissions), true)) {
             throw new SshTargetConnectionException('forbidden');
         }
 
-        return $this->admission->run((string) $target->getKey(), function () use ($context, $user, $target, $command, $timeoutSeconds, $expectedTargetBinding, $expectedCredentialDispatch, $admitRemoteEffect): array {
+        return $this->admission->run((string) $target->getKey(), function () use ($context, $user, $target, $command, $timeoutSeconds, $expectedTargetBinding, $expectedCredentialDispatch, $admitRemoteEffect, $interpreter, $deadline, $permissions, $limits): array {
             $fresh = Target::query()->whereKey($target->getKey())->first();
             $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->first();
             if ($fresh instanceof Target && $fresh->operations_paused) {
@@ -99,7 +129,7 @@ final readonly class SshCommandRuntime
                 throw new SshTargetConnectionException('credential_unavailable');
             }
 
-            $guard = $this->executionAdmission->guard($context, $user, $fresh, [GatewayPermission::SshCommandRun], $config, $credential);
+            $guard = $this->executionAdmission->guard($context, $user, $fresh, $permissions, $config, $credential);
             $guard();
             $route = $this->reverseRoutes->forTarget($fresh);
             $relay = $this->relayRoutes->sshRouteForTarget($fresh);
@@ -113,16 +143,45 @@ final readonly class SshCommandRuntime
                 }
             };
 
-            return $this->transport->withAuthenticatedSession(
-                $config->endpoint(), $pin, $config->auth_method,
-                $material['secret'], $material['passphrase'],
-                function (SSH2 $ssh, string $peerIp) use (
-                    $dispatch, $fresh, $config, $command, $timeoutSeconds, $started,
-                ): array {
-                    return $this->executeOnce($ssh, $command, $timeoutSeconds, $peerIp, $config, $started, $fresh->transportKind(), $dispatch);
-                },
-                $route, $relay, static fn () => $dispatch('login'),
-            );
+            // Each exec uses a fresh pinned session: the locked SSH2 library
+            // retains its last exit_status across exec() calls. Never accept
+            // a control command's exit as evidence that the script completed.
+            $execute = function (string $text, ?Closure $onAttempt = null) use (
+                $config, $pin, $material, $dispatch, $fresh, $timeoutSeconds, $started, $route, $relay, $deadline,
+            ): array {
+                $deadline?->assertAvailable();
+
+                return $this->transport->withAuthenticatedSession(
+                    $config->endpoint(), $pin, $config->auth_method,
+                    $material['secret'], $material['passphrase'],
+                    function (SSH2 $ssh, string $peerIp) use (
+                        $dispatch, $fresh, $config, $text, $timeoutSeconds, $started, $deadline, $onAttempt,
+                    ): array {
+                        return $this->executeOnce($ssh, $text, $timeoutSeconds, $peerIp, $config, $started,
+                            $fresh->transportKind(), $dispatch, $deadline, $onAttempt);
+                    },
+                    $route, $relay, static fn () => $dispatch('login'), deadlineNs: $deadline?->expiresAtNs(),
+                );
+            };
+            if ($interpreter === null || $deadline === null) {
+                return $execute($command);
+            }
+
+            $binding = SshTargetBinding::executionFingerprint($fresh, $config, $credential);
+            // The verified streaming engine owns its normal SFTP admission,
+            // integrity and publication. Compose command + write authority
+            // into its native guard; do not acquire the command lock again.
+            $upload = function (string $directory, mixed $source, int $bytes, string $sha256, Closure $verifyStaging) use (
+                $user, $fresh, $binding, $deadline, $timeoutSeconds, $limits,
+            ): array {
+                return $this->files->uploadFromStream($user, $fresh, $directory.'/script', $source,
+                    $bytes, $sha256, $limits['max_bytes'], $timeoutSeconds, $directory,
+                    overallDeadlineNs: $deadline->expiresAtNs(), expectedExecution: $binding,
+                    additionalPermissions: [GatewayPermission::SshCommandRun], verifyStaging: $verifyStaging,
+                );
+            };
+
+            return $this->scripts->run($command, $interpreter, $deadline, $execute, $upload);
         }, $timeoutSeconds);
     }
 
@@ -130,6 +189,7 @@ final readonly class SshCommandRuntime
     private function executeOnce(
         SSH2 $ssh, string $command, int $timeoutSeconds,
         string $peerIp, SshTargetConfig $config, float $started, string $routeMode, Closure $dispatch,
+        ?SshCommandExecutionDeadline $deadline = null, ?Closure $onAttempt = null,
     ): array {
         // The collector must be ready BEFORE we send any remote command.
         // It clears phpseclib's cumulative private stderr log per packet;
@@ -147,8 +207,13 @@ final readonly class SshCommandRuntime
         $exit = null;
         $ssh->disableQuietMode();
         $dispatch('command');
-        $deadline = new SshCommandExecutionDeadline($timeoutSeconds);
+        $deadline ??= new SshCommandExecutionDeadline($timeoutSeconds);
+        $deadline->assertAvailable();
         $ssh->setTimeout($deadline->remainingSocketSeconds());
+        // Only this boundary makes a user-script launch potentially sent.
+        // Login, a collector failure or a stale admission cannot do so.
+        $deadline->assertAvailable();
+        $onAttempt?->__invoke();
         try {
             $ssh->exec($command, static function (string $chunk) use ($ssh, $collector, $deadline): bool {
                 // A busy stream can spend almost no time blocked in socket

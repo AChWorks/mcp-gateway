@@ -35,7 +35,7 @@ final readonly class SshMcpToolRegistrar
                     $this->principal->user($request), $target_id, $command, $timeout_seconds,
                 ),
                 name: 'ssh-command-run',
-                description: 'Run one non-interactive command on an authorized host-key-pinned SSH Target. Root/sudo privileges belong to the remote OS account, not a Gateway sandbox. Input UTF-8 byte/time limits are Owner-configured and separate from file-transfer/Job limits. Never blindly retry an uncertain result.',
+                description: 'Run one non-interactive command on an authorized host-key-pinned SSH Target. Root/sudo privileges belong to the remote OS account, not a Gateway sandbox. Input UTF-8 byte/time limits are Owner-configured and separate from file-transfer/Job limits. Native exec can be limited by the remote SSH/shell argument size; for a large explicit script use ssh-script-run where supported. Never blindly retry an uncertain result.',
                 annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
@@ -47,6 +47,25 @@ final readonly class SshMcpToolRegistrar
                         'timeout_seconds' => ['type' => 'integer', 'minimum' => 1, 'maximum' => $commandLimits['max_seconds'], 'default' => 10],
                     ],
                     'required' => ['target_id', 'command'],
+                    'additionalProperties' => false,
+                ],
+            )
+            ->addTool(
+                handler: fn (string $target_id, string $script, string $interpreter, int $timeout_seconds = 10): array => $this->sshCommands->runScript(
+                    $this->principal->user($request), $target_id, $script, $interpreter, $timeout_seconds,
+                ),
+                name: 'ssh-script-run',
+                description: 'Explicit synchronous execution of a complete verified UTF-8 script via private SFTP staging and the specified absolute interpreter path. Requires command + SFTP write grants, a compatible POSIX/Linux exec and SFTP filesystem. Does not require systemd. Uses the current command byte limit and one timeout for staging, launch and cleanup. Native commands still use ssh-command-run; never auto-replay unknown execution.',
+                annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
+                inputSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'target_id' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 64],
+                        'script' => ['type' => 'string', 'minLength' => 1, 'maxLength' => $commandLimits['max_bytes']],
+                        'interpreter' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 1024, 'description' => 'Absolute path to the executable interpreter on the Target, for example /bin/sh or /usr/bin/python3. No implicit interpreter selection or command-line flags.'],
+                        'timeout_seconds' => ['type' => 'integer', 'minimum' => 1, 'maximum' => $commandLimits['max_seconds'], 'default' => 10],
+                    ],
+                    'required' => ['target_id', 'script', 'interpreter'],
                     'additionalProperties' => false,
                 ],
             )

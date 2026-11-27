@@ -103,6 +103,41 @@ final class Socks5NumericDialerTest extends TestCase
         }
     }
 
+    public function test_inherited_operation_deadline_shortens_the_socks_handshake_budget(): void
+    {
+        if (! function_exists('pcntl_fork')) {
+            $this->markTestSkipped('Bounded local socket fixture needs pcntl.');
+        }
+        $server = stream_socket_server('tcp://127.0.0.1:0');
+        self::assertIsResource($server);
+        $address = (string) stream_socket_get_name($server, false);
+        $port = (int) substr($address, strrpos($address, ':') + 1);
+        $child = pcntl_fork();
+        self::assertNotSame(-1, $child);
+        if ($child === 0) {
+            $peer = stream_socket_accept($server, 2);
+            if (is_resource($peer)) {
+                fread($peer, 3);
+                fwrite($peer, "\x05");
+                usleep(1_200_000);
+                fclose($peer);
+            }
+            fclose($server);
+            exit(0);
+        }
+        fclose($server);
+        $started = hrtime(true);
+        try {
+            (new Socks5NumericDialer)->connect($port, '203.0.113.42', 443, 3, $started + 300_000_000);
+            self::fail('Partial relay greeting must not extend the admitted lifetime.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('relay_handshake_failed', $exception->getMessage());
+            self::assertLessThan(0.8, (hrtime(true) - $started) / 1_000_000_000);
+        } finally {
+            pcntl_waitpid($child, $status);
+        }
+    }
+
     private function fixture(string $destination, int $port, int $expectedType, int $ipLength): void
     {
         if (! function_exists('pcntl_fork')) {

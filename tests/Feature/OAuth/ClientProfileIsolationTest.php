@@ -116,10 +116,10 @@ final class ClientProfileIsolationTest extends TestCase
             ->postJson('/mcp', $mcp)->assertOk();
 
         foreach ([$fixtureTools, $chatTools] as $toolResult) {
-            self::assertSame(['targets-list', 'target-context', 'operation-diagnostics-read', 'wordpress-abilities-read', 'wordpress-content-publish-create', 'wordpress-ability-execute', 'arvan-api-catalog', 'arvan-api-request', 'ssh-command-run', 'ssh-job-start', 'ssh-jobs-list', 'ssh-job-status', 'ssh-job-output', 'ssh-job-cancel', 'ssh-file-stat', 'ssh-file-list', 'ssh-file-read', 'ssh-file-write', 'ssh-system-inspect', 'ssh-network-diagnose', 'ssh-logs-query', 'ssh-file-patch', 'ssh-change-verify', 'ssh-batch-preview', 'ssh-batch-run', 'wordpress-bridge-batch-preview', 'wordpress-bridge-batch-read', 'target-batch-status', 'target-batches-list', 'target-batch-cancel'],
+            self::assertSame(['targets-list', 'target-context', 'operation-diagnostics-read', 'wordpress-abilities-read', 'wordpress-content-publish-create', 'wordpress-ability-execute', 'arvan-api-catalog', 'arvan-api-request', 'ssh-command-run', 'ssh-script-run', 'ssh-job-start', 'ssh-jobs-list', 'ssh-job-status', 'ssh-job-output', 'ssh-job-cancel', 'ssh-file-stat', 'ssh-file-list', 'ssh-file-read', 'ssh-file-write', 'ssh-system-inspect', 'ssh-network-diagnose', 'ssh-logs-query', 'ssh-file-patch', 'ssh-change-verify', 'ssh-batch-preview', 'ssh-batch-run', 'wordpress-bridge-batch-preview', 'wordpress-bridge-batch-read', 'target-batch-status', 'target-batches-list', 'target-batch-cancel'],
                 array_column((array) $toolResult->json('result.tools'), 'name'));
             foreach ((array) $toolResult->json('result.tools') as $tool) {
-                $isExecute = in_array($tool['name'], ['wordpress-content-publish-create', 'wordpress-ability-execute', 'arvan-api-request', 'ssh-command-run', 'ssh-job-start', 'ssh-job-cancel', 'ssh-file-write', 'ssh-file-patch', 'ssh-batch-run', 'target-batch-cancel'], true);
+                $isExecute = in_array($tool['name'], ['wordpress-content-publish-create', 'wordpress-ability-execute', 'arvan-api-request', 'ssh-command-run', 'ssh-script-run', 'ssh-job-start', 'ssh-job-cancel', 'ssh-file-write', 'ssh-file-patch', 'ssh-batch-run', 'target-batch-cancel'], true);
                 $boundedCreate = $tool['name'] === 'wordpress-content-publish-create';
                 $isWordPress = str_starts_with($tool['name'], 'wordpress-');
                 self::assertSame(! $isExecute, $tool['annotations']['readOnlyHint'] ?? null);
