@@ -32,4 +32,27 @@ add_action('wp_abilities_api_init', static function (): void {
             ],
         ]);
     }
+    wp_register_ability('gateway-mixed-test/digest-read', [
+        'label' => 'Disposable payload digest',
+        'description' => 'Read-only digest of the actual received UTF-8 input; no persistence.',
+        'category' => 'gateway-mixed-test',
+        'input_schema' => ['type' => 'object', 'properties' => [
+            'payload' => ['type' => 'string'],
+        ], 'required' => ['payload'], 'additionalProperties' => false],
+        'output_schema' => ['type' => 'object', 'properties' => [
+            'bytes' => ['type' => 'integer'],
+            'sha256' => ['type' => 'string'],
+            'principal_id' => ['type' => 'integer'],
+        ]],
+        'permission_callback' => static fn (): bool => current_user_can('read'),
+        'execute_callback' => static fn (array $input): array => [
+            'bytes' => strlen($input['payload']),
+            'sha256' => hash('sha256', $input['payload']),
+            'principal_id' => get_current_user_id(),
+        ],
+        'meta' => [
+            'mcp' => ['public' => true, 'type' => 'tool'],
+            'annotations' => ['readonly' => true, 'destructive' => false, 'idempotent' => true],
+        ],
+    ]);
 });

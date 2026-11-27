@@ -2,13 +2,24 @@
 
 declare(strict_types=1);
 use GuzzleHttp\Client as Http;
+use GuzzleHttp\TransferStats;
 use Mcp\Client;
 use Mcp\Client\Transport\HttpTransport;
 
 $root = (string) getenv('MIXED_ROOT');
 require $root.'/gateway/vendor/autoload.php';
 $state = json_decode((string) file_get_contents($root.'/secrets/state.json'), true, 512, JSON_THROW_ON_ERROR);
-$http = new Http(['verify' => $root.'/secrets/tls.crt', 'proxy' => '', 'http_errors' => false, 'timeout' => 30]);
+$httpExchanges = [];
+$http = new Http(['verify' => $root.'/secrets/tls.crt', 'proxy' => '', 'http_errors' => false, 'timeout' => 30,
+    'on_stats' => static function (TransferStats $stats) use (&$httpExchanges): void {
+        $native = $stats->getHandlerStats();
+        $httpExchanges[] = [
+            'uploaded_bytes' => isset($native['size_upload']) ? (int) $native['size_upload'] : null,
+            'downloaded_bytes' => isset($native['size_download']) ? (int) $native['size_download'] : null,
+            'status' => $stats->getResponse()?->getStatusCode(),
+        ];
+    },
+]);
 $endpoint = 'https://11.22.33.45/mcp';
 $connect = static fn (string $token): HttpTransport => new HttpTransport(endpoint: $endpoint, headers: ['Authorization' => 'Bearer '.$token], httpClient: $http);
 $client = Client::builder()->setClientInfo('installed-mixed-standalone-sdk', '1.0')
@@ -34,10 +45,13 @@ $check($status('invalid-bearer') === 401, 'Invalid bearer accepted.');
 $check($status($state['disabled_profile_token']) === 401, 'Disabled client profile previously signed bearer accepted.');
 $check(($state['never_granted_mint_denied'] ?? false) === true, 'Never-granted OAuth client was not rejected during bearer issuance.');
 $timings = [];
-$call = static function (Client $c, string $name, array $args, string $label) use (&$timings): array {
+$wire = [];
+$call = static function (Client $c, string $name, array $args, string $label) use (&$timings, &$wire, &$httpExchanges): array {
+    $before = count($httpExchanges);
     $start = hrtime(true);
     $result = $c->callTool($name, $args);
     $timings[$label] = round((hrtime(true) - $start) / 1000000, 2);
+    $wire[$label] = array_slice($httpExchanges, $before);
 
     return $result->structuredContent ?? [];
 };
@@ -85,99 +99,149 @@ try {
         'input' => (object) []], 'wp_denied');
     $check(! ($denied['ok'] ?? false) && ($denied['error']['code'] ?? null) === 'downstream_rejected',
         'WordPress provider denial must be classified as downstream_rejected, not transport failure.');
-    // Test the merged Bridge (not published v0.5.1) 128 KiB-capable
-    // UTF-8/window source contract through actual Adapter JSON-RPC wrapping.
-    // The test verifies complete client receipt, not merely provider staging.
-    $bridgeText = null;
-    if (getenv('MIXED_BRIDGE_PROFILE') === 'merged-main-c522ae9') {
-        $fixture = json_decode((string) file_get_contents($root.'/secrets/large-content.json'),
-            true, 512, JSON_THROW_ON_ERROR);
-        $source = '';
-        $offset = 0;
-        $expected = null;
-        $windows = 0;
-        $maxWindowBytes = 0;
-        $largestResultBytes = 0;
-        do {
-            $input = ['action' => 'get', 'id' => (int) $fixture['post_id'],
-                'content_offset' => $offset, 'content_max_bytes' => 131072];
-            if ($expected !== null) {
-                $input['expected_content_hash'] = $expected;
-            }
-            $response = $call($client, 'wordpress-ability-execute', [
-                'target_id' => $state['wp_target'],
-                'ability' => 'wp-ai-bridge/content-read',
-                'input' => $input,
-            ], 'wp_unicode_window_'.$windows);
-            $check(($response['ok'] ?? false) === true,
-                'New Bridge Unicode window not executable through Gateway: '.
-                json_encode($response['error'] ?? [], JSON_THROW_ON_ERROR));
-            $item = $response['result']['items'][0] ?? null;
-            $check(is_array($item), 'Missing native WordPress content-read item.');
-            $chunk = $item['content'] ?? null;
-            $next = $item['content_next_offset'] ?? null;
-            $hash = $item['content_hash'] ?? null;
-            $check(is_string($chunk) && is_int($next) && is_string($hash)
-                && $next > $offset && $next <= (int) $fixture['bytes']
-                && strlen($chunk) === $next - $offset
-                && preg_match('//u', $chunk) === 1, 'Truncated/invalid UTF-8 continuation.');
-            if ($expected === null) {
-                $expected = $hash;
-            }
-            $check(hash_equals($expected, $hash), 'Provider content changed during continuation.');
-            $source .= $chunk;
-            $maxWindowBytes = max($maxWindowBytes, strlen($chunk));
-            $largestResultBytes = max($largestResultBytes,
-                strlen(json_encode($response, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)));
-            $offset = $next;
-            $windows++;
-            $check($windows < 64, 'No bounded source-read progress.');
-            $complete = $item['content_complete'] ?? false;
-        } while (! $complete);
-        $check($offset === (int) $fixture['bytes']
-            && strlen($source) === (int) $fixture['bytes']
-            && hash_equals((string) $fixture['sha256'], hash('sha256', $source))
-            && hash_equals($expected, hash('sha256', $source)),
-            'External SDK did not receive exact complete Unicode document.');
-        $stale = $call($client, 'wordpress-ability-execute', [
-            'target_id' => $state['wp_target'], 'ability' => 'wp-ai-bridge/content-read',
-            'input' => ['action' => 'get', 'id' => (int) $fixture['post_id'],
-                'content_offset' => 1, 'content_max_bytes' => 4096,
-                'expected_content_hash' => str_repeat('0', 64)],
-        ], 'wp_stale_source_denial');
-        $check(! ($stale['ok'] ?? false), 'Wrong hash continuation was incorrectly accepted.');
-        $bridgeText = [
-            'source_sha' => 'c522ae99bd11926eb74c007d187354013202fc4c',
-            'whole_utf8_bytes' => strlen($source),
-            'sha256' => hash('sha256', $source),
-            'windows' => $windows,
-            'max_decoded_window_bytes' => $maxWindowBytes,
-            'max_gateway_result_json_bytes' => $largestResultBytes,
-            'wrong_source_hash_denied' => true,
-        ];
+    // The actual pinned released Bridge supports source-bound UTF-8 windows.
+    // Check complete client receipt, not merely provider staging.
+    $fixture = json_decode((string) file_get_contents($root.'/secrets/large-content.json'),
+        true, 512, JSON_THROW_ON_ERROR);
+    $source = '';
+    $offset = 0;
+    $expected = null;
+    $windows = 0;
+    $maxWindowBytes = 0;
+    $largestResultBytes = 0;
+    do {
+        $input = ['action' => 'get', 'id' => (int) $fixture['post_id'],
+            'content_offset' => $offset, 'content_max_bytes' => 131072];
+        if ($expected !== null) {
+            $input['expected_content_hash'] = $expected;
+        }
+        $response = $call($client, 'wordpress-ability-execute', [
+            'target_id' => $state['wp_target'],
+            'ability' => 'wp-ai-bridge/content-read',
+            'input' => $input,
+        ], 'wp_unicode_window_'.$windows);
+        $check(($response['ok'] ?? false) === true,
+            'New Bridge Unicode window not executable through Gateway: '.
+            json_encode($response['error'] ?? [], JSON_THROW_ON_ERROR));
+        $item = $response['result']['items'][0] ?? null;
+        $check(is_array($item), 'Missing native WordPress content-read item.');
+        $chunk = $item['content'] ?? null;
+        $next = $item['content_next_offset'] ?? null;
+        $hash = $item['content_hash'] ?? null;
+        $check(is_string($chunk) && is_int($next) && is_string($hash)
+            && $next > $offset && $next <= (int) $fixture['bytes']
+            && strlen($chunk) === $next - $offset
+            && preg_match('//u', $chunk) === 1, 'Truncated/invalid UTF-8 continuation.');
+        if ($expected === null) {
+            $expected = $hash;
+        }
+        $check(hash_equals($expected, $hash), 'Provider content changed during continuation.');
+        $source .= $chunk;
+        $maxWindowBytes = max($maxWindowBytes, strlen($chunk));
+        $largestResultBytes = max($largestResultBytes,
+            strlen(json_encode($response, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)));
+        $offset = $next;
+        $windows++;
+        $check($windows < 64, 'No bounded source-read progress.');
+        $complete = $item['content_complete'] ?? false;
+    } while (! $complete);
+    $check($offset === (int) $fixture['bytes']
+        && strlen($source) === (int) $fixture['bytes']
+        && hash_equals((string) $fixture['sha256'], hash('sha256', $source))
+        && hash_equals($expected, hash('sha256', $source)),
+        'External SDK did not receive exact complete Unicode document.');
+    $stale = $call($client, 'wordpress-ability-execute', [
+        'target_id' => $state['wp_target'], 'ability' => 'wp-ai-bridge/content-read',
+        'input' => ['action' => 'get', 'id' => (int) $fixture['post_id'],
+            'content_offset' => 1, 'content_max_bytes' => 4096,
+            'expected_content_hash' => str_repeat('0', 64)],
+    ], 'wp_stale_source_denial');
+    $check(! ($stale['ok'] ?? false), 'Wrong hash continuation was incorrectly accepted.');
+    $bridgeText = [
+        'whole_utf8_bytes' => strlen($source),
+        'sha256' => hash('sha256', $source),
+        'windows' => $windows,
+        'max_decoded_window_bytes' => $maxWindowBytes,
+        'max_gateway_result_json_bytes' => $largestResultBytes,
+        'wrong_source_hash_denied' => true,
+    ];
+    // Compare native Adapter and Gateway responses using the SAME ephemeral
+    // WordPress OAuth grant (not a different WordPress account or ChatGPT).
+    $direct = Client::builder()->setClientInfo('installed-mixed-direct-bridge', '1.0')
+        ->setInitTimeout(8)->setRequestTimeout(30)->setMaxRetries(0)->build();
+    try {
+        $direct->connect(new HttpTransport(
+            endpoint: $state['wp_direct']['resource'],
+            headers: ['Authorization' => 'Bearer '.$state['wp_direct']['access_token']],
+            httpClient: $http,
+        ));
+        $ability = 'gateway-mixed-test/digest-read';
+        $directCatalog = $call($direct, 'mcp-adapter-execute-ability', [
+            'ability_name' => 'wp-ai-bridge/abilities-read',
+            'parameters' => ['action' => 'get', 'name' => $ability],
+        ], 'wp_direct_catalog');
+        $gatewayCatalog = $call($client, 'wordpress-abilities-read', [
+            'target_id' => $state['wp_target'], 'ability' => $ability,
+        ], 'wp_digest_catalog');
+        $check(($directCatalog['success'] ?? false) === true
+            && ($directCatalog['data']['items'][0]['name'] ?? null) === $ability
+            && $directCatalog['data'] === ($gatewayCatalog['catalog'] ?? null),
+            'Direct-vs-Gateway digest Ability catalog differs.');
+        $payload = str_repeat('x', 1000000);
+        $directResult = $call($direct, 'mcp-adapter-execute-ability', [
+            'ability_name' => $ability, 'parameters' => ['payload' => $payload],
+        ], 'wp_direct_near_mib_input');
+        $routedResult = $call($client, 'wordpress-ability-execute', [
+            'target_id' => $state['wp_target'], 'ability' => $ability,
+            'input' => ['payload' => $payload],
+        ], 'wp_routed_near_mib_input');
+        $expectedDigest = ['bytes' => strlen($payload), 'sha256' => hash('sha256', $payload), 'principal_id' => 1];
+        $check(($directResult['success'] ?? false) === true && ($routedResult['ok'] ?? false) === true
+            && ($directResult['data'] ?? null) === $expectedDigest && ($routedResult['result'] ?? null) === $expectedDigest,
+            'Near-1-MiB WordPress input or same-principal result parity failed. Routed error: '.
+            json_encode($routedResult['error'] ?? [], JSON_THROW_ON_ERROR));
+        $wpInput = $expectedDigest;
+        unset($payload, $directResult, $routedResult);
+    } finally {
+        $direct->disconnect();
     }
     $ssh = $call($client, 'ssh-command-run', [
         'target_id' => $state['ssh_target'], 'command' => "printf 'installed-ssh-ok'"], 'ssh_command');
     $check(($ssh['result']['stdout'] ?? null) === 'installed-ssh-ok', 'Host-key verified SSH failed.');
-    $bytes = "\x00\xff\x02".random_bytes(8044)."\x00x";
+    $bytes = random_bytes(524288);
     $file = '/home/'.getenv('MIXED_SSH_USER').'/mixed-'.bin2hex(random_bytes(8)).'.bin';
     try {
         $write = $call($client, 'ssh-file-write', [
             'target_id' => $state['ssh_target'], 'path' => $file, 'content_base64' => base64_encode($bytes)], 'sftp_write');
-        $check(($write['result']['bytes_written'] ?? null) === strlen($bytes), 'Binary write count wrong.');
+        $check(($write['result']['bytes_written'] ?? null) === strlen($bytes)
+            && ($write['result']['integrity_check'] ?? null) === 'remote_readback_sha256', 'Binary write integrity/count wrong.');
         $stat = $call($client, 'ssh-file-stat', [
             'target_id' => $state['ssh_target'], 'path' => $file], 'sftp_stat');
         $check(($stat['result']['file']['size'] ?? null) === strlen($bytes), 'Binary stat size wrong.');
         $read = $call($client, 'ssh-file-read', [
-            'target_id' => $state['ssh_target'], 'path' => $file], 'sftp_read');
+            'target_id' => $state['ssh_target'], 'path' => $file, 'length' => strlen($bytes)], 'sftp_read');
         $back = base64_decode($read['result']['data'] ?? '', true);
-        $check(is_string($back) && hash_equals($bytes, $back)
+        $check(is_string($back) && ($read['result']['end_of_file'] ?? false) === true && hash_equals($bytes, $back)
             && hash_equals(hash('sha256', $bytes), hash('sha256', $back)), 'Binary SFTP roundtrip wrong.');
     } finally {
         $cleanup = $call($client, 'ssh-command-run', [
             'target_id' => $state['ssh_target'], 'command' => 'rm -f -- '.escapeshellarg($file)], 'sftp_cleanup');
         $check($cleanup['ok'] ?? false, 'SFTP disposable payload not removed.');
     }
+    $streams = $call($client, 'ssh-command-run', [
+        'target_id' => $state['ssh_target'],
+        'command' => "head -c 524289 /dev/zero | tr '\\000' x; head -c 524288 /dev/zero | tr '\\000' e >&2; exit 7",
+    ], 'ssh_independent_output_windows')['result'] ?? [];
+    $check(($streams['stdout'] ?? null) === str_repeat('x', 524288)
+        && ($streams['stderr'] ?? null) === str_repeat('e', 524288)
+        && ($streams['stdout_total_bytes'] ?? null) === 524289 && ($streams['stderr_total_bytes'] ?? null) === 524288
+        && ($streams['stdout_truncated'] ?? null) === true && ($streams['stderr_truncated'] ?? null) === false
+        && ($streams['exit_code'] ?? null) === 7, '512 KiB independent stdout/stderr client receipt or exit differs.');
+    $streamEvidence = ['stdout_bytes' => $streams['stdout_bytes'], 'stderr_bytes' => $streams['stderr_bytes'],
+        'stdout_total_bytes' => $streams['stdout_total_bytes'], 'stderr_total_bytes' => $streams['stderr_total_bytes'],
+        'stdout_truncated' => $streams['stdout_truncated'], 'stderr_truncated' => $streams['stderr_truncated'],
+        'exit_code' => $streams['exit_code']];
+    unset($streams);
     $deniedPath = $call($client, 'ssh-file-read', [
         'target_id' => $state['ssh_target'], 'path' => '/root/mixed-not-authorized'], 'ssh_path_denied');
     $check(! ($deniedPath['ok'] ?? false) && ($deniedPath['error']['code'] ?? null) === 'file_unavailable',
@@ -213,7 +277,10 @@ try {
         'invalid_token' => 'HTTP 401', 'disabled_client_profile' => 'HTTP 401',
         'never_granted_client_profile' => 'token issuance denied',
         'operator_wp_only' => true, 'cross_target_denied' => true,
-        'merged_bridge_unicode' => $bridgeText,
+        'released_bridge_unicode' => $bridgeText,
+        'wp_same_grant_direct_routed_input' => $wpInput,
+        'ssh_command_output_windows' => $streamEvidence,
+        'http_wire_measurements' => $wire,
         'client_peak_memory_bytes' => memory_get_peak_usage(true),
         'latency_ms' => $timings,
     ], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT)."\n";

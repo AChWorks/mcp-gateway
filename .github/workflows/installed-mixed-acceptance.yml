@@ -1,0 +1,77 @@
+name: Installed Mixed Acceptance
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'tests/Support/installed-mixed/**'
+      - '.github/workflows/installed-mixed-acceptance.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tests/Support/installed-mixed/**'
+      - '.github/workflows/installed-mixed-acceptance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installed-mixed-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installed-mixed:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.5'
+          extensions: curl, mbstring, openssl, pdo_mysql, mysqli, sodium, zip, dom, fileinfo
+          coverage: none
+          tools: composer:v2
+
+      - name: Prepare disposable hosted runner
+        run: |
+          sudo apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends mariadb-server-core mariadb-client openssh-server socat iproute2
+          sudo install -d -m 0755 /run/sshd
+          sudo useradd --create-home --shell /bin/bash mixedfixture
+
+      - name: Fetch pinned official fixture inputs
+        run: |
+          mkdir -p "$RUNNER_TEMP/mixed-inputs" "$RUNNER_TEMP/mixed-evidence"
+          cd "$RUNNER_TEMP/mixed-inputs"
+          curl --fail --location --retry 3 -o wordpress-6.9.tar.gz https://wordpress.org/wordpress-6.9.tar.gz
+          curl --fail --location --retry 3 -o wp-cli-2.12.0.phar https://github.com/wp-cli/wp-cli/releases/download/v2.12.0/wp-cli-2.12.0.phar
+          curl --fail --location --retry 3 -o mcp-adapter-0.7.0.zip https://github.com/WordPress/mcp-adapter/releases/download/v0.7.0/mcp-adapter.zip
+          curl --fail --location --retry 3 -o wp-ai-bridge-0.7.4.zip https://github.com/AChWorks/wp-ai-bridge/releases/download/v0.7.4/wp-ai-bridge.zip
+          sha256sum --check "$GITHUB_WORKSPACE/tests/Support/installed-mixed/fixture-pins.sha256"
+
+      - name: Prove installed HTTPS OAuth, MCP and native SSH
+        run: |
+          sudo env PATH="$PATH" MIXED_WORKER_USER=mixedfixture \
+            MIXED_INPUT_DIR="$RUNNER_TEMP/mixed-inputs" \
+            MIXED_EVIDENCE_DIR="$RUNNER_TEMP/mixed-evidence" \
+            bash tests/Support/installed-mixed/run.sh
+
+      - name: Report sanitized fixture evidence
+        if: always()
+        run: |
+          shopt -s nullglob
+          for evidence in "$RUNNER_TEMP"/mixed-evidence/real-installed-mixed-112-*; do
+            for name in identity.txt source-export.txt wp-policy.json report.json client.json file-client.json python-file-client.json revoked.txt file-revoked.txt cleanup.txt; do
+              if sudo test -f "$evidence/$name"; then
+                printf '\n--- %s ---\n' "$name"
+                sudo cat "$evidence/$name"
+              fi
+            done
+          done

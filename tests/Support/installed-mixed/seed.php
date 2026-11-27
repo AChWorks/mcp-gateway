@@ -16,6 +16,8 @@ use App\Application\Targets\WordpressTargetOperations;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\League\Entities\ClientEntity;
@@ -89,6 +91,12 @@ if ($mode === 'init') {
         'wp_request_timeout_seconds' => 9,
         'ssh_transfer_max_kib' => 4096,
         'ssh_transfer_max_seconds' => 30,
+        'ssh_command_max_kib' => 512,
+        'ssh_command_stdout_kib' => 512,
+        'ssh_command_stderr_kib' => 512,
+        'ssh_file_read_window_kib' => 512,
+        'ssh_file_write_window_kib' => 512,
+        'wp_ability_input_kib' => 1024,
     ], $settings->state()['version']);
 
     $wp = app(WpAiBridgeTargetRegistration::class)->register(
@@ -122,9 +130,19 @@ if ($mode === 'init') {
     if (($query['state'] ?? null) !== ($callback['state'] ?? null)) {
         throw new RuntimeException('Real WordPress callback state mismatch.');
     }
-    app(WpAiBridgeTargetConnectionService::class)->completeCallback(
+    $wp = app(WpAiBridgeTargetConnectionService::class)->completeCallback(
         (string) $callback['state'], (string) $callback['code'], (string) $callback['iss'], null,
     );
+    // Direct comparison uses the very same downstream grant and WordPress
+    // principal. Never export the refresh token or log any bearer.
+    $credential = TargetCredential::query()->where('target_record_id', $wp->id)
+        ->where('purpose', WpAiBridgeTargetVault::PURPOSE)->sole();
+    $direct = app(WpAiBridgeTargetVault::class)->openCredential($wp, $credential);
+    if ($direct['client_id'] !== 'https://11.22.33.45/oauth/client.json'
+        || ! str_starts_with($direct['resource_url'], 'https://11.22.33.44/')) {
+        throw new RuntimeException('Unexpected disposable downstream grant identity.');
+    }
+    $state['wp_direct'] = ['resource' => $direct['resource_url'], 'access_token' => $direct['access_token']];
     $state['owner_token'] = $token((int) $state['owner_id'], 'https://mixed-sdk.example.test/allowed', true);
     $state['operator_token'] = $token((int) $state['operator_id'], 'https://mixed-sdk.example.test/allowed', true);
     // A once-authorized second profile is disabled after minting: even its
