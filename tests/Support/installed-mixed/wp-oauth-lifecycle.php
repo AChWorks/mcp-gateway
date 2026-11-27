@@ -13,21 +13,6 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 
-function installedOAuthFixtureRoot(string $stateFile): string
-{
-    $root = dirname(base_path());
-    if (PHP_SAPI !== 'cli' || ! str_starts_with(basename($root), 'mcp-gateway-installed-112-')
-        || realpath($stateFile) !== $root.'/secrets/state.json'
-        || config('app.url') !== 'https://11.22.33.45'
-        || config('database.default') !== 'mariadb'
-        || config('database.connections.mariadb.unix_socket') !== $root.'/db.sock'
-        || config('database.connections.mariadb.database') !== 'gateway') {
-        throw new RuntimeException('Expected the owned installed OAuth fixture.');
-    }
-
-    return $root;
-}
-
 /** Observe the actual scheduled command process, not a mocked due-work call. */
 function installedOAuthScheduler(string $root): array
 {

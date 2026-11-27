@@ -1,4 +1,4 @@
-# Installed mixed WordPress + Direct SSH acceptance
+# Installed mixed WordPress + Direct/Relay SSH acceptance
 
 This is a **repeatable real installed-provider integration test runbook**, not a production deployment procedure or release status report. The parallel [synthetic PHP acceptance fixture](../tests/Feature/Mcp/MixedTargetAuthenticatedAcceptanceTest.php) cannot replace real WordPress, HTTPS and OpenSSH testing.
 
@@ -11,13 +11,13 @@ Both independently authored client implementations first call `target-context` o
 The installed runner starts one fresh MariaDB on a private Unix socket,
 one installed Gateway copy with real migrations and generated OAuth keys,
 one installed WordPress 6.9 with real WP AI Bridge and MCP Adapter,
-and one real host-key-pinned OpenSSH/SFTP server. A separate PHP process
+and one real host-key-pinned OpenSSH/SFTP server. A separately pinned native OpenSSH control server and loopback SOCKS5 client are added inside the same private namespace for the Relay stage. A separate PHP process
 loads the official MCP SDK without booting the Laravel application and calls
 the actual Gateway HTTPS `/mcp` endpoint.
 
 The runner uses a private Linux network namespace with addresses
 `11.22.33.44` (WordPress), `11.22.33.45` (Gateway) and `11.22.33.46`
-(OpenSSH). These public-looking addresses exist **only in that disposable
+(OpenSSH) and `11.22.33.47` (Relay control SSHD). These public-looking addresses exist **only in that disposable
 namespace** to exercise ordinary production public-address/SSRF checks.
 There is no host-bound test listener. Both HTTPS endpoints use a generated
 IP-SAN certificate. Real peer/hostname verification remains enabled and
@@ -111,7 +111,7 @@ Do not preserve sensitive fixture data for debugging.
 
 The runner prints the actual private sanitized evidence destination under its configured `MIXED_EVIDENCE_DIR`. The hosted workflow reports only explicitly selected sanitized files, not fixture state, tokens, keys or raw HTTP logs.
 Review `identity.txt`, `source-export.txt`, `report.json`, `client.json`,
-`revoked.txt` and `cleanup.txt` (all owner-readable with private permissions). The report
+`relay.json`, `oauth-lifecycle.json`, `revoked.txt` and `cleanup.txt` (all owner-readable with private permissions). The report
 includes effective Owner settings and finite HTTP limits; the client report
 includes actual wire body sizes, SFTP byte size, digest, representative latency and peak SDK memory. The Bridge effective settings are recorded separately in `wp-policy.json`. Repeat the command to prove clean reproducibility.
 
@@ -146,6 +146,20 @@ includes actual wire body sizes, SFTP byte size, digest, representative latency 
   Require exact results within budget and truthful unknown-effect diagnostics
   for over-budget mixed-effect replies, without blind retry or automatic budget
   increases. Verify complete smaller-window reads under both Gateway budgets.
+- After Direct capacity and file-transfer checks, register an actual native
+  Relay with an independently pinned control host/key and permitted forwarding
+  only to the two fixture endpoints. Register a separate Relay SSH Target and
+  explicitly bind the existing WordPress Target, revoke its prior disposable
+  grant, perform fresh nonce-protected consent and real token exchange. Compare
+  same-grant 1,000,000-byte WordPress digest and principal, 512 KiB SFTP exact
+  read/write and 512 KiB staged script through Relay. Stop the real SOCKS
+  listener: both direct controls stay reachable and selected routes fail,
+  without silent fallback. Restart the exact control tunnel, verify and read
+  again, then explicitly detach and disable the Relay while retaining the
+  new WordPress grant. Report sanitized per-operation byte/latency/route
+  evidence. Same temporary Unix account, distinct SSHD/control and Target
+  credentials, one private namespace: this is not a production WAN, real
+  multi-host throughput, retained Relay Job or offline Admin browser test.
 - After the normal installed SDK and file-transfer cases, exercise the actual
   downstream OAuth grant with controlled age shifts of its exact expiry records
   in the disposable provider and Gateway only. No host-clock or provider-code
