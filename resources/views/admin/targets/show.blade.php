@@ -27,7 +27,17 @@
     </div>
     <p class="target-recovery-intro" role="status">{{ $recovery['description'] }}</p>
     <dl class="target-recovery-grid">
-        <div><dt>{{ __('Reachability evidence') }}</dt><dd>@if (isset($health) && $health['checks'] !== []) @include('admin.targets.health-status', ['health' => $health]) @else {{ $recovery['reachability'] }} @endif</dd></div>
+        <div>
+            <dt>{{ __('Reachability evidence') }}</dt>
+            <dd>
+                @if (isset($health) && ($health['route_unavailable'] || $health['checks'] !== []))
+                    @include('admin.targets.health-status', ['health' => $health])
+                @endif
+                @if (! isset($health) || $health['checks'] === [])
+                    {{ $recovery['reachability'] }}
+                @endif
+            </dd>
+        </div>
         <div><dt>{{ __('Authorization') }}</dt><dd>{{ $recovery['authorization'] }}</dd></div>
         <div><dt>{{ __('Ongoing operation') }}</dt><dd>{{ $recovery['operation'] }}</dd></div>
     </dl>

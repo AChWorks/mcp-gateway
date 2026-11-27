@@ -3,6 +3,7 @@
 namespace Tests\Feature\Migration;
 
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetCredential;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -27,6 +28,7 @@ final class GatewayV3FreshSchemaTest extends TestCase
         self::assertTrue(Schema::hasColumn('target_credentials', 'authority_revision'));
         self::assertTrue(Schema::hasColumns('target_batch_items', ['effect_admitted', 'late_observation_ciphertext']));
         self::assertTrue(Schema::hasColumn('targets', 'created_by_user_id'));
+        self::assertTrue(Schema::hasColumn('targets', 'last_error_check_kind'));
         self::assertTrue(Schema::hasColumn('users', 'self_created_target_access'));
         self::assertTrue(Schema::hasColumn('users', 'ai_access_enabled'));
         self::assertTrue(Schema::hasColumn('ssh_direct_target_configs', 'binding_revision'));
@@ -102,6 +104,55 @@ final class GatewayV3FreshSchemaTest extends TestCase
         self::assertSame('newer_failure', DB::table('target_check_evidence')
             ->where('target_record_id', $ssh->getKey())->value('error_code'));
         self::assertSame(4, DB::table('target_check_evidence')->count());
+    }
+
+    public function test_legacy_metadata_owned_lifecycle_error_is_attributed_without_claiming_oauth_diagnostics(): void
+    {
+        $checked = '2026-10-01 10:00:00.000000';
+        $failed = '2026-10-01 10:00:00.100000';
+        $tested = '2026-10-01 10:00:00.200000';
+        $records = [];
+        foreach (['metadata', 'oauth-callback', 'oauth-grant', 'unknown'] as $name) {
+            $base = 'https://'.$name.'.example.test';
+            $target = Target::query()->create([
+                'target_id' => $name, 'display_name' => $name, 'connector_type' => 'wp_ai_bridge',
+                'connection_state' => $name === 'oauth-callback' ? 'reconnect_required' : 'error',
+                'last_error_code' => 'network_failure', 'last_failure_code' => 'network_failure',
+                'last_failure_at' => $failed, 'last_tested_at' => $name === 'unknown' ? null : $tested,
+            ]);
+            WpAiBridgeTargetConfig::query()->create([
+                'target_record_id' => $target->getKey(),
+                'base_url' => $base, 'base_url_hash' => hash('sha256', $base),
+                'mcp_resource_url' => $base.'/mcp', 'oauth_issuer_url' => $base,
+                'oauth_authorization_url' => $base.'/authorize', 'oauth_token_url' => $base.'/token',
+                'oauth_revocation_url' => $base.'/revoke',
+                'metadata_checked_at' => $checked, 'metadata_reachable' => false,
+            ]);
+            $records[$name] = $target;
+        }
+        TargetCredential::query()->create([
+            'target_record_id' => $records['oauth-grant']->getKey(),
+            'connector_type' => 'wp_ai_bridge', 'purpose' => 'wordpress_oauth',
+            'encrypted_payload' => 'opaque-test-only',
+        ]);
+        $migration = require database_path('migrations/0001_01_01_000010_record_target_check_evidence.php');
+        $migration->up();
+        foreach ($records as $name => $target) {
+            $target->refresh();
+            self::assertSame($name === 'metadata' ? 'wordpress_metadata' : null, $target->getAttribute('last_error_check_kind'));
+            self::assertSame('network_failure', $target->last_error_code);
+            self::assertSame($name === 'oauth-callback' ? 'reconnect_required' : 'error', $target->getRawOriginal('connection_state'));
+        }
+        $slot = DB::table('target_check_evidence')->where('target_record_id', $records['metadata']->getKey());
+        self::assertSame('network_failure', $slot->value('error_code'));
+        self::assertSame(0, (int) $slot->value('transport_revision'));
+
+        // Do not reacquire provenance for a later lifecycle diagnostic,
+        // even if the old code and timestamps still happen to match.
+        DB::table('targets')->where('id', $records['metadata']->getKey())->update(['last_error_check_kind' => null]);
+        $migration->up();
+        self::assertNull($records['metadata']->fresh()->getAttribute('last_error_check_kind'));
+        self::assertSame('network_failure', $slot->value('error_code'));
     }
 
     public function test_fresh_v3_seeds_required_operational_state_without_old_target_or_access_data(): void

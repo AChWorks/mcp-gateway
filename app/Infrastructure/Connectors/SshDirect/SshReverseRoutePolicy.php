@@ -90,7 +90,7 @@ final class SshReverseRoutePolicy
             ->whereNull('revoked_at')
             ->whereNotNull('control_public_key')
             ->first();
-        if (! $managed || in_array($number, array_column($allowed, 'port'), true)) {
+        if (! $managed || $managed->tunnel_identity !== $identity || in_array($number, array_column($allowed, 'port'), true)) {
             throw new SshTargetConnectionException('reverse_route_not_approved');
         }
 

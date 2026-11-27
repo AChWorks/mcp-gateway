@@ -137,6 +137,7 @@ final readonly class WpAiBridgeTargetConnectionService
             $locked->forceFill([
                 'connection_state' => TargetConnectionState::Pending,
                 'last_error_code' => null,
+                'last_error_check_kind' => null,
                 ...($currentObservation ? ['last_tested_at' => now()] : []),
             ])->save();
         });
@@ -298,6 +299,7 @@ final readonly class WpAiBridgeTargetConnectionService
             $locked->forceFill([
                 'connection_state' => TargetConnectionState::Connected,
                 'last_error_code' => null,
+                'last_error_check_kind' => null,
                 'connected_at' => now(),
                 'last_success_at' => now(),
             ])->save();
@@ -928,6 +930,7 @@ final readonly class WpAiBridgeTargetConnectionService
             $locked->forceFill([
                 'connection_state' => TargetConnectionState::Connected,
                 'last_error_code' => null,
+                'last_error_check_kind' => null,
                 'last_success_at' => now(),
                 'last_failure_code' => null,
             ])->save();
@@ -1004,6 +1007,7 @@ final readonly class WpAiBridgeTargetConnectionService
             $locked->forceFill([
                 'connection_state' => TargetConnectionState::Connected,
                 'last_error_code' => 'refresh_unavailable',
+                'last_error_check_kind' => null,
                 'last_failure_at' => now(),
                 'last_failure_code' => 'refresh_unavailable',
             ])->save();
@@ -1026,6 +1030,7 @@ final readonly class WpAiBridgeTargetConnectionService
             $locked->forceFill([
                 'connection_state' => TargetConnectionState::Error,
                 'last_error_code' => $reason,
+                'last_error_check_kind' => null,
                 'last_failure_at' => now(),
                 'last_failure_code' => $reason,
             ])->save();
@@ -1078,6 +1083,7 @@ final readonly class WpAiBridgeTargetConnectionService
             $locked->forceFill([
                 'connection_state' => TargetConnectionState::Disconnected,
                 'last_error_code' => 'manual_revocation_attested',
+                'last_error_check_kind' => null,
                 'connected_at' => null,
                 'last_failure_at' => now(),
                 'last_failure_code' => 'manual_revocation_attested',
@@ -1170,6 +1176,7 @@ final readonly class WpAiBridgeTargetConnectionService
                 $locked->forceFill([
                     'connection_state' => TargetConnectionState::Disconnected,
                     'last_error_code' => null,
+                    'last_error_check_kind' => null,
                     'connected_at' => null,
                 ])->save();
 
@@ -1209,6 +1216,7 @@ final readonly class WpAiBridgeTargetConnectionService
             $locked->forceFill([
                 'connection_state' => TargetConnectionState::Error,
                 'last_error_code' => 'disconnect_pending',
+                'last_error_check_kind' => null,
                 'connected_at' => null,
             ])->save();
 
@@ -1356,6 +1364,7 @@ final readonly class WpAiBridgeTargetConnectionService
             $locked->forceFill([
                 'connection_state' => TargetConnectionState::Disconnected,
                 'last_error_code' => null,
+                'last_error_check_kind' => null,
                 'connected_at' => null,
             ])->save();
         });
@@ -1473,6 +1482,7 @@ final readonly class WpAiBridgeTargetConnectionService
                 'connection_state' => TargetConnectionState::Connected,
                 'connected_at' => now(),
                 'last_error_code' => null,
+                'last_error_check_kind' => null,
                 'last_success_at' => now(),
             ])->save();
 
@@ -1524,6 +1534,7 @@ final readonly class WpAiBridgeTargetConnectionService
                 'connection_state' => TargetConnectionState::Disconnected,
                 'connected_at' => null,
                 'last_error_code' => 'manual_revocation_attested',
+                'last_error_check_kind' => null,
                 'last_failure_at' => now(),
                 'last_failure_code' => 'manual_revocation_attested',
             ])->save();
@@ -1566,25 +1577,22 @@ final readonly class WpAiBridgeTargetConnectionService
             // credential and pending remote intents stay completely separate.
             DB::table('wp_ai_bridge_target_configs')->where('target_record_id', $locked->getKey())
                 ->update(['metadata_checked_at' => now(), 'metadata_reachable' => true, 'updated_at' => now()]);
-            $previous = DB::table('target_check_evidence')->where('target_record_id', $locked->getKey())
-                ->where('kind', TargetCheckEvidence::WORDPRESS_METADATA)->first();
             TargetCheckEvidence::recordLocked($locked, TargetCheckEvidence::WORDPRESS_METADATA);
-            // A successful metadata probe is not proof that a pending remote
-            // revocation was completed; retain its failure status and intent.
             $fields = [
                 'last_tested_at' => now(),
                 'last_success_at' => now(),
             ];
 
-            if ($previous !== null
-                && $previous->error_code !== null && $locked->last_error_code === $previous->error_code
-                && ! $this->credential($locked) instanceof TargetCredential
-                && ! $this->hasRevocationIntent($locked) && ! $this->hasRefreshIntent($locked)
-                && ! DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->exists()) {
+            // Only an explicitly attributed metadata diagnostic can be retired
+            // by this observation. OAuth errors and intents are independent,
+            // even if the provider and metadata check returned the same code.
+            if ($locked->getAttribute('last_error_check_kind') === TargetCheckEvidence::WORDPRESS_METADATA
+                && $this->metadataMayOwnDiagnostic($locked)) {
                 if ($locked->getAttribute('connection_state') === TargetConnectionState::Error) {
                     $fields['connection_state'] = TargetConnectionState::Disconnected;
                 }
                 $fields['last_error_code'] = null;
+                $fields['last_error_check_kind'] = null;
             }
             $locked->forceFill($fields)->save();
         });
@@ -1740,23 +1748,44 @@ final readonly class WpAiBridgeTargetConnectionService
             TargetCheckEvidence::recordLocked($locked, TargetCheckEvidence::WORDPRESS_METADATA, $reason);
             DB::table('wp_ai_bridge_target_configs')->where('target_record_id', $locked->getKey())
                 ->update(['metadata_checked_at' => now(), 'metadata_reachable' => false, 'updated_at' => now()]);
-            if (! $this->credential($locked) instanceof TargetCredential
-                && ! $this->hasRevocationIntent($locked) && ! $this->hasRefreshIntent($locked)
-                && ! DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->exists()) {
+            $fields = ['last_tested_at' => now()];
+            if ($this->metadataMayOwnDiagnostic($locked)) {
+                // Keep the existing primary diagnostic contract for metadata-
+                // only setup/Test failures. The independent slot owns the
+                // observation; the provenance identifies its local mirror.
+                $reason = mb_substr($this->safeError($reason), 0, 64);
+                $fields += [
+                    'last_error_code' => $reason,
+                    'last_error_check_kind' => TargetCheckEvidence::WORDPRESS_METADATA,
+                    'last_failure_at' => now(),
+                    'last_failure_code' => $reason,
+                ];
                 if ($connecting) {
-                    $this->setFailure($locked, $reason, TargetConnectionState::Error);
-                } else {
-                    // Keep existing diagnostics without inventing an OAuth transition.
-                    $locked->forceFill(['last_error_code' => mb_substr($this->safeError($reason), 0, 64)])->save();
+                    $fields['connection_state'] = TargetConnectionState::Error;
+                    $fields['connected_at'] = null;
                 }
+            } elseif ($locked->last_error_code === null) {
+                // Retain generic last-failure history for a check without an
+                // unresolved independent lifecycle diagnostic.
+                $fields['last_failure_at'] = now();
+                $fields['last_failure_code'] = mb_substr($this->safeError($reason), 0, 64);
             }
-            // Public metadata cannot revoke or repair an independent OAuth grant.
-            $locked->forceFill([
-                'last_tested_at' => now(),
-                'last_failure_at' => now(),
-                'last_failure_code' => mb_substr($this->safeError($reason), 0, 64),
-            ])->save();
+            $locked->forceFill($fields)->save();
         });
+    }
+
+    private function metadataMayOwnDiagnostic(Target $target): bool
+    {
+        $owned = $target->getAttribute('last_error_check_kind') === TargetCheckEvidence::WORDPRESS_METADATA;
+        $state = $target->getAttribute('connection_state');
+        if (! ($owned && in_array($state, [TargetConnectionState::Disconnected, TargetConnectionState::Error], true))
+            && ! ($state === TargetConnectionState::Disconnected && $target->last_error_code === null)) {
+            return false;
+        }
+
+        return ! $this->credential($target) instanceof TargetCredential
+            && ! $this->hasRevocationIntent($target) && ! $this->hasRefreshIntent($target)
+            && ! DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $target->getKey())->exists();
     }
 
     private function setFailure(Target $target, string $reason, TargetConnectionState $state): void
@@ -1765,6 +1794,7 @@ final readonly class WpAiBridgeTargetConnectionService
         $target->forceFill([
             'connection_state' => $state,
             'last_error_code' => $reason,
+            'last_error_check_kind' => null,
             'last_failure_at' => now(),
             'last_failure_code' => $reason,
             'connected_at' => null,

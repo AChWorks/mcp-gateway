@@ -142,6 +142,12 @@ $owner = $ownerQuery->fetchColumn();
 $legacyQuery = $pdo->prepare("SHOW TABLES LIKE ?");
 $legacyQuery->execute(["sites"]);
 $historic = $legacyQuery->fetchAll();
+$ownerColumn = $pdo->prepare("SHOW COLUMNS FROM targets LIKE ?");
+$ownerColumn->execute(["last_error_check_kind"]);
+$diagnosticOwner = $ownerColumn->fetchColumn();
+if ($diagnosticOwner !== "last_error_check_kind") {
+    throw new RuntimeException("Missing Target diagnostic ownership schema.");
+}
 $evidenceColumns = $pdo->query("SHOW COLUMNS FROM target_check_evidence")->fetchAll(PDO::FETCH_COLUMN);
 if ($evidenceColumns !== ["target_record_id", "kind", "transport_revision", "attempt_id", "observed_at",
     "error_code", "last_failure_at", "last_failure_code"]) {

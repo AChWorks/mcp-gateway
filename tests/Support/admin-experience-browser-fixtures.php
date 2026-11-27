@@ -209,8 +209,9 @@ Route::middleware(['web', 'auth'])->get('/__browser__/health-evidence/{phase}', 
 
 // A disabled Relay stays selected and unavailable on Target Edit,
 // not silently present Direct. This disposable fixture creates no connection.
-Route::middleware(['web', 'auth'])->get('/__browser__/relay-unavailable-target', static function () {
+Route::middleware(['web', 'auth'])->get('/__browser__/relay-unavailable-target/{kind?}', static function (string $kind = 'ssh') {
     abort_unless(Auth::user()?->getRawOriginal('role') === 'owner', 403);
+    abort_unless(in_array($kind, ['ssh', 'historical'], true), 404);
     $relay = ConnectionRelay::query()->where('relay_id', 'ui-iran-offline')->first();
     if (! $relay instanceof ConnectionRelay) {
         $key = implode(' ', array_slice(
@@ -222,6 +223,17 @@ Route::middleware(['web', 'auth'])->get('/__browser__/relay-unavailable-target',
             'control_user' => 'offline-ui-only', 'control_host_key' => $key,
             'local_socks_port' => 46082,
         ]);
+    }
+    if ($kind === 'historical') {
+        $target = Target::query()->firstOrCreate(['target_id' => 'ui-historical-route'], [
+            'display_name' => 'Historical connector with disabled route',
+            'connector_type' => 'wp_ai_bridge',
+        ]);
+        DB::table('targets')->where('id', $target->getKey())->update([
+            'connector_type' => 'historical_protocol', 'relay_record_id' => $relay->getKey(), 'transport_revision' => 1,
+        ]);
+
+        return redirect()->route('admin.targets.show', ['target' => $target->target_id]);
     }
     $target = Target::query()->where('target_id', 'ui-relay-unavailable')->first();
     if (! $target instanceof Target) {

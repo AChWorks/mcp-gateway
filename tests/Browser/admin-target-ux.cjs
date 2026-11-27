@@ -401,6 +401,22 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
     assert.equal(await page.getByText('ui-health-changed',{exact:true}).count(),0);
     pass('current success, current failure, changed-route evidence and consistent review filter');
 
+    // Route evidence is independent even for unsupported historical records.
+    await page.goto(base+'/__browser__/relay-unavailable-target/historical');
+    const recovery=page.locator('[aria-labelledby="target-recovery-title"]');
+    for(const width of [360,768,1440]) for(const dark of [false,true]) {
+      await page.setViewportSize({width,height:950});
+      await page.emulateMedia({colorScheme:dark?'dark':'light',reducedMotion:'reduce'});
+      assert.ok(await recovery.getByText('Route unavailable',{exact:true}).isVisible());
+      assert.ok(await recovery.locator('dd').filter({hasText:'No supported connector evidence is available.'}).isVisible());
+      assert.ok(await recovery.getByText('Connector operations are unavailable.',{exact:true}).isVisible());
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth<=2),
+        JSON.stringify({historicalRoute:true,width,dark}));
+    }
+    assert.equal(await page.getByRole('button',{name:'Authorize WordPress',exact:true}).count(),0);
+    assert.equal(await page.getByRole('button',{name:'Verify SSH host and login',exact:true}).count(),0);
+    pass('unsupported historical connector retains neutral explanation and independent unavailable route');
+
     // Test the actual native form payload, including CSRF and explicit modes.
     // The response is intercepted before any network/backend dispatch; PHP
     // feature tests cover the real controller + safe HTTP semantics.

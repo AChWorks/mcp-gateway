@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Admin;
 
+use App\Application\Admin\TargetDashboardOverview;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
@@ -1070,6 +1071,37 @@ final class AdminUiPresentationTest extends TestCase
         self::assertSame(['SSH', 'ssh_direct'], $connectorLabelFor('supported-ssh'));
         self::assertSame(['WordPress (WP AI Bridge)', 'wp_ai_bridge'], $connectorLabelFor('supported-wordpress'));
         self::assertSame('unrecognized_connector', DB::table('targets')->where('id', $legacy->getKey())->value('connector_type'));
+    }
+
+    public function test_unsupported_target_details_keep_independent_route_failure_and_neutral_connector_explanation(): void
+    {
+        $owner = $this->owner();
+        $relay = ConnectionRelay::query()->create([
+            'relay_id' => 'historical-relay', 'display_name' => 'Disabled Relay',
+            'control_host' => '198.51.100.42', 'control_port' => 22,
+            'control_user' => 'relay-user', 'control_host_key' => 'ssh-ed25519 synthetic-display-only',
+            'local_socks_port' => 46902,
+        ]);
+        foreach (['historical-route', 'historical-direct'] as $id) {
+            $target = Target::query()->create([
+                'target_id' => $id, 'display_name' => $id, 'connector_type' => 'wp_ai_bridge',
+            ]);
+            DB::table('targets')->where('id', $target->getKey())->update([
+                'connector_type' => 'historical_protocol',
+                'relay_record_id' => $id === 'historical-route' ? $relay->getKey() : null,
+            ]);
+        }
+        $summary = app(TargetDashboardOverview::class)->forUser($owner);
+        self::assertSame(1, $summary['attentionCount']);
+        self::assertSame(['historical-route'], array_map(static fn (Target $target): string => $target->target_id, $summary['reviewTargets']));
+        $this->actingAs($owner)->get('/admin/targets?needs_review=1')->assertOk()
+            ->assertSee('historical-route')->assertDontSee('historical-direct');
+        $this->get('/admin/targets/historical-route')->assertOk()->assertSee('Route unavailable')
+            ->assertSee('No supported connector evidence is available.')
+            ->assertSee('Connector operations are unavailable.')
+            ->assertDontSee('Authorize WordPress')->assertDontSee('Verify SSH host and login');
+        $this->get('/admin/targets/historical-direct')->assertOk()
+            ->assertDontSee('Route unavailable')->assertSee('No supported connector evidence is available.');
     }
 
     public function test_target_entry_remains_neutral_and_available_connectors_have_registration_flows(): void

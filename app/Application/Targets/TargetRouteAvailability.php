@@ -31,6 +31,9 @@ final readonly class TargetRouteAvailability
                 }
                 // Exact manual ownership or an active/pending matching managed
                 // enrollment. Ordinary initial pending setup is not a failure.
+                // HEX compares the identity bytes on SQLite and MariaDB/MySQL,
+                // independently of text collation. Target slugs are lowercase
+                // by contract; keep their indexed lookup and the port predicate.
                 $manual = DB::table('ssh_reverse_managed_enrollments')->selectRaw('1')
                     ->whereColumn('target_id', 'targets.target_id');
                 $reverse->whereNot(function (Builder $available) use ($allowed, $manual): void {
@@ -40,10 +43,10 @@ final readonly class TargetRouteAvailability
                             ->whereExists(DB::table('ssh_reverse_gateway_settings')->selectRaw('1')
                                 ->where('id', 1)->where('enabled', true)->where('publication_pending', false))
                             ->whereExists(DB::table('ssh_reverse_managed_enrollments')->selectRaw('1')
-                                ->whereColumn('target_record_id', 'targets.id')
+                                ->whereRaw('HEX(ssh_reverse_managed_enrollments.target_record_id) = HEX(targets.id)')
                                 ->whereColumn('target_id', 'targets.target_id')
                                 ->whereColumn('listener_port', 'targets.reverse_listener_port')
-                                ->whereColumn('tunnel_identity', 'targets.reverse_tunnel_identity')
+                                ->whereRaw('HEX(ssh_reverse_managed_enrollments.tunnel_identity) = HEX(targets.reverse_tunnel_identity)')
                                 ->whereNull('revoked_at')->where('publication_pending', false)
                                 ->where(function (Builder $state): void {
                                     $state->where('state', 'pending')->orWhere(function (Builder $active): void {
@@ -54,7 +57,7 @@ final readonly class TargetRouteAvailability
                     foreach ($allowed as $id => $route) {
                         $available->orWhere(function (Builder $exact) use ($id, $route, $manual): void {
                             $exact->where('targets.target_id', $id)->where('targets.reverse_listener_port', $route['port'])
-                                ->where('targets.reverse_tunnel_identity', $route['tunnel_identity'])
+                                ->whereRaw('HEX(targets.reverse_tunnel_identity) = HEX(?)', [$route['tunnel_identity']])
                                 ->whereNotExists(clone $manual);
                         });
                     }
@@ -64,7 +67,7 @@ final readonly class TargetRouteAvailability
                     DB::table('ssh_reverse_managed_enrollments')->selectRaw('1')
                         ->whereColumn('target_id', 'targets.target_id')
                         ->where(function (Builder $enrollment): void {
-                            $enrollment->where('state', '!=', 'revoked')->orWhereColumn('target_record_id', '!=', 'targets.id');
+                            $enrollment->where('state', '!=', 'revoked')->orWhereRaw('HEX(ssh_reverse_managed_enrollments.target_record_id) <> HEX(targets.id)');
                         })
                 );
             });

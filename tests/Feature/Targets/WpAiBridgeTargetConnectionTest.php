@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\Targets;
 
+use App\Application\Admin\TargetDashboardOverview;
+use App\Application\Mcp\TargetMcpToolHandlers;
 use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\ConnectionRelayAdministration;
 use App\Application\Targets\TargetConnectorFailure;
@@ -67,6 +69,8 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
     private ?\Closure $duringCatalogProbe = null;
 
     private bool $failTokenExchange = false;
+
+    private bool $failMetadata = false;
 
     private bool $failRefresh = false;
 
@@ -310,8 +314,14 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame(1, $credential->fresh()->authority_revision);
         self::assertNotSame($authority, $credential->fresh()->authorityFingerprint());
         self::assertSame($material, $credential->fresh()->materialFingerprint());
+        $intentBefore = (array) DB::table('wp_ai_bridge_revocation_intents')->sole();
+        $failureAt = $alpha->getRawOriginal('last_failure_at');
+        $this->failMetadataCheck($alpha);
         $service->testConnection($alpha);
-        self::assertSame('revocation_failed', $alpha->refresh()->last_error_code,
+        self::assertSame($intentBefore, (array) DB::table('wp_ai_bridge_revocation_intents')->sole());
+        self::assertSame($failureAt, $alpha->refresh()->getRawOriginal('last_failure_at'));
+        self::assertSame('revocation_failed', $alpha->last_failure_code);
+        self::assertSame('revocation_failed', $alpha->last_error_code,
             'A successful metadata probe must not mask unresolved credential revocation.');
         try {
             $service->accessToken($alpha);
@@ -379,6 +389,12 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame(TargetConnectionState::Disconnected, $alpha->refresh()->connection_state);
         self::assertSame('oauth_access_denied', $alpha->last_error_code);
         self::assertSame(0, DB::table('wp_ai_bridge_oauth_flows')->count());
+        $this->failMetadataCheck($alpha);
+        $service->testConnection($alpha->fresh());
+        self::assertSame('oauth_access_denied', $alpha->refresh()->last_error_code);
+        self::assertSame('oauth_access_denied', $alpha->last_failure_code);
+        self::assertSame(TargetConnectionState::Disconnected, $alpha->connection_state);
+
     }
 
     public function test_admin_callback_and_access_gates_operate_on_target_not_old_site_routes(): void
@@ -628,6 +644,126 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $this->failTokenExchange = false;
         $this->pair($alpha);
         self::assertSame(TargetConnectionState::Connected, $alpha->refresh()->connection_state);
+    }
+
+    public function test_public_metadata_checks_preserve_settled_oauth_failure_diagnostics(): void
+    {
+        $target = $this->target('alpha');
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        parse_str((string) parse_url($service->begin($target), PHP_URL_QUERY), $args);
+        $this->failTokenExchange = true;
+        try {
+            $service->completeCallback($args['state'], 'alpha-code', 'https://alpha.example.test', null);
+            self::fail('Rejected exchange was accepted.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('token_exchange_failed', $exception->reason);
+        }
+        self::assertSame(0, DB::table('wp_ai_bridge_oauth_flows')->count());
+        $target->refresh();
+        $failureAt = $target->getRawOriginal('last_failure_at');
+        $owner = $this->user('owner', 'all');
+        $this->actingAs($owner);
+        $context = app(TargetMcpToolHandlers::class);
+        $overview = app(TargetDashboardOverview::class);
+        $slot = DB::table('target_check_evidence')->where('target_record_id', $target->getKey())
+            ->where('kind', 'wordpress_metadata');
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(static fn (Request $request) => Http::response([], 404));
+        try {
+            $service->testConnection($target);
+            self::fail('Missing metadata was accepted.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('missing_bridge', $exception->reason);
+        }
+        Http::assertSentCount(1);
+        self::assertSame('missing_bridge', $slot->value('error_code'));
+        $target->refresh();
+        self::assertSame(TargetConnectionState::ReconnectRequired, $target->connection_state);
+        self::assertSame('token_exchange_failed', $target->last_error_code);
+        self::assertSame('token_exchange_failed', $target->last_failure_code);
+        self::assertSame($failureAt, $target->getRawOriginal('last_failure_at'));
+        self::assertSame('token_exchange_failed', $context->targetContext($owner, 'alpha')['target']['last_error_code']);
+        self::assertSame(1, $overview->forUser($owner)['attentionCount']);
+        $this->get('/admin/targets/alpha')->assertOk()->assertSee('token_exchange_failed')
+            ->assertSee('Last check failed')->assertSee('missing_bridge');
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(fn (Request $request) => $this->bridgeResponse($request));
+        $service->testConnection($target->fresh());
+        Http::assertSentCount(2);
+        $target->refresh();
+        self::assertSame(TargetConnectionState::ReconnectRequired, $target->connection_state);
+        self::assertSame('token_exchange_failed', $target->last_error_code);
+        self::assertSame('token_exchange_failed', $target->last_failure_code);
+        self::assertSame($failureAt, $target->getRawOriginal('last_failure_at'));
+        self::assertNull($slot->value('error_code'));
+        self::assertSame('missing_bridge', $slot->value('last_failure_code'));
+        self::assertSame('token_exchange_failed', $context->targetContext($owner, 'alpha')['target']['last_error_code']);
+        self::assertSame(1, $overview->forUser($owner)['attentionCount']);
+        $this->get('/admin/targets/alpha')->assertOk()->assertSee('token_exchange_failed')
+            ->assertSee('Last check succeeded')->assertSee('Historical failure: missing_bridge')
+            ->assertDontSee('Last check failed')
+            ->assertDontSee('Earlier error before the most recent successful metadata check: token_exchange_failed');
+        Http::assertSentCount(2);
+    }
+
+    public function test_metadata_owned_setup_error_recovers_without_clearing_an_independent_same_code_error(): void
+    {
+        $target = $this->target('alpha');
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(static fn (Request $request) => Http::response([], 404));
+        try {
+            $service->begin($target);
+            self::fail('Missing metadata was accepted.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('missing_bridge', $exception->reason);
+        }
+        self::assertSame(TargetConnectionState::Error, $target->fresh()->connection_state);
+        self::assertSame('missing_bridge', $target->fresh()->last_error_code);
+        self::assertSame('wordpress_metadata', $target->fresh()->getAttribute('last_error_check_kind'));
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(fn (Request $request) => $this->bridgeResponse($request));
+        $service->testConnection($target->fresh());
+        self::assertSame(TargetConnectionState::Disconnected, $target->fresh()->connection_state);
+        self::assertNull($target->fresh()->last_error_code);
+        self::assertNull($target->fresh()->getAttribute('last_error_check_kind'));
+
+        // Simulate an already retained diagnostic of unproven lifecycle origin
+        // whose reason happens to be the same as the previous metadata check.
+        DB::table('targets')->where('id', $target->getKey())->update([
+            'connection_state' => 'error', 'last_error_code' => 'missing_bridge',
+        ]);
+        DB::table('target_check_evidence')->where('target_record_id', $target->getKey())
+            ->where('kind', 'wordpress_metadata')->update(['error_code' => 'missing_bridge']);
+        $service->testConnection($target->fresh());
+        self::assertSame(TargetConnectionState::Error, $target->fresh()->connection_state);
+        self::assertSame('missing_bridge', $target->fresh()->last_error_code);
+    }
+
+    public function test_metadata_failure_and_success_leave_pending_oauth_callback_unchanged(): void
+    {
+        $target = $this->target('alpha');
+        $service = app(WpAiBridgeTargetConnectionService::class);
+        parse_str((string) parse_url($service->begin($target), PHP_URL_QUERY), $args);
+        $flow = (array) DB::table('wp_ai_bridge_oauth_flows')->sole();
+        $this->failMetadataCheck($target);
+        self::assertSame(TargetConnectionState::Pending, $target->refresh()->connection_state);
+        self::assertNull($target->last_error_code);
+        self::assertSame($flow, (array) DB::table('wp_ai_bridge_oauth_flows')->sole());
+        $service->testConnection($target->fresh());
+        self::assertSame($flow, (array) DB::table('wp_ai_bridge_oauth_flows')->sole());
+        self::assertSame(TargetConnectionState::Pending, $target->refresh()->connection_state);
+        $service->completeCallback($args['state'], 'alpha-code', 'https://alpha.example.test', null);
+        self::assertSame(TargetConnectionState::Connected, $target->refresh()->connection_state);
+        self::assertNull($target->last_error_code);
+        self::assertNull($target->getAttribute('last_error_check_kind'));
     }
 
     public function test_callback_in_flight_is_fenced_against_disconnect(): void
@@ -1747,8 +1883,14 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         } catch (WpAiBridgeTargetConnectionException $exception) {
             self::assertSame('refresh_pending', $exception->reason);
         }
+        $intentBefore = (array) DB::table('wp_ai_bridge_refresh_intents')->sole();
+        $failureAt = $alpha->getRawOriginal('last_failure_at');
+        $this->failMetadataCheck($alpha);
         $service->testConnection($alpha);
-        self::assertSame('refresh_ambiguous', $alpha->refresh()->last_error_code);
+        self::assertSame($intentBefore, (array) DB::table('wp_ai_bridge_refresh_intents')->sole());
+        self::assertSame($failureAt, $alpha->refresh()->getRawOriginal('last_failure_at'));
+        self::assertSame('refresh_ambiguous', $alpha->last_failure_code);
+        self::assertSame('refresh_ambiguous', $alpha->last_error_code);
         try {
             $service->accessToken($alpha);
             self::fail('An in-flight refresh was replayed concurrently.');
@@ -3573,6 +3715,19 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         )])->save();
     }
 
+    private function failMetadataCheck(Target $target): void
+    {
+        $this->failMetadata = true;
+        try {
+            app(WpAiBridgeTargetConnectionService::class)->testConnection($target->fresh());
+            self::fail('Missing metadata was accepted.');
+        } catch (WpAiBridgeTargetConnectionException $exception) {
+            self::assertSame('missing_bridge', $exception->reason);
+        } finally {
+            $this->failMetadata = false;
+        }
+    }
+
     private function pair(Target $target): string
     {
         $service = app(WpAiBridgeTargetConnectionService::class);
@@ -3621,6 +3776,10 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $path = (string) parse_url($url, PHP_URL_PATH);
 
         if ($path === '/.well-known/oauth-protected-resource') {
+            if ($this->failMetadata) {
+                return Http::response([], 404);
+            }
+
             return Http::response([
                 'resource' => $base.'/wp-json/wp-ai-bridge/v1/mcp',
                 'authorization_servers' => [$base],

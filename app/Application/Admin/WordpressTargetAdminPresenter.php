@@ -133,15 +133,12 @@ final class WordpressTargetAdminPresenter implements TargetConnectorAdminPresent
             $reachability = __('The current network route has not been checked. Earlier metadata observations are historical; authorization is unchanged.');
         }
 
-        $historic = $target->last_error_code !== null && $target->last_failure_at !== null
-            && $timestamp !== null && $timestamp !== false
-            && (int) $metadataReachable === 1
-            && strtotime((string) $target->last_failure_at) < $timestamp;
+        // Public metadata success says nothing about OAuth recovery.
+        // The health projection owns observation history; this is the
+        // independently retained primary diagnostic.
         $history = $target->last_error_code === null
             ? null
-            : ($historic
-                ? __('Earlier error before the most recent successful metadata check: :code', ['code' => $target->last_error_code])
-                : __('Recorded error (diagnostic, not proof of current reachability): :code', ['code' => $target->last_error_code]));
+            : __('Recorded error (diagnostic, not proof of current reachability): :code', ['code' => $target->last_error_code]);
 
         if ($refreshPending) {
             return [

@@ -3,9 +3,11 @@
 namespace Tests\Feature\Admin;
 
 use App\Application\Admin\TargetDashboardOverview;
+use App\Application\Targets\SshTargetConnectionException;
 use App\Application\Targets\TargetCheckEvidence;
 use App\Application\Targets\TargetInventory;
 use App\Application\Targets\TargetReview;
+use App\Application\Targets\TargetRouteAvailability;
 use App\Domain\Access\GatewayRole;
 use App\Domain\Access\TargetScopeMode;
 use App\Domain\Targets\Target;
@@ -13,12 +15,17 @@ use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
 use App\Domain\Targets\TargetGroup;
 use App\Infrastructure\Activity\ActivityRecorder;
+use App\Infrastructure\Connectors\Relay\ConnectionRelay;
+use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
+use App\Infrastructure\Connectors\SshDirect\SshManagedReverseGateway;
+use App\Infrastructure\Connectors\SshDirect\SshReverseRoutePolicy;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Group;
 use Tests\TestCase;
 
 final class AdminDashboardOverviewTest extends TestCase
@@ -103,6 +110,107 @@ final class AdminDashboardOverviewTest extends TestCase
         self::assertSame([], app(TargetInventory::class)->adminPage($owner, needsReview: true)['items']);
         $this->get('/admin/targets/metadata-failure')->assertOk()
             ->assertSee('Current route not verified')->assertSee('Historical check')->assertDontSee('Last check failed');
+        Http::assertNothingSent();
+    }
+
+    #[Group('database-inventory')]
+    public function test_reverse_route_review_projection_matches_exact_runtime_identity(): void
+    {
+        Http::preventStrayRequests();
+        $owner = $this->user();
+        $viewer = $this->user(GatewayRole::Viewer);
+        $policy = app(SshReverseRoutePolicy::class);
+        $routes = app(TargetRouteAvailability::class);
+        $manual = $this->target('manual-case', TargetConnectionState::Connected, 'ssh_direct');
+        $direct = $this->target('direct-ok', TargetConnectionState::Connected, 'ssh_direct');
+        $this->allow($viewer, $manual);
+        $this->allow($viewer, $direct);
+        DB::table('targets')->where('id', $manual->getKey())->update([
+            'reverse_listener_port' => 41001, 'reverse_tunnel_identity' => 'MixedCase',
+        ]);
+        $manual->refresh();
+        DB::transaction(static function () use ($manual): void {
+            $locked = Target::query()->lockForUpdate()->findOrFail($manual->getKey());
+            TargetCheckEvidence::recordLocked($locked, TargetCheckEvidence::SSH_LOGIN);
+        });
+        config()->set('ssh.reverse_approved_routes', json_encode([
+            'manual-case' => ['port' => 41001, 'tunnel_identity' => 'MixedCase'],
+        ], JSON_THROW_ON_ERROR));
+        self::assertSame('MixedCase', $policy->forTarget($manual)?->tunnelIdentity);
+        self::assertNull($policy->forTarget($direct));
+        self::assertFalse($routes->unavailable()->where('targets.id', $manual->getKey())->exists());
+        self::assertSame(0, app(TargetDashboardOverview::class)->forUser($viewer)['attentionCount']);
+
+        SshManagedReverseGateway::query()->create([
+            'id' => 1, 'enabled' => true, 'control_host' => 'control.example.test', 'control_port' => 7770,
+            'control_user' => 'fixture', 'control_host_key' => 'ssh-ed25519 fixture-only',
+        ]);
+        $managed = [];
+        foreach (['active', 'pending'] as $index => $state) {
+            $target = $this->target('managed-'.$state, $state === 'active'
+                ? TargetConnectionState::Connected : TargetConnectionState::Pending, 'ssh_direct');
+            $port = 41002 + $index;
+            $identity = 'Managed-'.$state;
+            DB::table('targets')->where('id', $target->getKey())->update([
+                'reverse_listener_port' => $port, 'reverse_tunnel_identity' => $identity,
+            ]);
+            SshManagedReverseEnrollment::query()->create([
+                'target_id' => $target->target_id, 'target_record_id' => $target->getKey(),
+                'listener_port' => $port, 'tunnel_identity' => $identity,
+                'state' => $state, 'login_public_key' => '',
+                'control_public_key' => $state === 'active' ? 'ssh-ed25519 fixture-only' : null,
+            ]);
+            $managed[$state] = $target->refresh();
+            $this->allow($viewer, $target);
+            self::assertFalse($routes->unavailable()->where('targets.id', $target->getKey())->exists());
+        }
+        self::assertSame('Managed-active', $policy->forTarget($managed['active'])?->tunnelIdentity);
+        $relay = ConnectionRelay::query()->create([
+            'relay_id' => 'available-relay', 'display_name' => 'Available Relay',
+            'control_host' => 'relay.example.test', 'control_port' => 22,
+            'control_user' => 'fixture', 'control_host_key' => 'ssh-ed25519 fixture-only',
+            'local_socks_port' => 41004,
+        ]);
+        DB::table('connection_relays')->where('id', $relay->getKey())->update(['enabled' => true]);
+        $relayed = $this->target('relay-ok', TargetConnectionState::Connected);
+        DB::table('targets')->where('id', $relayed->getKey())->update(['relay_record_id' => $relay->getKey()]);
+        $this->allow($viewer, $relayed);
+        self::assertFalse($routes->unavailable()->where('targets.id', $relayed->getKey())->exists());
+        self::assertSame(0, app(TargetDashboardOverview::class)->forUser($viewer)['attentionCount']);
+
+        config()->set('ssh.reverse_approved_routes', json_encode([
+            'manual-case' => ['port' => 41001, 'tunnel_identity' => 'mixedcase'],
+        ], JSON_THROW_ON_ERROR));
+        try {
+            $policy->forTarget($manual);
+            self::fail('Different tunnel identity was approved.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('reverse_route_not_approved', $exception->reason);
+        }
+        self::assertTrue($routes->unavailable()->where('targets.id', $manual->getKey())->exists());
+        $summary = app(TargetDashboardOverview::class)->forUser($viewer);
+        self::assertSame(1, $summary['attentionCount']);
+        self::assertSame(['manual-case'], array_map(static fn (Target $target): string => $target->target_id, $summary['reviewTargets']));
+        self::assertSame(['manual-case'], array_map(static fn (Target $target): string => $target->target_id,
+            app(TargetInventory::class)->adminPage($viewer, needsReview: true)['items']));
+        $this->actingAs($viewer)->get('/admin/targets/manual-case')->assertOk()
+            ->assertSee('Route unavailable')->assertSee('Current route not verified')->assertDontSee('Last check succeeded');
+        $this->get('/admin/targets?needs_review=1')->assertOk()->assertSee('manual-case')->assertDontSee('direct-ok');
+        self::assertSame(1, app(TargetDashboardOverview::class)->forUser($owner)['attentionCount']);
+        // The managed runtime lookup also uses a collated database column.
+        // A case-only changed stored identity must not look approved there.
+        DB::table('targets')->where('id', $managed['active']->getKey())->update([
+            'reverse_tunnel_identity' => 'managed-active',
+        ]);
+        try {
+            $policy->forTarget($managed['active']->refresh());
+            self::fail('Different managed identity was approved.');
+        } catch (SshTargetConnectionException $exception) {
+            self::assertSame('reverse_route_not_approved', $exception->reason);
+        }
+        self::assertTrue($routes->unavailable()->where('targets.id', $managed['active']->getKey())->exists());
+        self::assertFalse($routes->unavailable()->where('targets.id', $managed['pending']->getKey())->exists());
+        self::assertSame(2, app(TargetDashboardOverview::class)->forUser($viewer)['attentionCount']);
         Http::assertNothingSent();
     }
 
