@@ -6,6 +6,7 @@ use App\Application\Access\AccessControl;
 use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\SshJobMcpToolHandlers;
 use App\Application\Operations\OperationalSettings;
+use App\Application\Targets\ConnectionRelayAdministration;
 use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshJobCoordinator;
@@ -16,6 +17,7 @@ use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Connectors\SshDirect\SshDialAddressPolicy;
 use App\Infrastructure\Connectors\SshDirect\SshRegisteredEndpoint;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
@@ -464,6 +466,171 @@ SH;
         self::assertCount(2, $discovered['result']['jobs']);
         DB::table('ssh_command_jobs')->whereIn('id', [$id, $activeId])->update(['expires_at' => now()->subMinute()]);
         self::assertSame(2, app(SshJobCoordinator::class)->prune());
+    }
+
+    public function test_real_relay_large_retained_job_recovers_without_relaunch(): void
+    {
+        // The existing ssh-fixture.sh owns independently pinned native
+        // OpenSSH control/Target daemons and the live loopback SOCKS listener.
+        // Only its deterministic loopback address policy is substituted.
+        self::assertSame(46251, (int) getenv('SSH_FIXTURE_RELAY_SOCKS_PORT'));
+        $account = (string) getenv('SSH_JOB_FIXTURE_USER');
+        self::assertMatchesRegularExpression('/^mcpfx[0-9]+$/D', $account);
+        $owner = User::query()->create([
+            'name' => 'Disposable retained Relay Job',
+            'email' => 'relay-job-'.bin2hex(random_bytes(5)).'@example.test',
+            'password' => 'CorrectHorse!234', 'role' => 'owner',
+            'target_scope_mode' => 'all', 'access_enabled' => true,
+        ]);
+        $relay = ConnectionRelay::query()->create([
+            'relay_id' => 'retained-job-relay', 'display_name' => 'Disposable native Relay',
+            'control_host' => 'fixture-relay.example.test',
+            'control_port' => (int) getenv('SSH_FIXTURE_RELAY_CONTROL_PORT'),
+            'control_user' => $account,
+            'control_host_key' => trim((string) file_get_contents((string) getenv('SSH_FIXTURE_REVERSE_CONTROL_HOST_PUB'))),
+            'local_socks_port' => (int) getenv('SSH_FIXTURE_RELAY_SOCKS_PORT'),
+        ]);
+        $relay->refresh();
+        $admin = app(ConnectionRelayAdministration::class);
+        self::assertTrue($admin->setEnabled($relay, $relay->lifecycle_revision, true));
+        $pin = trim((string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_HOST_KEY')));
+        self::assertNotSame($relay->control_host_key, $pin);
+        $register = static function (string $id, ?string $relayId) use ($account, $pin): Target {
+            $target = app(SshTargetRegistration::class)->register(
+                $id, 'Disposable retained Job fixture', 'fixture.example.test',
+                (int) getenv('SSH_JOB_FIXTURE_PORT'), $account, $pin,
+                'private_key', (string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_PRIVATE_KEY')),
+                getenv('SSH_JOB_FIXTURE_PASSPHRASE') ?: null,
+                connectionRelayId: $relayId,
+            );
+            app(SshTargetConnectionService::class)->test($target);
+
+            return $target->fresh();
+        };
+        $target = $register('relay-retained-job', $relay->relay_id);
+        $direct = $register('relay-job-direct-control', null);
+        self::assertSame(TargetConnectionState::Connected, $target->connection_state);
+        self::assertSame('relay', $target->transportKind());
+        self::assertSame($relay->id, $target->relay_record_id);
+        self::assertSame(TargetConnectionState::Connected, $direct->connection_state);
+        self::assertSame('direct', $direct->transportKind());
+
+        $settings = app(OperationalSettings::class);
+        $settings->save($owner, ['ssh_job_max_script_kib' => 512], $settings->state()['version']);
+        self::assertSame(524288, $settings->sshJobLimits()['max_script_bytes']);
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->sole();
+        $binding = SshTargetBinding::hash($target, $config);
+        $client = hash('sha256', 'relay-retained-job-fixture');
+        $request = (string) Str::uuid();
+        $effect = '/home/'.$account.'/relay-job-'.$request;
+        $tail = "\n".'set -eu; printf "once\\n" >> '.escapeshellarg($effect)
+            .'; printf relay-job-stdout; printf relay-job-stderr >&2; exit 0';
+        $script = '# '.str_repeat('x', 524288 - 2 - strlen($tail)).$tail;
+        $digest = hash('sha256', $script);
+        $jobs = app(SshJobMcpToolHandlers::class);
+        $commands = app(SshCommandMcpToolHandlers::class);
+        $started = $jobs->start($owner, $target->target_id, $client, $request, $script, 60);
+        self::assertTrue($started['ok'], json_encode($started));
+        self::assertTrue($started['result']['launch_admitted']);
+        $id = $started['result']['job_id'];
+        $row = static fn () => DB::table('ssh_command_jobs')->where('id', $id);
+        $directory = '/var/tmp/.mcp-gateway-job-'.$id;
+        self::assertSame($binding, $row()->value('target_binding_hash'));
+        self::assertSame(hash_hmac('sha256', $script, (string) config('app.key')), $row()->value('script_digest'));
+
+        $status = null;
+        for ($attempt = 0; $attempt < 30; $attempt++) {
+            $status = $jobs->status($owner, $target->target_id, $client, $id);
+            if (($status['result']['complete'] ?? false) === true) {
+                break;
+            }
+            sleep(1);
+        }
+        self::assertSame('completed', $status['result']['status'] ?? null, json_encode($status));
+        self::assertSame(0, $status['result']['exit_code'] ?? null);
+        self::assertSame('script_exit', $status['result']['terminal_reason'] ?? null);
+        $assertOutput = static function () use ($jobs, $owner, $target, $client, $id): void {
+            foreach (['stdout' => 'relay-job-stdout', 'stderr' => 'relay-job-stderr'] as $stream => $expected) {
+                $output = $jobs->output($owner, $target->target_id, $client, $id, $stream);
+                self::assertTrue($output['ok'], json_encode($output));
+                self::assertSame($expected, base64_decode($output['result']['data'], true));
+                self::assertTrue($output['result']['end_of_file']);
+                self::assertFalse($output['result']['truncated']);
+            }
+        };
+        $assertOutput();
+
+        // An independent direct control sees the complete actual script
+        // bytes and exactly one execution marker. The retained row alone
+        // would not prove either fact.
+        $verifyStored = static function () use ($commands, $owner, $direct, $directory, $effect, $digest): void {
+            $proof = $commands->run($owner, $direct->target_id,
+                'test "$(wc -c < '.escapeshellarg($directory.'/script.sh').')" -eq 524288'
+                .' && test "$(sha256sum -- '.escapeshellarg($directory.'/script.sh').' | cut -d " " -f 1)" = '.escapeshellarg($digest)
+                .' && cat -- '.escapeshellarg($effect));
+            self::assertTrue($proof['ok'], json_encode($proof));
+            self::assertSame(0, $proof['result']['exit_code']);
+            self::assertSame("once\n", $proof['result']['stdout']);
+        };
+        $verifyStored();
+        $history = (array) $row()->sole();
+        $ciphertext = TargetCredential::query()->where('target_record_id', $target->getKey())->sole()->encrypted_payload;
+
+        // The actual native SOCKS listener stays up. This isolates the
+        // administrative availability fence from a TCP failure. Direct
+        // remains available, but remote retained reads must not fall back.
+        self::assertTrue($admin->setEnabled($relay->fresh(), $relay->fresh()->lifecycle_revision, false));
+        try {
+            $target->refresh();
+            self::assertSame('relay', $target->transportKind());
+            self::assertSame($relay->id, $target->relay_record_id);
+            $local = $jobs->status($owner, $target->target_id, $client, $id);
+            self::assertTrue($local['ok']);
+            self::assertSame('completed', $local['result']['status']);
+            self::assertSame(0, $local['result']['exit_code']);
+            self::assertFalse($local['result']['remote_observed']);
+            $denied = $jobs->output($owner, $target->target_id, $client, $id);
+            self::assertFalse($denied['ok'], json_encode($denied));
+            self::assertSame('relay_unavailable', $denied['error']['code']);
+            $duplicate = $jobs->start($owner, $target->target_id, $client, $request, $script, 60);
+            self::assertTrue($duplicate['ok']);
+            self::assertSame($id, $duplicate['result']['job_id']);
+            self::assertSame($history, (array) $row()->sole());
+            $verifyStored();
+        } finally {
+            self::assertTrue($admin->setEnabled($relay->fresh(), $relay->fresh()->lifecycle_revision, true));
+        }
+        app(SshTargetConnectionService::class)->test($target->fresh());
+        $target->refresh();
+        self::assertSame('relay', $target->transportKind());
+        self::assertNotSame($binding, SshTargetBinding::hash($target, $config->fresh()));
+        self::assertSame($ciphertext, TargetCredential::query()->where('target_record_id', $target->getKey())->sole()->encrypted_payload);
+        $assertOutput();
+        $duplicate = $jobs->start($owner, $target->target_id, $client, $request, $script, 60);
+        self::assertTrue($duplicate['ok']);
+        self::assertSame($id, $duplicate['result']['job_id']);
+        self::assertSame(1, DB::table('ssh_command_jobs')->count());
+        self::assertSame($history, (array) $row()->sole());
+        $verifyStored();
+
+        // Expire only this completed disposable row; use actual product
+        // pruning over the current selected route and independently verify
+        // that neither the owned spool nor the test marker remains.
+        $row()->update(['expires_at' => now()->subMinute()]);
+        self::assertSame(1, app(SshJobCoordinator::class)->prune());
+        self::assertSame(0, $row()->count());
+        $cleanup = $commands->run($owner, $direct->target_id,
+            'test ! -e '.escapeshellarg($directory).' && rm -- '.escapeshellarg($effect)
+            .' && test ! -e '.escapeshellarg($effect));
+        self::assertTrue($cleanup['ok'], json_encode($cleanup));
+        self::assertSame(0, $cleanup['result']['exit_code']);
+        fwrite(STDOUT, 'PASS: retained native Relay Job '.json_encode([
+            'script_bytes' => strlen($script), 'script_sha256' => $digest,
+            'exit_code' => 0, 'stdout' => 'relay-job-stdout', 'stderr' => 'relay-job-stderr',
+            'exact_stored_script' => true, 'single_execution_marker' => true,
+            'disabled_remote_read' => 'relay_unavailable', 'direct_control_available' => true,
+            'same_job_after_restore' => true, 'immutable_history' => true, 'cleanup_confirmed' => true,
+        ], JSON_THROW_ON_ERROR)."\n");
     }
 
     public function test_retained_job_sftp_reads_recheck_command_scope_on_every_native_session(): void

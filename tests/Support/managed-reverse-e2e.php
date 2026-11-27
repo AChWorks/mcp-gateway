@@ -11,7 +11,9 @@ use App\Application\Batch\DeferredBatchAuthority;
 use App\Application\Batch\TargetBatchBinding;
 use App\Application\Batch\TargetBatchCoordinator;
 use App\Application\Batch\TargetBatchWorker;
+use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\SshJobMcpToolHandlers;
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshManagedReverseEnrollmentService;
@@ -194,6 +196,28 @@ try {
             throw new RuntimeException('Managed retained Job output mismatch.');
         }
         echo "PASS: newly enrolled managed Reverse SSH executes pinned, retained Job with durable completion and output.\n";
+
+        // The same 512 KiB workload as the installed Direct/Relay SDK
+        // qualification, here through the real enrolled managed Reverse
+        // listener and application MCP handler (not an external HTTP client).
+        require __DIR__.'/installed-mixed/ssh-capacity.php';
+        $settings = app(OperationalSettings::class);
+        $settings->save($owner, ['ssh_command_max_kib' => 512], $settings->state()['version']);
+        $evidence = qualifyStagedScript(
+            static fn (string $script, string $interpreter): array => app(SshCommandMcpToolHandlers::class)
+                ->runScript($owner, $target->target_id, $script, $interpreter),
+            static function (bool $passed, string $message): void {
+                if (! $passed) {
+                    throw new RuntimeException($message);
+                }
+            },
+        );
+        $target->refresh();
+        if ($target->transportKind() !== 'reverse'
+            || SshTargetBinding::hash($target, $config->fresh()) !== DB::table('ssh_command_jobs')->where('id', $id)->value('target_binding_hash')) {
+            throw new RuntimeException('Managed Reverse staged script changed the selected route or historical Job binding.');
+        }
+        echo 'PASS: managed Reverse staged capacity '.json_encode($evidence, JSON_THROW_ON_ERROR)."\n";
         exit(0);
     }
 

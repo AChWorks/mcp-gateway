@@ -59,6 +59,12 @@ php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
 php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
   --filter=test_client_initiated_reverse_route_retained_job_stays_bound_and_completes
 
+# The same native -D fixture proves a real 512 KiB retained Job,
+# durable history/output across administrative Relay availability changes,
+# same-request recovery without replay, and verified spool removal.
+php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
+  --filter=test_real_relay_large_retained_job_recovers_without_relaunch
+
 # Credential rotation must invalidate an already authenticated script SFTP
 # session, including both inline and streamed retained Job publication.
 php artisan test --compact tests/Feature/Mcp/SshJobFixtureTest.php \
