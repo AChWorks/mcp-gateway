@@ -9,8 +9,10 @@ use Mcp\Client\Transport\HttpTransport;
 $root = (string) getenv('MIXED_ROOT');
 require $root.'/gateway/vendor/autoload.php';
 $state = json_decode((string) file_get_contents($root.'/secrets/state.json'), true, 512, JSON_THROW_ON_ERROR);
+$longSeconds = (int) (getenv('MIXED_SSH_LONG_SECONDS') ?: 0);
+$longTimeout = (int) (getenv('MIXED_SSH_LONG_TIMEOUT') ?: 0);
 $httpExchanges = [];
-$http = new Http(['verify' => $root.'/secrets/tls.crt', 'proxy' => '', 'http_errors' => false, 'timeout' => 30,
+$http = new Http(['verify' => $root.'/secrets/tls.crt', 'proxy' => '', 'http_errors' => false, 'timeout' => $longTimeout > 0 ? $longTimeout + 30 : 30,
     'on_stats' => static function (TransferStats $stats) use (&$httpExchanges): void {
         $native = $stats->getHandlerStats();
         $httpExchanges[] = [
@@ -46,10 +48,10 @@ $check($status($state['disabled_profile_token']) === 401, 'Disabled client profi
 $check(($state['never_granted_mint_denied'] ?? false) === true, 'Never-granted OAuth client was not rejected during bearer issuance.');
 $timings = [];
 $wire = [];
-$call = static function (Client $c, string $name, array $args, string $label) use (&$timings, &$wire, &$httpExchanges): array {
+$call = static function (Client $c, string $name, array $args, string $label, ?float $timeout = null) use (&$timings, &$wire, &$httpExchanges): array {
     $before = count($httpExchanges);
     $start = hrtime(true);
-    $result = $c->callTool($name, $args);
+    $result = $c->callTool($name, $args, timeoutSeconds: $timeout);
     $timings[$label] = round((hrtime(true) - $start) / 1000000, 2);
     $wire[$label] = array_slice($httpExchanges, $before);
 
@@ -208,6 +210,46 @@ try {
     $ssh = $call($client, 'ssh-command-run', [
         'target_id' => $state['ssh_target'], 'command' => "printf 'installed-ssh-ok'"], 'ssh_command');
     $check(($ssh['result']['stdout'] ?? null) === 'installed-ssh-ok', 'Host-key verified SSH failed.');
+    // A configured input maximum is not a promise that a native SSH exec
+    // request fits the server packet limit or its login shell's argv limit.
+    // Use a harmless unique marker AFTER the padding; measure, never replay.
+    $commandInputs = [];
+    foreach ([65536, 131071, 131072, 524288] as $size) {
+        $marker = 'exec-input-'.$size;
+        $tail = "\nprintf '".$marker."'; exit 7";
+        $command = '# '.str_repeat('x', $size - 2 - strlen($tail)).$tail;
+        $reply = $call($client, 'ssh-command-run', [
+            'target_id' => $state['ssh_target'], 'command' => $command,
+        ], 'ssh_input_'.$size);
+        $result = $reply['result'] ?? [];
+        $exact = ($reply['ok'] ?? false) === true && ($result['status'] ?? null) === 'completed'
+            && ($result['stdout'] ?? null) === $marker && ($result['exit_code'] ?? null) === 7;
+        if ($size === 65536) {
+            $check($exact, '64 KiB positive native command-input control failed.');
+        }
+        if (($result['status'] ?? null) === 'outcome_unknown') {
+            $check(($reply['ok'] ?? true) === false && ($result['complete'] ?? true) === false
+                && array_key_exists('exit_code', $result) && $result['exit_code'] === null,
+                'Unknown native exec outcome must not invent completion or exit evidence.');
+        }
+        $commandInputs[] = [
+            'input_bytes' => strlen($command),
+            'exact_marker_and_exit' => $exact,
+            'ok' => $reply['ok'] ?? null,
+            'status' => $result['status'] ?? null,
+            'exit_code' => $result['exit_code'] ?? null,
+            'error_code' => $reply['error']['code'] ?? null,
+            'argument_list_too_long' => str_contains((string) ($result['stderr'] ?? ''), 'Argument list too long'),
+            'diagnostic_reference' => $reply['error']['diagnostic_reference'] ?? null,
+        ];
+    }
+    // This is a measured compatibility matrix, not a passing claim for
+    // unsupported sizes. Confirm the ordinary native path still works.
+    $afterInput = $call($client, 'ssh-command-run', [
+        'target_id' => $state['ssh_target'], 'command' => "printf 'after-input-probe'",
+    ], 'ssh_after_input_probe');
+    $check(($afterInput['result']['stdout'] ?? null) === 'after-input-probe'
+        && ($afterInput['result']['exit_code'] ?? null) === 0, 'Native command after input probe failed.');
     $bytes = random_bytes(524288);
     $file = '/home/'.getenv('MIXED_SSH_USER').'/mixed-'.bin2hex(random_bytes(8)).'.bin';
     try {
@@ -268,6 +310,29 @@ try {
     } finally {
         $operator->disconnect();
     }
+    $extended = null;
+    if ($longTimeout > 0) {
+        // Only an explicitly selected isolated qualification, never the
+        // routine PR lane. No client retry or implicit Job conversion.
+        $marker = 'long-exec-'.$longSeconds;
+        $long = $call($client, 'ssh-command-run', [
+            'target_id' => $state['ssh_target'],
+            'command' => 'sleep '.$longSeconds."; printf '".$marker."'; exit 7",
+            'timeout_seconds' => $longTimeout,
+        ], 'ssh_extended_'.$longSeconds, $longTimeout + 30);
+        $result = $long['result'] ?? [];
+        $check(($long['ok'] ?? false) === true && ($result['status'] ?? null) === 'completed'
+            && ($result['stdout'] ?? null) === $marker && ($result['exit_code'] ?? null) === 7
+            && ($result['complete'] ?? false) === true
+            && ($result['duration_ms'] ?? 0) >= $longSeconds * 1000
+            && $timings['ssh_extended_'.$longSeconds] >= $longSeconds * 1000,
+            'Extended native command did not return proven completion and duration.');
+        $extended = [
+            'requested_sleep_seconds' => $longSeconds, 'selected_timeout_seconds' => $longTimeout,
+            'exit_code' => 7, 'gateway_duration_ms' => $result['duration_ms'],
+            'client_duration_ms' => $timings['ssh_extended_'.$longSeconds],
+        ];
+    }
     echo json_encode([
         'outcome' => 'PASS',
         'transport' => 'standalone official PHP MCP SDK, real HTTPS network socket',
@@ -280,6 +345,8 @@ try {
         'released_bridge_unicode' => $bridgeText,
         'wp_same_grant_direct_routed_input' => $wpInput,
         'ssh_command_output_windows' => $streamEvidence,
+        'ssh_command_input_measurements' => $commandInputs,
+        'ssh_extended_duration' => $extended,
         'http_wire_measurements' => $wire,
         'client_peak_memory_bytes' => memory_get_peak_usage(true),
         'latency_ms' => $timings,

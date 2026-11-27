@@ -82,6 +82,7 @@ The runner accepts these environment overrides. Defaults are relative to the che
 | `MIXED_EVIDENCE_DIR` | Private evidence destination; defaults to sibling mcp-gateway-installed-evidence |
 | `MIXED_WORK_ROOT` | Existing temporary parent; defaults to TMPDIR or /tmp |
 | `MIXED_WORKER_USER` | Existing non-root fixture user; defaults to SUDO_USER or aiworker |
+| `MIXED_SSH_LONG_SECONDS` | Optional isolated long command test: 0 (default), 350 or 590 |
 
 Use byte-identical, pinned artifacts at an alternate trusted local path if
 the default path is unavailable. Unsupported versions or a changed archive
@@ -131,6 +132,12 @@ includes actual wire body sizes, SFTP byte size, digest, representative latency 
   byte and SHA-256 equality; denied path and cross-Target misuse.
 - Independently captured 512 KiB stdout and stderr through real HTTPS MCP,
   truthful truncation when stdout exceeds its window by one byte, and exit 7.
+- Measure native SSH exec input at 64 KiB, 131071, 131072 and 512 KiB, with
+  the exact output marker after the padding and authentic exit 7. The 64 KiB
+  control must pass; larger results are **observations**, not a declaration
+  that the selected host supports the configured maximum. A possibly
+  dispatched command is never replayed to recover a missing result.
+  Confirm a fresh ordinary command still works after the measurement.
 - Preserve the separate PHP and Python whole-file transfer proofs.
 - Default deny, signed user/Target isolation and ungranted client-profile
   rejection; a previously valid bearer must be rejected after user disable.
@@ -139,7 +146,7 @@ includes actual wire body sizes, SFTP byte size, digest, representative latency 
 
 ## Boundaries and review gate
 
-The isolated clients can prove that **their own** authenticated inbound/outbound SSH file bytes are complete; they cannot prove full external OAuth client enrollment, every reverse-proxy/DNS topology, arbitrary third-party host compatibility, WordPress-native raw binary transfer or actual ChatGPT model-file ingestion. The near-1 MiB native read-only Ability is not a proof for every mutating Ability, arbitrary request encoding, SSH maximum command input or detached Job script size. Host proxy limits, near-maximum durations, concurrency and actual external client capacity require separate evidence. Use distinct real-host acceptance for those properties.
+The isolated clients can prove that **their own** authenticated inbound/outbound SSH file bytes are complete; they cannot prove full external OAuth client enrollment, every reverse-proxy/DNS topology, arbitrary third-party host compatibility, WordPress-native raw binary transfer or actual ChatGPT model-file ingestion. The near-1 MiB native read-only Ability is not a proof for every mutating Ability, arbitrary request encoding, SSH maximum command input or detached Job script size. The optional manual workflow dispatch with `extended=true` runs the same fixture on two separate disposable runners, additionally testing a real 350-second command with a 360-second selected timeout and a 590-second command with a 600-second selected timeout. The CLI HTTP worker and SDK deadlines are deliberately sized for this experiment; no production setting changes. Require the exact output marker, exit 7, complete result and measured duration. Host proxy limits, maximum concurrency and actual external client capacity require separate evidence. Use distinct real-host acceptance for those properties.
 
 The Gateway source `VERSION` and public release tags must be reported
 separately from installed identities; passing tests is not deployment.

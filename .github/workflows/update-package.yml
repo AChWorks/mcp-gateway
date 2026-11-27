@@ -65,7 +65,7 @@ jobs:
   upgrade-from-released-baselines:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    # Run all three supported published stable sources for browser update and
+    # Run every checked same-major published stable source (up to three) for browser update and
     # corruption-safe backup recovery; older releases are unsupported.
     timeout-minutes: 12
 

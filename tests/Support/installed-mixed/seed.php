@@ -94,7 +94,9 @@ if ($mode === 'init') {
 
     // Exercise the real Owner-configurable DB settings, not just .env defaults.
     $settings = app(OperationalSettings::class);
+    $longTimeout = (int) (getenv('MIXED_SSH_LONG_TIMEOUT') ?: 0);
     $settings->save($owner, [
+        ...($longTimeout === 0 ? [] : ['ssh_command_timeout_seconds' => $longTimeout]),
         'wp_response_kib' => 96,
         'wp_readonly_response_kib' => 512,
         'wp_connect_timeout_seconds' => 3,

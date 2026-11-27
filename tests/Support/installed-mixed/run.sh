@@ -16,6 +16,19 @@ if ! worker_uid="$(id -u "$WORKER" 2>/dev/null)" || [[ "$worker_uid" -eq 0 ]]; t
 fi
 WORKER_GROUP="$(id -gn "$WORKER")"
 export MIXED_WORKER_USER="$WORKER"
+MIXED_SSH_LONG_SECONDS="${MIXED_SSH_LONG_SECONDS:-0}"
+case "$MIXED_SSH_LONG_SECONDS" in
+  0) MIXED_SSH_LONG_TIMEOUT=0 ;;
+  350|590) MIXED_SSH_LONG_TIMEOUT=$((MIXED_SSH_LONG_SECONDS + 10)) ;;
+  *) echo 'Invalid extended qualification duration (0, 350 or 590 seconds).' >&2; exit 2 ;;
+esac
+export MIXED_SSH_LONG_SECONDS MIXED_SSH_LONG_TIMEOUT
+MIXED_PHP_EXEC_SECONDS=default
+gateway_php_options=()
+if (( MIXED_SSH_LONG_TIMEOUT > 0 )); then
+  MIXED_PHP_EXEC_SECONDS=$((MIXED_SSH_LONG_TIMEOUT + 60))
+  gateway_php_options=(-d "max_execution_time=$MIXED_PHP_EXEC_SECONDS")
+fi
 
 # Pinned artifacts are explicitly sourced from upstream release distributions,
 # not mutable directories of an already installed WordPress site.
@@ -50,7 +63,7 @@ if [[ "${1:-}" == inside ]]; then
     -d openssl.cafile="$ROOT/secrets/tls.crt" -S 127.0.0.1:53801 \
     -t "$ROOT/wp" "$ROOT/wp/router.php" >"$ROOT/logs/wp-http.log" 2>&1 &
   local_pids+=("$!")
-  runuser -u "$WORKER" -- env PHP_CLI_SERVER_WORKERS=3 php -d curl.cainfo="$ROOT/secrets/tls.crt" \
+  runuser -u "$WORKER" -- env PHP_CLI_SERVER_WORKERS=3 php "${gateway_php_options[@]}" -d curl.cainfo="$ROOT/secrets/tls.crt" \
     -d openssl.cafile="$ROOT/secrets/tls.crt" -S 127.0.0.1:53802 \
     -t "$ROOT/gateway/public" "$ROOT/gateway/public/index.php" >"$ROOT/logs/gateway-http.log" 2>&1 &
   local_pids+=("$!")
@@ -97,7 +110,8 @@ if [[ "${1:-}" == inside ]]; then
   cd "$ROOT/gateway"
   runuser -u "$WORKER" -- php -d curl.cainfo="$ROOT/secrets/tls.crt" \
     -d openssl.cafile="$ROOT/secrets/tls.crt" tests/Support/installed-mixed/probe.php
-  runuser -u "$WORKER" -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" MIXED_SSH_USER="$MIXED_SSH_USER" \
+  runuser -u "$WORKER" -- env MIXED_SSH_LONG_TIMEOUT="$MIXED_SSH_LONG_TIMEOUT" \
+    MIXED_STATE_FILE="$ROOT/secrets/state.json" MIXED_SSH_USER="$MIXED_SSH_USER" \
     MIXED_SSH_HOST_PUB="$ROOT/secrets/ssh_host.pin" MIXED_SSH_PASSWORD_FILE="$ROOT/secrets/ssh-password" \
     php -d curl.cainfo="$ROOT/secrets/tls.crt" -d openssl.cafile="$ROOT/secrets/tls.crt" \
     tests/Support/installed-mixed/seed.php init
@@ -112,6 +126,7 @@ if [[ "${1:-}" == inside ]]; then
   runuser -u "$WORKER" -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" \
     php tests/Support/installed-mixed/seed.php report >"$MIXED_EVIDENCE/report.json"
   runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
+    MIXED_SSH_LONG_SECONDS="$MIXED_SSH_LONG_SECONDS" MIXED_SSH_LONG_TIMEOUT="$MIXED_SSH_LONG_TIMEOUT" \
     php "$ROOT/client/client.php" positive >"$MIXED_EVIDENCE/client.json"
   runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
     php "$ROOT/client/file-client.php" >"$MIXED_EVIDENCE/file-client.json"
@@ -446,6 +461,8 @@ echo "PASS installed fresh WordPress 6.9, WP AI Bridge, MCP Adapter, private Mar
   printf 'source_export=git_archive_exact_head\n'
   printf 'runtime_state_imported=no\n'
   printf 'vendor_identity=committed_composer_lock_fresh_install\n'
+  printf 'gateway_php_exec_limit_seconds=%s\n' "$MIXED_PHP_EXEC_SECONDS"
+  printf 'extended_command_sleep_seconds=%s\n' "$MIXED_SSH_LONG_SECONDS"
   printf 'php_version=%s\n' "$(php -r 'echo PHP_VERSION;')"
   printf 'mariadb_version=%s\n' "$(mariadbd --version | head -1)"
   printf 'installed_identity=source-copy-plus-ephemeral-client-provider-only\n'

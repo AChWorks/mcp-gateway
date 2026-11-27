@@ -12,6 +12,11 @@ on:
       - 'tests/Support/installed-mixed/**'
       - '.github/workflows/installed-mixed-acceptance.yml'
   workflow_dispatch:
+    inputs:
+      extended:
+        description: 'Also qualify actual 350s and 590s commands on separate isolated runners'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,7 +29,11 @@ jobs:
   installed-mixed:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        long_seconds: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.extended && '[350,590]' || '[0]') }}
+    timeout-minutes: 15
     steps:
       - name: Check out exact candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -59,6 +68,7 @@ jobs:
       - name: Prove installed HTTPS OAuth, MCP and native SSH
         run: |
           sudo env PATH="$PATH" MIXED_WORKER_USER=mixedfixture \
+            MIXED_SSH_LONG_SECONDS="${{ matrix.long_seconds }}" \
             MIXED_INPUT_DIR="$RUNNER_TEMP/mixed-inputs" \
             MIXED_EVIDENCE_DIR="$RUNNER_TEMP/mixed-evidence" \
             bash tests/Support/installed-mixed/run.sh
