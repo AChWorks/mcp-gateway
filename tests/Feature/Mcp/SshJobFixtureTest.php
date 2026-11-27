@@ -490,6 +490,7 @@ SH;
             'control_host_key' => trim((string) file_get_contents((string) getenv('SSH_FIXTURE_REVERSE_CONTROL_HOST_PUB'))),
             'local_socks_port' => (int) getenv('SSH_FIXTURE_RELAY_SOCKS_PORT'),
         ]);
+        $relay->refresh();
         $admin = app(ConnectionRelayAdministration::class);
         self::assertTrue($admin->setEnabled($relay, $relay->lifecycle_revision, true));
         $pin = trim((string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_HOST_KEY')));
