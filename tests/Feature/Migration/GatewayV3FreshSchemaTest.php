@@ -44,6 +44,23 @@ final class GatewayV3FreshSchemaTest extends TestCase
         self::assertSame(46, count(Schema::getTables()) - 1);
     }
 
+    public function test_target_check_evidence_has_native_unique_identity_and_cascades_on_target_deletion(): void
+    {
+        $target = Target::query()->create([
+            'target_id' => 'cascade-check', 'display_name' => 'Cascade check', 'connector_type' => 'ssh_direct',
+            'connection_state' => 'connected',
+        ]);
+        self::assertTrue(Schema::hasIndex('target_check_evidence', ['target_record_id', 'kind'], 'primary'));
+        self::assertTrue(collect(Schema::getForeignKeys('target_check_evidence'))->contains(
+            static fn (array $key): bool => $key['columns'] === ['target_record_id']
+                && $key['foreign_table'] === 'targets' && $key['foreign_columns'] === ['id']
+                && $key['on_delete'] === 'cascade',
+        ));
+        DB::table('target_check_evidence')->insert(['target_record_id' => $target->getKey(), 'kind' => 'ssh_login']);
+        DB::table('targets')->where('id', $target->getKey())->delete();
+        self::assertFalse(DB::table('target_check_evidence')->where('target_record_id', $target->getKey())->exists());
+    }
+
     public function test_check_evidence_backfill_keeps_only_attributable_observations_current_and_is_restart_safe(): void
     {
         $early = '2026-10-01 10:00:00.000000';

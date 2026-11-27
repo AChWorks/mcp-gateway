@@ -6,6 +6,7 @@ use App\Application\Access\AccessControl;
 use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\SshFileMcpToolHandlers;
 use App\Application\Mcp\TargetFileInputMcpToolHandlers;
+use App\Application\Operations\OperationalSettings;
 use App\Application\Targets\SshCommandRuntime;
 use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshTargetConnectionException;
@@ -309,7 +310,7 @@ final class SshFileFixtureTest extends TestCase
         }
         $target = $this->target('password');
         // Keep independent access to endpoint A after the tested Target moves.
-        $proofTarget = $this->target('private_key');
+        $proofTarget = $this->target('private_key', encrypted: false);
         $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->firstOrFail();
         $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->firstOrFail();
         $binding = SshTargetBinding::hash($target, $config);
@@ -565,6 +566,34 @@ final class SshFileFixtureTest extends TestCase
         self::assertSame('command-still-works', $command['result']['stdout']);
     }
 
+    public function test_owner_512_kib_inline_windows_roundtrip_real_binary_without_truncation(): void
+    {
+        $owner = $this->owner();
+        $target = $this->target('password');
+        DB::table('operational_settings')->where('id', 1)->update([
+            'ssh_file_read_window_kib' => 512,
+            'ssh_file_write_window_kib' => 512,
+        ]);
+        $this->app->forgetInstance(OperationalSettings::class);
+        $tools = app(SshFileMcpToolHandlers::class);
+        $path = $this->home().'/window-'.bin2hex(random_bytes(6)).'.bin';
+        $bytes = random_bytes(524288);
+
+        $write = $tools->write($owner, $target->target_id, $path, base64_encode($bytes));
+        self::assertTrue($write['ok'], json_encode($write));
+        self::assertSame(524288, $write['result']['bytes_written']);
+        self::assertSame('remote_readback_sha256', $write['result']['integrity_check']);
+        $read = $tools->read($owner, $target->target_id, $path, 0, 524288);
+        self::assertTrue($read['ok'], $read['error']['code'] ?? '');
+        self::assertSame(524288, $read['result']['length']);
+        self::assertSame($bytes, base64_decode($read['result']['data'], true));
+        self::assertTrue($read['result']['end_of_file']);
+        self::assertSame('invalid_input',
+            $tools->read($owner, $target->target_id, $path, 0, 524289)['error']['code']);
+        self::assertSame('invalid_input',
+            $tools->write($owner, $target->target_id, $path, base64_encode($bytes.'x'), true)['error']['code']);
+    }
+
     public function test_streamed_binary_transfer_is_larger_than_inline_limit_and_verified_end_to_end(): void
     {
         $owner = $this->owner();
@@ -774,7 +803,7 @@ final class SshFileFixtureTest extends TestCase
     public function test_streamed_download_limits_and_hash_mismatch_are_not_silent_success(): void
     {
         $owner = $this->owner();
-        $target = $this->target('private_key');
+        $target = $this->target('private_key', encrypted: false);
         $runtime = app(SshFileRuntime::class);
         $path = $this->home().'/stream-download-'.bin2hex(random_bytes(6)).'.bin';
         $bytes = random_bytes(25000);
@@ -1313,11 +1342,11 @@ final class SshFileFixtureTest extends TestCase
         return $result;
     }
 
-    private function target(string $method, ?int $port = null): Target
+    private function target(string $method, ?int $port = null, bool $encrypted = true): Target
     {
         $secret = $method === 'password'
             ? $this->env('SSH_FIXTURE_PASSWORD')
-            : (string) file_get_contents($this->env('SSH_FIXTURE_RSA_LOGIN_KEY'));
+            : (string) file_get_contents($this->env($encrypted ? 'SSH_FIXTURE_RSA_LOGIN_KEY' : 'SSH_FIXTURE_RSA_LOGIN_KEY_PLAIN'));
 
         $target = app(SshTargetRegistration::class)->register(
             'ssh-sftp-'.str_replace('_', '-', $method).($port !== null ? '-no-subsystem' : ''),
@@ -1325,7 +1354,7 @@ final class SshFileFixtureTest extends TestCase
             $port ?? (int) $this->env('SSH_FIXTURE_PORT_MODERN'),
             $this->env('SSH_FIXTURE_USER'),
             trim((string) file_get_contents($this->env('SSH_FIXTURE_ED25519_HOST_PUB'))),
-            $method, $secret, $method === 'password' ? null : $this->env('SSH_FIXTURE_KEY_PASSPHRASE'),
+            $method, $secret, $method === 'password' || ! $encrypted ? null : $this->env('SSH_FIXTURE_KEY_PASSPHRASE'),
         );
         // These transport fixtures exercise the command/SFTP data plane.
         // A verified connection is a required test precondition; the real
