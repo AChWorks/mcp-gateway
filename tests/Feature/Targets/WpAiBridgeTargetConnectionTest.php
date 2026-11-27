@@ -668,7 +668,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $before = DB::table('wp_ai_bridge_oauth_flows')->first();
         $requestCount = Http::recorded()->count();
 
-        $this->withOAuthPreparationFailure($failure, function (callable $breakPreparation) use ($args, $reason): void {
+        $this->withOAuthPreparationFailure($failure, function (callable $breakPreparation) use ($args, $reason, $failure): void {
             $service = app(WpAiBridgeTargetConnectionService::class);
             $breakPreparation();
             try {
@@ -676,6 +676,10 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
                 self::fail('Local preparation failure must be a typed, recoverable callback failure.');
             } catch (WpAiBridgeTargetConnectionException $exception) {
                 self::assertSame($reason, $exception->reason);
+                self::assertTrue($exception->diagnostics['pre_dispatch'] ?? false);
+                if ($failure === 'dns') {
+                    self::assertMixedDnsDiagnostic($exception->diagnostics);
+                }
             }
         });
 
@@ -705,10 +709,22 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         self::assertSame(0, DB::table('wp_ai_bridge_oauth_flows')->count());
     }
 
-    public function test_callback_signing_failure_uses_safe_existing_diagnostic_and_exact_retry(): void
+    /** @return array<string,array{string,string,bool}> */
+    public static function callbackPreparationDiagnostics(): array
+    {
+        return [
+            'signed-in signing failure' => ['missing', 'client_assertion_unavailable', true],
+            'guest mixed DNS failure' => ['dns', 'unsafe_target', false],
+        ];
+    }
+
+    #[DataProvider('callbackPreparationDiagnostics')]
+    public function test_callback_preparation_failure_uses_safe_existing_diagnostic_and_exact_retry(string $failure, string $reason, bool $signedIn): void
     {
         $target = $this->target('alpha');
-        $this->actingAs($this->user('owner', 'all'));
+        if ($signedIn) {
+            $this->actingAs($this->user('owner', 'all'));
+        }
         $url = app(WpAiBridgeTargetConnectionService::class)->begin($target);
         parse_str((string) parse_url($url, PHP_URL_QUERY), $args);
         $callback = '/oauth/targets/callback?'.http_build_query([
@@ -719,25 +735,39 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $requestCount = Http::recorded()->count();
         Log::spy();
 
-        $this->withOAuthPreparationFailure('missing', function (callable $breakPreparation) use ($callback, $args): void {
+        $this->withOAuthPreparationFailure($failure, function (callable $breakPreparation) use ($callback, $args, $failure, $reason, $target): void {
             $breakPreparation();
-            $this->get($callback)->assertAdminRedirect('/admin/targets')
+            $response = $this->get($callback)->assertAdminRedirect('/admin/targets')
                 ->assertSessionHas('target_connection_failed', true)
-                ->assertSessionHas('diagnostic_code', 'client_assertion_unavailable');
+                ->assertSessionHas('diagnostic_code', $reason)
+                ->assertSessionMissing('diagnostic_context')
+                ->assertSessionMissing('diagnostic_stage');
             $reference = (string) session('diagnostic_reference');
             self::assertTrue(Str::isUuid($reference));
+            $response->assertHeader('X-Correlation-ID', $reference);
             $keyPath = (string) config('bridge.keys.private');
             Log::shouldHaveReceived('warning')->once()->withArgs(
-                static function (string $message, array $context) use ($reference, $args, $keyPath): bool {
+                static function (string $message, array $context) use ($reference, $args, $keyPath, $failure, $reason, $target): bool {
                     $serialized = json_encode($context, JSON_THROW_ON_ERROR);
 
                     return $message === 'Gateway operation failure.'
                         && ($context['operation'] ?? null) === 'wordpress-oauth-callback'
-                        && ($context['error_code'] ?? null) === 'client_assertion_unavailable'
+                        && ($context['error_code'] ?? null) === $reason
                         && ($context['correlation_id'] ?? null) === $reference
+                        && ($context['request_not_sent'] ?? null) === true
+                        && ($context['failure_origin'] ?? null) === 'gateway_admission'
+                        && ($context['failure_stage'] ?? null) === ($failure === 'dns' ? 'dns_lookup' : 'admission')
+                        && ($context['outbound_rejection_reason'] ?? null) === ($failure === 'dns' ? 'dns_non_public' : null)
+                        && ($context['target_id'] ?? null) === null
+                        && ($context['connector_type'] ?? null) === null
+                        && ! array_key_exists('outbound_rejected_address', $context)
+                        && ! array_key_exists('gateway_error_message', $context)
                         && ! str_contains($serialized, $args['state'])
                         && ! str_contains($serialized, 'private-fixture-authorization-code')
-                        && ! str_contains($serialized, $keyPath);
+                        && ! str_contains($serialized, $keyPath)
+                        && ! str_contains($serialized, '10.0.0.8')
+                        && ! str_contains($serialized, 'alpha.example.test')
+                        && ! str_contains($serialized, (string) $target->getKey());
                 },
             );
         });
@@ -1418,13 +1448,22 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             self::fail('Private DNS must be rejected before the token exchange.');
         } catch (WpAiBridgeTargetConnectionException $exception) {
             self::assertSame('refresh_unavailable', $exception->reason);
+            self::assertMixedDnsDiagnostic($exception->diagnostics);
         }
 
         self::assertSame(0, $this->refreshCalls);
         self::assertSame(0, $this->refreshHandledByBridge);
-        Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'WordPress OAuth refresh failed before dispatch.'
-            && ($context['cause_code'] ?? null) === 'unsafe_target'
-        )->once();
+        Log::shouldHaveReceived('warning')->withArgs(static function (string $message, array $context): bool {
+            if ($message !== 'WordPress OAuth refresh failed before dispatch.' || ($context['cause_code'] ?? null) !== 'unsafe_target') {
+                return false;
+            }
+            self::assertMixedDnsDiagnostic($context);
+            self::assertTrue(Str::isUuid($context['correlation_id'] ?? ''));
+            self::assertTrue($context['request_not_sent']);
+            self::assertFalse($context['recovery_attempt']);
+
+            return true;
+        })->once();
         $this->assertDeferredFirstRefreshIsUnconsumed($target, $before['refresh_token']);
 
         $dns->reject = false;
@@ -1536,12 +1575,14 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $recordId = (string) $target->getKey();
         Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'WordPress OAuth refresh failed before dispatch.'
             && array_keys($context) === [
-                'target_record_id', 'cause_code', 'failure_stage',
-                'request_not_sent', 'recovery_attempt',
+                'failure_origin', 'failure_stage', 'correlation_id',
+                'target_record_id', 'cause_code', 'request_not_sent', 'recovery_attempt',
             ]
+            && Str::isUuid($context['correlation_id'] ?? '')
             && ($context['target_record_id'] ?? null) === $recordId
             && ($context['cause_code'] ?? null) === 'client_assertion_unavailable'
-            && ($context['failure_stage'] ?? null) === 'unspecified'
+            && ($context['failure_origin'] ?? null) === 'gateway_admission'
+            && ($context['failure_stage'] ?? null) === 'admission'
             && ($context['request_not_sent'] ?? null) === true
         )->once();
 
@@ -1613,12 +1654,14 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $recordId = (string) $target->getKey();
         Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'WordPress OAuth refresh transport outcome ambiguous.'
             && array_keys($context) === [
-                'target_record_id', 'cause_code', 'failure_stage',
-                'request_not_sent', 'recovery_attempt',
+                'failure_origin', 'failure_stage', 'correlation_id',
+                'target_record_id', 'cause_code', 'request_not_sent', 'recovery_attempt',
             ]
+            && Str::isUuid($context['correlation_id'] ?? '')
             && ($context['target_record_id'] ?? null) === $recordId
             && ($context['cause_code'] ?? null) === 'client_assertion_unavailable'
-            && ($context['failure_stage'] ?? null) === 'unspecified'
+            && ($context['failure_origin'] ?? null) === 'gateway_admission'
+            && ($context['failure_stage'] ?? null) === 'admission'
             && ($context['request_not_sent'] ?? null) === true
         )->once();
 
@@ -1652,12 +1695,27 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $dns = $this->installSwitchablePrivateDnsFixture();
         $dns->reject = true;
         $recover = app(WpAiBridgeTargetConnectionService::class);
+        Log::spy();
         try {
             $recover->accessToken($target);
             self::fail('A blocked second attempt cannot clear the unknown first rotation.');
         } catch (WpAiBridgeTargetConnectionException $exception) {
             self::assertSame('refresh_ambiguous', $exception->reason);
+            self::assertMixedDnsDiagnostic($exception->diagnostics);
+            self::assertArrayNotHasKey('request_not_sent', $exception->diagnostics);
+            self::assertArrayNotHasKey('retry_safe', $exception->diagnostics);
         }
+        Log::shouldHaveReceived('warning')->withArgs(static function (string $message, array $context): bool {
+            if ($message !== 'WordPress OAuth refresh transport outcome ambiguous.' || ($context['cause_code'] ?? null) !== 'unsafe_target') {
+                return false;
+            }
+            self::assertMixedDnsDiagnostic($context);
+            self::assertTrue(Str::isUuid($context['correlation_id'] ?? ''));
+            self::assertTrue($context['request_not_sent'], 'Only the current recovery request was not sent.');
+            self::assertTrue($context['recovery_attempt']);
+
+            return true;
+        })->once();
 
         self::assertSame(1, $this->refreshCalls);
         self::assertSame(2, (int) DB::table('wp_ai_bridge_refresh_intents')->value('attempts'));
@@ -3015,6 +3073,21 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
             ->update(['refresh_due_at' => now()->subSecond()]);
     }
 
+    /** @param array<string,mixed> $context */
+    private static function assertMixedDnsDiagnostic(array $context): void
+    {
+        self::assertSame('gateway_admission', $context['failure_origin'] ?? null);
+        self::assertSame('dns_lookup', $context['failure_stage'] ?? null);
+        self::assertSame('dns_non_public', $context['outbound_rejection_reason'] ?? null);
+        self::assertSame('10.0.0.8', $context['outbound_rejected_address'] ?? null);
+        self::assertSame('private', $context['outbound_address_class'] ?? null);
+        self::assertSame('dns', $context['outbound_address_source'] ?? null);
+        $serialized = json_encode($context, JSON_THROW_ON_ERROR);
+        foreach (['alpha-refresh', 'alpha-access', 'alpha-code', 'client_assertion', 'code_verifier', 'PRIVATE KEY'] as $secret) {
+            self::assertStringNotContainsString($secret, $serialized);
+        }
+    }
+
     private function installSwitchablePrivateDnsFixture(): DnsResolver
     {
         $dns = new class implements DnsResolver
@@ -3099,7 +3172,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $credentialId = $this->credential($target)->getKey();
         $requestCount = Http::recorded()->count();
 
-        $this->withOAuthPreparationFailure($failure, function (callable $breakPreparation) use ($target, $confirmed, $reason): void {
+        $this->withOAuthPreparationFailure($failure, function (callable $breakPreparation) use ($target, $confirmed, $reason, $failure): void {
             $service = app(WpAiBridgeTargetConnectionService::class);
             if ($confirmed === 0) {
                 $breakPreparation();
@@ -3110,13 +3183,41 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
                     $breakPreparation();
                 };
             }
-            try {
-                $service->disconnect($target);
-                self::fail('Local preparation failure must preserve revocation progress.');
-            } catch (WpAiBridgeTargetConnectionException $exception) {
-                self::assertSame($reason, $exception->reason);
-                self::assertTrue($exception->diagnostics['pre_dispatch']);
-                self::assertTrue($exception->diagnostics['retry_safe']);
+            if ($failure === 'dns') {
+                $this->actingAs($this->user('owner', 'all'));
+                Log::spy();
+                $result = $this->post('/admin/targets/alpha/disconnect')
+                    ->assertAdminRedirect('/admin/targets/alpha')
+                    ->assertSessionHasErrors('target')
+                    ->assertSessionHas('diagnostic_code', $reason)
+                    ->assertSessionHas('diagnostic_stage', 'dns_lookup');
+                $context = session('diagnostic_context');
+                self::assertMixedDnsDiagnostic($context);
+                self::assertTrue($context['request_not_sent']);
+                self::assertTrue($context['retry_safe']);
+                $reference = (string) session('diagnostic_reference');
+                self::assertTrue(Str::isUuid($reference));
+                $result->assertHeader('X-Correlation-ID', $reference);
+                Log::shouldHaveReceived('warning')->once()->withArgs(static function (string $message, array $context) use ($reference): bool {
+                    if ($message !== 'Gateway operation failure.' || ($context['correlation_id'] ?? null) !== $reference
+                        || ($context['operation'] ?? null) !== 'target-disconnect' || ($context['error_code'] ?? null) !== 'unsafe_target') {
+                        return false;
+                    }
+                    self::assertMixedDnsDiagnostic($context);
+                    self::assertTrue($context['request_not_sent']);
+                    self::assertTrue($context['retry_safe']);
+
+                    return true;
+                });
+            } else {
+                try {
+                    $service->disconnect($target);
+                    self::fail('Local preparation failure must preserve revocation progress.');
+                } catch (WpAiBridgeTargetConnectionException $exception) {
+                    self::assertSame($reason, $exception->reason);
+                    self::assertTrue($exception->diagnostics['pre_dispatch']);
+                    self::assertTrue($exception->diagnostics['retry_safe']);
+                }
             }
         });
 

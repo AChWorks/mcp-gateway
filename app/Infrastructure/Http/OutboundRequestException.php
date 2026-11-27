@@ -7,9 +7,9 @@ use RuntimeException;
 final class OutboundRequestException extends RuntimeException
 {
     /**
-     * Only bounded, safe machine metadata. Never include a rejected response body or secrets.
+     * Only bounded, safe machine metadata, including structured outbound-policy evidence. Never include a rejected response body or secrets.
      *
-     * @param  array{limit_bytes?:int,observed_bytes?:int,phase?:string,failure_stage?:string,http_status?:int}  $details
+     * @param  array<string,mixed>  $details
      */
     public function __construct(
         public readonly string $reason,

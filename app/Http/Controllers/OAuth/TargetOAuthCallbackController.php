@@ -29,9 +29,13 @@ final class TargetOAuthCallbackController extends Controller
             return redirect()->route('admin.targets.show', ['target' => $target->target_id])
                 ->with('status', __('WordPress Target authorization completed.'));
         } catch (WpAiBridgeTargetConnectionException $exception) {
-            // A callback Target is untrusted until state verification. Never
-            // log or echo inbound OAuth query, state, code or authorization data.
-            $reference = OperationDiagnostics::failure('wordpress-oauth-callback', $exception->reason);
+            // Public callback diagnostics retain the safe classification only,
+            // never Target identity, rejected addresses, URLs or authorization data.
+            $reference = OperationDiagnostics::failure('wordpress-oauth-callback', $exception->reason,
+                details: array_intersect_key($exception->diagnostics, array_flip([
+                    'failure_origin', 'failure_stage', 'outbound_rejection_reason',
+                    'pre_dispatch', 'request_not_sent',
+                ])));
 
             return redirect()->route('admin.targets.index')
                 ->with('target_connection_failed', true)

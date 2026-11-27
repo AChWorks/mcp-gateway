@@ -18,6 +18,7 @@ use App\Infrastructure\Http\SafeHttpResponse;
 use App\Infrastructure\Http\UnsafeOutboundTarget;
 use App\Infrastructure\OAuth\GatewayBridgeClientIdentity;
 use App\Support\CorrelationId;
+use App\Support\OperationDiagnostics;
 use Closure;
 use DateTimeImmutable;
 use Exception;
@@ -246,7 +247,10 @@ final readonly class WpAiBridgeTargetConnectionService
             $token = $this->parseToken($response->json());
         } catch (OutboundRequestException $exception) {
             $this->failClaim($recordId, $stateHash, $exception->reason, $exception->preDispatch);
-            throw new WpAiBridgeTargetConnectionException($exception->reason, 'WP AI Bridge token exchange could not complete safely.');
+            throw new WpAiBridgeTargetConnectionException($exception->reason, 'WP AI Bridge token exchange could not complete safely.', [
+                ...$exception->details,
+                'pre_dispatch' => $exception->preDispatch,
+            ]);
         } catch (WpAiBridgeTargetConnectionException $exception) {
             $this->failClaim($recordId, $stateHash, $exception->reason);
             throw $exception;
@@ -736,18 +740,16 @@ final readonly class WpAiBridgeTargetConnectionService
                 }
             });
         } catch (OutboundRequestException $exception) {
-            // Keep only the classified transport stage, never cURL messages,
-            // request URLs, rotating tokens, assertions or response bodies.
-            $stage = $exception->details['failure_stage'] ?? null;
-            $stage = in_array($stage, [
-                'dns_lookup', 'dns_timeout', 'deadline_before_dispatch',
-                'connection_setup', 'tcp_connect', 'tls_handshake',
-                'request_timeout', 'response_transfer', 'response_body',
-            ], true) ? $stage : 'unspecified';
+            // Preserve the canonical safe cause. Dispatch certainty here is
+            // about this attempt only, not the outcome of a prior rotation.
+            $diagnostics = OperationDiagnostics::safeContext($exception->details);
+            unset($diagnostics['request_not_sent'], $diagnostics['retry_safe'], $diagnostics['effect_unconfirmed']);
             $failureContext = [
+                ...$diagnostics,
+                'correlation_id' => CorrelationId::current(),
                 'target_record_id' => $recordId,
                 'cause_code' => $exception->reason,
-                'failure_stage' => $stage,
+                'failure_stage' => $diagnostics['failure_stage'] ?? 'unspecified',
                 'request_not_sent' => $exception->preDispatch,
                 'recovery_attempt' => $plan['is_recovery'],
             ];
@@ -764,16 +766,16 @@ final readonly class WpAiBridgeTargetConnectionService
                 }
                 Log::warning('WordPress OAuth refresh failed before dispatch.', $failureContext);
                 throw new WpAiBridgeTargetConnectionException('refresh_unavailable',
-                    'WordPress refresh request was not dispatched; retry after bounded backoff.');
+                    'WordPress refresh request was not dispatched; retry after bounded backoff.', $diagnostics);
             }
 
-            // Retain only the safe failure classification, never remote
-            // response bodies, OAuth requests, tokens or client assertions.
+            // A blocked recovery attempt does not resolve an earlier
+            // ambiguous rotation. Keep its safe cause without retry flags.
             Log::warning('WordPress OAuth refresh transport outcome ambiguous.', $failureContext);
             $this->recordRefreshFailure($recordId, $plan, 'refresh_ambiguous');
             throw new WpAiBridgeTargetConnectionException('refresh_ambiguous',
                 'The WordPress refresh outcome is unknown; do not retry an uncontrolled token rotation.',
-                refreshIdentity: $plan['identity']);
+                $diagnostics, refreshIdentity: $plan['identity']);
         }
 
         if ($response->status !== 200) {
@@ -1790,7 +1792,10 @@ final readonly class WpAiBridgeTargetConnectionService
             $assertion = $this->identity->assertion($url);
         } catch (Exception) {
             throw new OutboundRequestException('client_assertion_unavailable',
-                'WordPress OAuth client assertion could not be prepared.', [], true);
+                'WordPress OAuth client assertion could not be prepared.', [
+                    'failure_origin' => 'gateway_admission',
+                    'failure_stage' => 'admission',
+                ], true);
         }
 
         try {
@@ -1799,9 +1804,9 @@ final readonly class WpAiBridgeTargetConnectionService
                 'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
                 'client_assertion' => $assertion,
             ], relay: $relay, beforeDispatch: $beforeDispatch);
-        } catch (UnsafeOutboundTarget) {
+        } catch (UnsafeOutboundTarget $exception) {
             throw new OutboundRequestException('unsafe_target',
-                'WordPress OAuth endpoint failed outbound security policy.', [], true);
+                'WordPress OAuth endpoint failed outbound security policy.', $exception->diagnostics(), true);
         }
     }
 
