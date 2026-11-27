@@ -59,7 +59,22 @@ final class SshSocketDeadline
         // then attempts a seek and discards unread buffered packet bytes.
         // Discover the non-seekable capability before any network I/O;
         // this failed seek marks the stream as full-duplex/non-seekable.
-        @fseek($stream, 1, SEEK_CUR);
+        if (stream_get_meta_data($stream)['seekable']) {
+            // The capability probe is expected to report this one warning.
+            // Do not suppress unrelated PHP/runtime diagnostics.
+            $previous = set_error_handler(static function (int $severity, string $message, string $file, int $line) use (&$previous): bool {
+                if ($severity === E_WARNING && $message === 'fseek(): Stream does not support seeking') {
+                    return true;
+                }
+
+                return is_callable($previous) && $previous($severity, $message, $file, $line) !== false;
+            }, E_WARNING);
+            try {
+                fseek($stream, 1, SEEK_CUR);
+            } finally {
+                restore_error_handler();
+            }
+        }
         if (stream_get_meta_data($stream)['seekable']) {
             fclose($stream);
             throw new SshTargetConnectionException('transfer_unavailable');

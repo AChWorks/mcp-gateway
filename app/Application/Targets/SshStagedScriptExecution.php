@@ -246,29 +246,24 @@ final class SshStagedScriptExecution
         $details['script_control_failure'] = $reason;
         // Native stdout/stderr have independent capture limits. Keep only
         // relevant utility evidence whose path is owned by this operation.
-        $prefixes = match ($reason) {
-            'directory_create_failed' => ["mkdir: cannot create directory '".$directory."': "],
-            'directory_remove_failed' => ["rmdir: failed to remove '".$directory."': "],
-            'payload_remove_failed' => [
-                "rm: cannot remove '".$directory."/script': ",
-                "rm: cannot remove '".$directory."/identity': ",
-            ],
+        $operands = match ($reason) {
+            'directory_create_failed' => ['mkdir' => [$directory]],
+            'directory_remove_failed' => ['rmdir' => [$directory]],
+            'payload_remove_failed' => ['rm' => [$directory.'/script', $directory.'/identity']],
             'directory_identity_unverified', 'witness_identity_unverified', 'cleanup_identity_unverified' => [
-                "stat: cannot stat '".$directory."': ",
-                "stat: cannot stat '".$directory."/identity': ",
-                'cat: '.$directory.'/identity: ',
+                'stat' => [$directory, $directory.'/identity'],
+                'cat' => [$directory.'/identity'],
             ],
             default => [],
         };
         $stderr = $result['stderr'] ?? null;
-        if ($prefixes !== [] && is_string($stderr) && ($result['stderr_encoding'] ?? null) === 'utf-8') {
+        if ($operands !== [] && is_string($stderr) && ($result['stderr_encoding'] ?? null) === 'utf-8') {
             $messages = [];
             foreach (explode("\n", $stderr) as $line) {
-                foreach ($prefixes as $prefix) {
-                    if (str_starts_with($line, $prefix)) {
-                        // A trace or shell startup line is not a native
-                        // utility diagnostic. Explicitly mask our witness
-                        // even in a recognized line before common redaction.
+                foreach ($operands as $utility => $paths) {
+                    if (self::isOwnedUtilityDiagnostic($line, $utility, $paths)) {
+                        // Retain the original message, not its comparison
+                        // normalization or unrelated shell/startup output.
                         $messages[] = str_replace($witness, '[REDACTED]', $line);
                         break;
                     }
@@ -281,5 +276,25 @@ final class SshStagedScriptExecution
         }
 
         return $details;
+    }
+
+    /** @param list<string> $paths */
+    private static function isOwnedUtilityDiagnostic(string $line, string $utility, array $paths): bool
+    {
+        if (! str_starts_with($line, $utility.': ')) {
+            return false;
+        }
+        // Coreutils versions, locales and compatible utilities can quote
+        // the same operand differently. Match the exact owned path as a
+        // diagnostic operand, not a particular translated error sentence.
+        $normalized = str_replace(["\u{2018}", "\u{2019}", "\u{201C}", "\u{201D}", '`', '"'], "'", $line);
+        foreach ($paths as $path) {
+            if (str_contains($normalized, " '".$path."': ")
+                || str_contains($normalized, ' '.$path.': ')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

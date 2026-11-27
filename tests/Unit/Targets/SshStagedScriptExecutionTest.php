@@ -243,13 +243,52 @@ final class SshStagedScriptExecutionTest extends TestCase
         }
     }
 
+    /** @return array<string,array{string,string,string}> */
+    public static function nativeUtilityQuoteStyles(): array
+    {
+        return [
+            'single quotes' => ["'", "'", 'cannot create directory'],
+            'curly quotes' => ["\u{2018}", "\u{2019}", 'cannot create directory'],
+            'older GNU quotes' => ['`', "'", 'cannot create directory'],
+            'double quotes' => ['"', '"', 'cannot create directory'],
+            'unquoted compatible utility' => ['', '', "can't create directory"],
+        ];
+    }
+
+    #[DataProvider('nativeUtilityQuoteStyles')]
+    public function test_control_diagnostic_preserves_exact_owned_operand_across_native_formats(string $open, string $close, string $verb): void
+    {
+        $native = null;
+        $result = (new SshStagedScriptExecution)->run('printf private-body', '/bin/sh', new SshCommandExecutionDeadline(10),
+            static function (string $command, ?Closure $mark) use ($open, $close, $verb, &$native): array {
+                $mark?->__invoke();
+                self::assertSame(1, preg_match('~/var/tmp/\.mcp-gateway-script-[a-f0-9]{32}~', $command, $match));
+                $directory = $match[0];
+                $native = 'mkdir: '.$verb.' '.$open.$directory.$close.': File exists';
+
+                return ['status' => 'completed', 'exit_code' => 43, 'stderr_encoding' => 'utf-8',
+                    'stderr' => "login: private-body\n"
+                        ."mkdir: cannot create directory '".$directory."-other': private-body\n"
+                        ."rm: cannot remove '".$directory."': private-body\n"
+                        .$native."\n",
+                ];
+            },
+            static fn () => self::fail('Failed preparation must never upload.'),
+        );
+        $safe = OperationDiagnostics::safeContext($result['__diagnostic_context']);
+        self::assertSame('directory_create_failed', $safe['script_control_failure'] ?? null);
+        self::assertSame($native, $safe['source_error_message'] ?? null);
+        self::assertFalse($result['script_launch_attempted']);
+    }
+
     public function test_preparation_directory_failure_keeps_only_owned_native_cause(): void
     {
         $directory = null;
         $witness = null;
+        $native = null;
         try {
             $result = (new SshStagedScriptExecution)->run('printf private-body', '/bin/sh', new SshCommandExecutionDeadline(10),
-                static function (string $command, ?Closure $mark) use (&$directory, &$witness): array {
+                static function (string $command, ?Closure $mark) use (&$directory, &$witness, &$native): array {
                     $mark?->__invoke();
                     self::assertSame(1, preg_match('~/var/tmp/\.mcp-gateway-script-[a-f0-9]{32}~', $command, $match));
                     $directory = $match[0];
@@ -259,10 +298,11 @@ final class SshStagedScriptExecutionTest extends TestCase
                     $process = new Process(['/bin/sh', '-c', $command]);
                     $process->setTimeout(3);
                     $process->run();
+                    $native = str_replace($witness, '[REDACTED]', trim($process->getErrorOutput()));
 
                     return ['status' => 'completed', 'exit_code' => $process->getExitCode(),
                         'stdout' => 'private-body',
-                        'stderr' => '+ printf %s '.$witness."\n".$process->getErrorOutput()."private-body\n",
+                        'stderr' => '+ printf %s '.$witness."\n".$process->getErrorOutput()."\nprivate-body\n",
                         'stderr_encoding' => 'utf-8', 'stderr_truncated' => false];
                 },
                 static fn () => self::fail('Failed preparation must never upload.'),
@@ -272,7 +312,7 @@ final class SshStagedScriptExecutionTest extends TestCase
             $safe = OperationDiagnostics::safeContext($result['__diagnostic_context']);
             self::assertSame('directory_create_failed', $safe['script_control_failure'] ?? null);
             self::assertIsInt($safe['remote_exit_code'] ?? null);
-            self::assertStringContainsString('File exists', $safe['source_error_message'] ?? '');
+            self::assertStringContainsString('File exists', $safe['source_error_message'] ?? '', 'Actual disposable mkdir stderr: '.$native);
             self::assertSame($directory, $safe['script_staging_path']);
             self::assertStringNotContainsString($witness, json_encode($safe, JSON_THROW_ON_ERROR));
             self::assertStringNotContainsString('private-body', json_encode($safe, JSON_THROW_ON_ERROR));
