@@ -5,6 +5,7 @@
  * loopback development router. No production route or remote operation.
  */
 use App\Application\Targets\SshTargetRegistration;
+use App\Application\Targets\TargetCheckEvidence;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
@@ -16,6 +17,7 @@ use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayOnboarding;
 use App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment;
 use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
+use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetConfig;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use App\Models\User;
@@ -181,6 +183,30 @@ Route::middleware(['web', 'auth'])->get('/__browser__/arvan-checks/{state}', sta
     return redirect()->route('admin.targets.show', ['target' => $target->target_id]);
 });
 
+// Dedicated health fixture: only local recorded observations, no remote I/O.
+Route::middleware(['web', 'auth'])->get('/__browser__/health-evidence/{phase}', static function (string $phase) {
+    abort_unless(Auth::user()?->getRawOriginal('role') === 'owner', 403);
+    abort_unless(in_array($phase, ['success', 'failure', 'changed'], true), 404);
+    $target = Target::query()->firstOrCreate(['target_id' => 'ui-health-'.$phase], [
+        'display_name' => 'UI health '.$phase,
+        'connector_type' => 'wp_ai_bridge',
+        'connection_state' => TargetConnectionState::Connected,
+    ]);
+    DB::transaction(static function () use ($target, $phase): void {
+        $locked = Target::query()->whereKey($target->id)->lockForUpdate()->sole();
+        TargetCheckEvidence::recordLocked($locked,
+            TargetCheckEvidence::WORDPRESS_METADATA,
+            $phase === 'success' ? null : 'fixture_metadata_failure');
+        if ($phase === 'changed') {
+            DB::table('targets')->where('id', $locked->id)->update([
+                'transport_revision' => (int) $locked->transport_revision + 1,
+            ]);
+        }
+    });
+
+    return redirect()->route('admin.targets.show', ['target' => $target->target_id]);
+});
+
 // A disabled Relay stays selected and unavailable on Target Edit,
 // not silently present Direct. This disposable fixture creates no connection.
 Route::middleware(['web', 'auth'])->get('/__browser__/relay-unavailable-target', static function () {
@@ -307,34 +333,46 @@ Route::middleware(['web', 'auth'])->post('/__browser__/experience-expire', stati
 
 // Isolated fixture-only managed Pending Target for real responsive Owner UI
 // acceptance. Never creates a real enrollment token or contacts any host.
-Route::middleware(['web', 'auth'])->get('/__browser__/managed-reverse-pending', static function () {
+Route::middleware(['web', 'auth'])->get('/__browser__/managed-reverse-{phase}', static function (string $phase) {
+    abort_unless(in_array($phase, ['pending', 'transport'], true), 404);
     $owner = Auth::user();
     abort_unless($owner instanceof User && $owner->getRawOriginal('role') === 'owner', 403);
-    $id = 'ui-managed-pending';
+    $id = 'ui-managed-'.$phase;
+    $pending = $phase === 'pending';
+    $port = $pending ? 43123 : 43124;
+    $identity = 'managed-ui-'.$phase;
     if (! Target::query()->where('target_id', $id)->exists()) {
         $target = Target::query()->create([
             'target_id' => $id,
-            'display_name' => 'UI managed Reverse SSH pending',
+            'display_name' => 'UI managed Reverse SSH '.$phase,
             'connector_type' => 'ssh_direct',
-            'connection_state' => TargetConnectionState::Pending,
+            'connection_state' => $pending ? TargetConnectionState::Pending : TargetConnectionState::Connected,
         ]);
         $pin = implode(' ', array_slice(
             preg_split('/\s+/', trim(EC::createKey('Ed25519')->getPublicKey()->toString('OpenSSH'))), 0, 2,
         ));
         DB::table('targets')->where('id', $target->getKey())->update([
-            'reverse_listener_port' => 43123, 'reverse_tunnel_identity' => 'managed-ui-only', 'transport_revision' => 1,
+            'reverse_listener_port' => $port, 'reverse_tunnel_identity' => $identity, 'transport_revision' => 1,
         ]);
-        SshTargetConfig::query()->create([
+        $config = SshTargetConfig::query()->create([
             'target_record_id' => $target->getKey(),
             'host' => '8.8.8.8', 'port' => 2222, 'username' => 'deploy.prod',
             'auth_method' => 'private_key', 'pinned_host_key' => $pin,
             'binding_revision' => 0,
         ]);
+        $target->refresh();
+        $privateKey = EC::createKey('Ed25519')->toString('OpenSSH');
+        TargetCredential::query()->create([
+            'target_record_id' => $target->id,
+            'connector_type' => 'ssh_direct',
+            'purpose' => SshTargetVault::PURPOSE,
+            'encrypted_payload' => app(SshTargetVault::class)->seal($target, $config, $privateKey, null),
+        ]);
         SshManagedReverseEnrollment::query()->create([
             'target_id' => $id, 'target_record_id' => $target->getKey(),
-            'listener_port' => 43123, 'tunnel_identity' => 'managed-ui-only',
-            'login_public_key' => $pin,
-            'state' => 'pending', 'publication_pending' => false,
+            'listener_port' => $port, 'tunnel_identity' => $identity,
+            'login_public_key' => $pending ? $pin : '',
+            'state' => $pending ? 'pending' : 'active', 'publication_pending' => false,
         ]);
     }
 

@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Application\Targets\SshManagedReverseEnrollmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -41,5 +40,21 @@ final class ManagedReverseClaimController extends Controller
             'verified' => false,
             ...$data,
         ])->header('Cache-Control', 'no-store');
+    }
+
+    public function bootstrapCheck(Request $request, string $enrollment, SshManagedReverseEnrollmentService $service): JsonResponse
+    {
+        $fields = $request->validate(['receipt' => ['required', 'string']]);
+        try {
+            if (! $service->bootstrapStillAuthorized($enrollment, $fields['receipt'])) {
+                return response()->json(['error' => 'bootstrap_not_authorized'], 409)
+                    ->header('Cache-Control', 'no-store');
+            }
+        } catch (RuntimeException) {
+            return response()->json(['error' => 'bootstrap_check_unavailable'], 503)
+                ->header('Cache-Control', 'no-store');
+        }
+
+        return response()->json(null, 204)->header('Cache-Control', 'no-store');
     }
 }

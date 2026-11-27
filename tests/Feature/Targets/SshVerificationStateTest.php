@@ -48,6 +48,10 @@ final class SshVerificationStateTest extends TestCase
         self::assertSame('authentication_failed', $target->last_error_code);
         self::assertNull($target->last_success_at);
         self::assertNotNull($target->last_failure_at);
+        $this->assertDatabaseHas('target_check_evidence', [
+            'target_record_id' => $target->id, 'kind' => 'ssh_login',
+            'transport_revision' => $target->transport_revision, 'error_code' => 'authentication_failed',
+        ]);
         self::assertNull($config->fresh()->observed_peer_ip);
         self::assertNull($config->fresh()->verification_attempt_id);
         self::assertSame(1, DB::table('activity_events')->where('operation', 'ssh-login-verify')
@@ -185,6 +189,11 @@ final class SshVerificationStateTest extends TestCase
         $target->refresh();
         self::assertSame('connected', $target->connection_state->value);
         self::assertSame('reverse_route_stale', SshTargetIdentity::safeMetadata($target->load('sshConfig'))['ip_status']);
+        $this->assertDatabaseHas('target_check_evidence', [
+            'target_record_id' => $target->id, 'kind' => 'ssh_login',
+            'transport_revision' => $target->transport_revision, 'error_code' => 'reverse_listener_unavailable',
+        ]);
+        self::assertCount(1, $inventory->adminPage($user, needsReview: true)['items']);
     }
 
     /** @return array{Target, SshTargetConfig, TargetCredential} */

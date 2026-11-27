@@ -23,6 +23,7 @@ use App\Models\User;
 use App\Support\OperationDiagnostics;
 use Closure;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Validation\Rule;
 use InvalidArgumentException;
 use RuntimeException;
@@ -339,6 +340,11 @@ final readonly class SshDirectTargetAdapter implements TargetBatchBindingContrib
 
     public function publicMetadata(array $targets): array
     {
+        // The inventory's indexed local projection already provides the
+        // relation. Single-Target context loads it only for actual SSH Targets.
+        (new Collection($targets))->loadMissing(
+            'sshConfig:target_record_id,host,port,username,observed_peer_ip,observed_at',
+        );
         $metadata = [];
         foreach ($targets as $target) {
             $metadata[(string) $target->getKey()] = ['ssh' => SshTargetIdentity::safeMetadata($target)];

@@ -3,6 +3,7 @@
 namespace Tests\Feature\ArvanCloud;
 
 use App\Application\Access\OperationAdmission;
+use App\Application\Admin\TargetDashboardOverview;
 use App\Application\Mcp\OperationDiagnosticsMcpToolHandlers;
 use App\Application\Targets\ArvanApiOperations;
 use App\Application\Targets\ConnectionRelayAdministration;
@@ -1537,6 +1538,56 @@ YAML, 200);
         self::assertSame(0, TargetCredential::query()->count());
         self::assertSame(TargetConnectionState::Disconnected, $target->refresh()->connection_state);
         Http::assertNothingSent();
+    }
+
+    public function test_independent_check_failures_remain_reviewable_until_the_same_check_succeeds(): void
+    {
+        [$target, $owner] = $this->fixture();
+        $headFails = false;
+        $getFails = false;
+        Http::fake(static function (Request $request) use (&$headFails, &$getFails) {
+            if ($request->method() === 'HEAD') {
+                self::assertFalse($request->hasHeader('Authorization'));
+                if ($headFails) {
+                    throw new ConnectionException('synthetic transport failure');
+                }
+
+                return Http::response('', 200);
+            }
+
+            return Http::response([], $getFails ? 403 : 200);
+        });
+        $adapter = app(ArvanApiTargetAdapter::class);
+        $adapter->test($target);
+        $headFails = true;
+        try {
+            $adapter->checkReachability($target->fresh());
+            self::fail('Expected failed HEAD');
+        } catch (TargetConnectorFailure) {
+            // Failed observation, not a credential revocation.
+        }
+        $adapter->test($target->fresh());
+        $overview = app(TargetDashboardOverview::class);
+        self::assertSame(1, $overview->forUser($owner)['attentionCount']);
+        self::assertSame('connected', $target->fresh()->getRawOriginal('connection_state'));
+        $this->actingAs($owner)->get('/admin/targets/arvan-cdn')->assertOk()
+            ->assertSee('HTTPS HEAD (no key)')->assertSee('Last check failed')->assertSee('Authenticated GET')->assertSee('Last check succeeded');
+
+        $headFails = false;
+        $getFails = true;
+        try {
+            $adapter->test($target->fresh());
+            self::fail('Expected failed GET');
+        } catch (TargetConnectorFailure) {
+        }
+        $adapter->checkReachability($target->fresh());
+        self::assertSame(1, $overview->forUser($owner)['attentionCount']);
+        self::assertSame('connected', $target->fresh()->getRawOriginal('connection_state'));
+        self::assertSame(1, TargetCredential::query()->count());
+        $getFails = false;
+        $adapter->test($target->fresh());
+        self::assertSame(0, $overview->forUser($owner)['attentionCount']);
+        $this->get('/admin/targets/arvan-cdn')->assertOk()->assertDontSee('Last check failed')->assertSee('Historical failure');
     }
 
     public function test_authentication_probe_is_real_readonly_get_and_disconnect_only_erases_local_credential(): void

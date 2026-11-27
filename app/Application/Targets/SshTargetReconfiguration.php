@@ -240,6 +240,9 @@ final readonly class SshTargetReconfiguration
                 'observed_at' => null,
                 'updated_at' => now(),
             ]);
+            if ($loginChanged) {
+                TargetCheckEvidence::invalidateLocked($locked, TargetCheckEvidence::SSH_LOGIN);
+            }
             $locked->forceFill($loginChanged ? [
                 'connection_state' => TargetConnectionState::Disconnected,
                 'last_error_code' => null,

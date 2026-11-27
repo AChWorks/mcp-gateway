@@ -2830,7 +2830,7 @@ final class WpAiBridgeTargetConnectionTest extends TestCase
         $this->actingAs($this->user('owner', 'all'))->get('/admin/targets/alpha')
             ->assertOk()->assertSee('WordPress-side recovery for uncertain revocation')
             ->assertDontSee('Cancel pending disconnect')
-            ->assertSee('Public metadata verified')
+            ->assertSee('Last check succeeded')
             ->assertSee('Blocked: the existing WordPress credential cannot be used.');
         try {
             app(WpAiBridgeTargetConnectionService::class)->cancelNeverSentDisconnect(

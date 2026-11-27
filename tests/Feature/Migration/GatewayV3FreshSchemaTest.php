@@ -17,7 +17,7 @@ final class GatewayV3FreshSchemaTest extends TestCase
         foreach (['targets', 'target_credentials', 'target_groups', 'ssh_direct_target_configs',
             'wp_ai_bridge_target_configs', 'arvan_api_target_configs', 'connection_relays',
             'ssh_command_jobs', 'oauth_authorizations', 'oauth_refresh_tokens',
-            'oauth_dcr_clients', 'activity_events', 'operational_settings', 'target_batches', 'target_batch_items'] as $table) {
+            'oauth_dcr_clients', 'activity_events', 'operational_settings', 'target_batches', 'target_batch_items', 'target_check_evidence'] as $table) {
             self::assertTrue(Schema::hasTable($table), $table.' missing');
         }
         foreach (['sites', 'site_credentials', 'site_groups', 'site_target_reservations'] as $retired) {
@@ -36,7 +36,9 @@ final class GatewayV3FreshSchemaTest extends TestCase
         $expectedMigrations = array_keys(app('migrator')->getMigrationFiles(database_path('migrations')));
         self::assertNotEmpty($expectedMigrations);
         self::assertSame($expectedMigrations, DB::table('migrations')->orderBy('migration')->pluck('migration')->all());
-        self::assertSame(45, count(Schema::getTables()) - 1);
+        self::assertTrue(Schema::hasColumns('target_check_evidence', ['target_record_id', 'kind', 'transport_revision',
+            'attempt_id', 'observed_at', 'error_code', 'last_failure_at', 'last_failure_code']));
+        self::assertSame(46, count(Schema::getTables()) - 1);
     }
 
     public function test_fresh_v3_seeds_required_operational_state_without_old_target_or_access_data(): void

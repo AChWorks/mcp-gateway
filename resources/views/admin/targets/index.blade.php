@@ -79,7 +79,7 @@
                         @php($recovery = $presentation['recovery'])
                         @php($identity = $presentation['identity'] ?? null)
                         @php($connectionTone = match ($target->connection_state->value) {
-                            'connected' => 'success',
+                            'connected' => 'neutral',
                             'error' => 'danger',
                             'pending', 'reassigning', 'reconnect_required' => 'warning',
                             default => 'neutral',
@@ -106,9 +106,10 @@
                                 <span class="targets-mobile-label" aria-hidden="true">{{ __('Connection') }}</span>
                                 <div class="target-cell target-cell-status">
                                     <span><span class="badge badge-{{ $connectionTone }}">{{ str_replace('_', ' ', ucfirst($target->connection_state->value)) }}</span></span>
+                                    @include('admin.targets.health-status', ['health' => $presentation['health']])
                                     @if ($connectorUi?->inventoryStatusView !== null)
                                         @include($connectorUi->inventoryStatusView)
-                                    @else
+                                    @elseif ($presentation['health']['checks'] === [])
                                         <span class="target-meta">{{ $recovery['title'] }}</span>
                                     @endif
                                 </div>

@@ -88,7 +88,7 @@ final readonly class TargetMcpToolHandlers
         }
 
         $target = $this->access
-            ->scopeTargets(Target::query()->with('sshConfig:target_record_id,host,port,username,observed_peer_ip,observed_at'), $user, GatewayPermission::TargetsView)
+            ->scopeTargets(Target::query(), $user, GatewayPermission::TargetsView)
             ->where('target_id', $targetId)
             ->first();
 

@@ -3,6 +3,7 @@
 namespace Tests\Feature\Admin;
 
 use App\Application\Admin\TargetDashboardOverview;
+use App\Application\Targets\TargetCheckEvidence;
 use App\Application\Targets\TargetInventory;
 use App\Application\Targets\TargetReview;
 use App\Domain\Access\GatewayRole;
@@ -70,6 +71,38 @@ final class AdminDashboardOverviewTest extends TestCase
         self::assertSame(['blocked-refresh', 'failed', 'reassigning', 'reconnect'], $reviewIds);
         $filtered = app(TargetInventory::class)->adminPage($owner, needsReview: true);
         self::assertSame($reviewIds, array_map(static fn (Target $target): string => $target->target_id, $filtered['items']));
+        Http::assertNothingSent();
+    }
+
+    public function test_current_failed_observation_is_reviewable_without_changing_lifecycle_and_stale_evidence_is_not(): void
+    {
+        Http::preventStrayRequests();
+        $owner = $this->user();
+        $target = $this->target('metadata-failure', TargetConnectionState::Connected);
+        $this->target('ordinary-pending', TargetConnectionState::Pending);
+        $this->target('ordinary-connected', TargetConnectionState::Connected);
+        $kind = TargetCheckEvidence::WORDPRESS_METADATA;
+        DB::transaction(function () use ($target, $kind): void {
+            $locked = Target::query()->lockForUpdate()->findOrFail($target->id);
+            $older = TargetCheckEvidence::beginLocked($locked, $kind);
+            $latest = TargetCheckEvidence::beginLocked($locked, $kind);
+            self::assertFalse(TargetCheckEvidence::isCurrentLocked($locked, $locked, $kind, $older));
+            self::assertTrue(TargetCheckEvidence::isCurrentLocked($locked, $locked, $kind, $latest));
+            TargetCheckEvidence::recordLocked($locked, $kind, 'network_failure');
+        });
+        $overview = app(TargetDashboardOverview::class);
+        self::assertSame(2, $overview->forUser($owner)['connectedCount']);
+        self::assertSame(1, $overview->forUser($owner)['attentionCount']);
+        $filtered = app(TargetInventory::class)->adminPage($owner, needsReview: true);
+        self::assertSame(['metadata-failure'], array_map(static fn (Target $target): string => $target->target_id, $filtered['items']));
+        $this->actingAs($owner)->get('/admin/targets/metadata-failure')->assertOk()
+            ->assertSee('Connected')->assertSee('Last check failed')->assertSee('network_failure');
+        // Simulate the generation advanced by the separately tested route lifecycle.
+        DB::table('targets')->where('id', $target->id)->update(['transport_revision' => (int) $target->transport_revision + 1]);
+        self::assertSame(0, $overview->forUser($owner)['attentionCount']);
+        self::assertSame([], app(TargetInventory::class)->adminPage($owner, needsReview: true)['items']);
+        $this->get('/admin/targets/metadata-failure')->assertOk()
+            ->assertSee('Current route not verified')->assertSee('Historical check')->assertDontSee('Last check failed');
         Http::assertNothingSent();
     }
 
@@ -235,7 +268,7 @@ final class AdminDashboardOverviewTest extends TestCase
             self::assertSame($size, $result['targetCount']);
             self::assertSame($size, $result['attentionCount']);
             self::assertCount(5, $result['reviewTargets']);
-            self::assertCount(3, $queries);
+            self::assertCount(5, $queries);
             self::assertSame('fleet-0000', $result['reviewTargets'][0]->target_id);
         }
         Http::assertNothingSent();

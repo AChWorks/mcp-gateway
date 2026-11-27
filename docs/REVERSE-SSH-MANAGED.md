@@ -120,8 +120,8 @@ point-in-time proof, not a heartbeat.
   response **cannot** be retried automatically; it may already have
   authorized a control key. Neither claim nor file publication is a
   verified Target login or a Connected state.
-- The existing Target detail screen offers **Reissue one-use install
-  command** for a selected, non-revoked managed path, guarded by
+- The existing Target detail screen offers **Reissue setup command** (current initial login grant) or
+  **Reissue transport command** (initial grant retired) for a selected, non-revoked managed path, guarded by
   current actor password and an exact Target-ID confirmation. This preserves the
   Target's original identity, independently pinned real SSH host key,
   login identity and approved private key. The existing encrypted Target login credential is left unchanged, as is its authorization. The shared transport revision advances and fences older retained Jobs. After the initial login provisioning has been verified or explicitly retired, reissue is transport-only: the installer does not write the old login public key or require a login account name. The new enrollment rotates
@@ -132,6 +132,29 @@ point-in-time proof, not a heartbeat.
   authorized response. Old listener ports remain quarantined because an
   older established `-R` session may still exist; the external Target
   service must be stopped by a separately authorized Target operator.
+- The Target-side root-owned enrollment record durably binds the exact
+  response, local control key and requested setup identity. A fresh initial
+  login write requires a current, purpose-bound bootstrap receipt from the
+  Gateway; the consumed enrollment token is not replayed. Before any possible
+  login write the installer persists an attempt marker. Completion retires the
+  login key and receipt from the cached record. Re-running a completed setup or
+  transport-only command never opens or changes the login authorization file.
+  An interrupted or legacy cache with the exact key already present may be
+  reconciled without rewriting it. If a write may have occurred and the key
+  is missing, or its existing entry differs (including restrictive options),
+  the installer cannot restore it. It reports uncertain login setup and may
+  repair the transport independently. A genuinely unattempted setup may resume
+  only while its exact initial grant remains current. Temporary check failures
+  do not create new authorization.
+- Previously downloaded immutable installer copies are not retroactively
+  patched. Do not re-run an old cached script to recover a removed login key.
+  Use the currently published, independently digest-verified installer and the
+  exact matching enrollment/setup arguments, or obtain an explicit new
+  authorized setup/transport reissue through the existing Target detail
+  controls. Old command digests intentionally do not accept newer script bytes.
+  Verify SSH host and login afterwards; recover a missing/retired login grant
+  through authorized credential recovery, not transport repair. This does not
+  automatically stop external sessions or release quarantined ports.
 - A best-effort **Gateway namespace** TCP bind probe excludes already
   occupied loopback ports on enrollment and reissue. This is not a
   promise about cross-namespace listeners or a race-free reservation;

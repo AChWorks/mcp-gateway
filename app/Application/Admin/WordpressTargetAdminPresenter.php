@@ -71,23 +71,26 @@ final class WordpressTargetAdminPresenter implements TargetConnectorAdminPresent
             return [];
         }
         $ids = array_map(static fn (Target $target): string => (string) $target->getKey(), $targets);
-        $revocations = DB::table('wp_ai_bridge_revocation_intents')
-            ->whereIn('target_record_id', $ids)->get()->keyBy('target_record_id');
-        $refreshIds = DB::table('wp_ai_bridge_refresh_intents')
-            ->whereIn('target_record_id', $ids)->pluck('target_record_id')->all();
-        $configs = DB::table('wp_ai_bridge_target_configs')
-            ->whereIn('target_record_id', $ids)
-            ->get(['target_record_id', 'metadata_checked_at', 'metadata_reachable'])->keyBy('target_record_id');
-        $credentialIds = TargetCredential::query()
-            ->whereIn('target_record_id', $ids)->where('connector_type', 'wp_ai_bridge')
-            ->where('purpose', WpAiBridgeTargetVault::PURPOSE)->pluck('target_record_id')->all();
+        // One page-scoped projection of the three independent OAuth states.
+        $states = DB::table('targets')
+            ->leftJoin('wp_ai_bridge_revocation_intents as revocation', 'revocation.target_record_id', '=', 'targets.id')
+            ->leftJoin('wp_ai_bridge_refresh_intents as refresh', 'refresh.target_record_id', '=', 'targets.id')
+            ->leftJoin('target_credentials as credential', function ($join): void {
+                $join->on('credential.target_record_id', '=', 'targets.id')
+                    ->where('credential.connector_type', 'wp_ai_bridge')
+                    ->where('credential.purpose', WpAiBridgeTargetVault::PURPOSE);
+            })
+            ->whereIn('targets.id', $ids)
+            ->get(['targets.id', 'revocation.id as revocation_id', 'revocation.phase', 'revocation.kind',
+                'revocation.token_confirmed', 'revocation.token_total', 'refresh.id as refresh_id',
+                'credential.id as credential_id'])->keyBy('id');
         $result = [];
         foreach ($targets as $target) {
-            $hasCredential = in_array((string) $target->getKey(), $credentialIds, true);
+            $state = $states->get($target->getKey());
+            $hasCredential = $state !== null && $state->credential_id !== null;
             $recovery = $this->describeRecovery(
-                $target, $revocations->get($target->getKey()),
-                in_array($target->getKey(), $refreshIds, true), $hasCredential,
-                $configs->get($target->getKey()),
+                $target, $state !== null && $state->revocation_id !== null ? $state : null,
+                $state !== null && $state->refresh_id !== null, $hasCredential,
             );
             $recovery['credential_present'] = $hasCredential;
             $result[$target->target_id] = ['recovery' => $recovery];

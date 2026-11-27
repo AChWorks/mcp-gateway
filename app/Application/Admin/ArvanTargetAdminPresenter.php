@@ -53,7 +53,7 @@ final class ArvanTargetAdminPresenter implements TargetConnectorAdminPresenter
         $verified = (string) $target->getRawOriginal('connection_state') === TargetConnectionState::Connected->value;
 
         return [
-            'title' => $verified ? __('ArvanCloud API last verified') : __('ArvanCloud API needs verification'),
+            'title' => $verified ? __('ArvanCloud authorization stored') : __('ArvanCloud API needs verification'),
             'description' => __('ArvanCloud connection state records only successful authenticated GET verification. A disconnected state after changing the API root, key or probe does not prove other authorized API calls fail. A separate HTTPS HEAD check uses no key and never changes authentication state.'),
             'reachability' => $target->last_tested_at === null
                 ? __('No authenticated GET verification has been recorded for this Target.')

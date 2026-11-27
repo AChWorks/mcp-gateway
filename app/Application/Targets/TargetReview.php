@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Builder;
 
 final readonly class TargetReview
 {
-    public function __construct(private TargetConnectorRegistry $connectors) {}
+    public function __construct(private TargetConnectorRegistry $connectors, private TargetRouteAvailability $routes) {}
 
     /** @param Builder<Target> $query
      * @return Builder<Target>
@@ -20,11 +20,8 @@ final readonly class TargetReview
                 TargetConnectionState::Error->value,
                 TargetConnectionState::ReconnectRequired->value,
                 TargetConnectionState::Reassigning->value,
-            ])->orWhereExists(static function ($relay): void {
-                $relay->selectRaw('1')->from('connection_relays')
-                    ->whereColumn('connection_relays.id', 'targets.relay_record_id')
-                    ->where('connection_relays.enabled', false);
-            });
+            ])->orWhereExists(TargetCheckEvidence::currentFailures())
+                ->orWhereIn('targets.id', $this->routes->unavailable());
 
             // Runtime eligibility has one owner. A connector may add its own
             // persisted recovery evidence without a Dashboard type switch.

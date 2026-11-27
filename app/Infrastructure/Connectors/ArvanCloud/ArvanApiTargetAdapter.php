@@ -2,6 +2,7 @@
 
 namespace App\Infrastructure\Connectors\ArvanCloud;
 
+use App\Application\Targets\TargetCheckEvidence;
 use App\Application\Targets\TargetConfigurationRevision;
 use App\Application\Targets\TargetConnectorAdapter;
 use App\Application\Targets\TargetConnectorFailure;
@@ -199,8 +200,12 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                         ]);
                     }
                 }
+                if ($changedBase) {
+                    TargetCheckEvidence::invalidateLocked($locked, TargetCheckEvidence::ARVAN_HTTPS);
+                }
                 if ($changedBase || $changedProbe || $newKey !== '') {
-                    $locked->forceFill(['connection_state' => TargetConnectionState::Disconnected, 'connected_at' => null])->save();
+                    TargetCheckEvidence::invalidateLocked($locked, TargetCheckEvidence::ARVAN_AUTH);
+                    $locked->forceFill(['connection_state' => TargetConnectionState::Disconnected, 'connected_at' => null, 'last_tested_at' => null])->save();
                 }
                 $this->activity->recordRequired(CorrelationId::current(), 'arvan-target-configure', 'success', $locked);
             });
@@ -235,7 +240,8 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
             TargetCredential::query()->where('target_record_id', $locked->getKey())
                 ->where('connector_type', $this->type())
                 ->where('purpose', ArvanApiTargetVault::PURPOSE)->delete();
-            $locked->forceFill(['connection_state' => TargetConnectionState::Disconnected, 'connected_at' => null])->save();
+            TargetCheckEvidence::invalidateLocked($locked, TargetCheckEvidence::ARVAN_AUTH);
+            $locked->forceFill(['connection_state' => TargetConnectionState::Disconnected, 'connected_at' => null, 'last_tested_at' => null])->save();
             $this->activity->recordRequired(CorrelationId::current(), 'arvan-target-disconnect', 'success', $locked);
         });
 
@@ -252,6 +258,8 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
     {
         $this->requireUnpaused($target);
         $base = $this->config($target)->base_url;
+        $identity = fn () => $this->assertReachabilityStillCurrent($target, $base);
+        $attempt = $this->beginCheck($target, TargetCheckEvidence::ARVAN_HTTPS, $identity, $authorize);
 
         try {
             $this->requireUnpaused($target);
@@ -266,6 +274,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
             // A concurrent Pause, removal or API-root replacement invalidates
             // even this read-only observation before it can be displayed.
             $this->assertReachabilityStillCurrent($target, $base);
+            $this->settleCheck($target, TargetCheckEvidence::ARVAN_HTTPS, $attempt, null, $authorize, $identity);
 
             return new TargetConnectorResult(statusMessage: __(
                 'The HTTPS server for the registered API root responded to an unauthenticated HEAD request (HTTP :status). This confirms HTTPS reachability only, not API path availability; the API key was NOT tested and the authenticated connection state was NOT changed. An HTTP error may mean the base path does not accept HEAD.',
@@ -274,6 +283,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         } catch (TargetConnectorFailure $exception) {
             throw $exception;
         } catch (UnsafeOutboundTarget $exception) {
+            $this->settleCheck($target, TargetCheckEvidence::ARVAN_HTTPS, $attempt, 'unsafe_target', $authorize, $identity);
             throw new TargetConnectorFailure(
                 __('The registered API endpoint is not allowed by the Gateway HTTPS/public-address policy. Check the configured API root and DNS; the API key was not tested.'),
                 null, 'unsafe_target',
@@ -288,6 +298,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                 // The shared transport still rejects 3xx for every actual
                 // authenticated API operation and never follows Location.
                 $this->assertReachabilityStillCurrent($target, $base);
+                $this->settleCheck($target, TargetCheckEvidence::ARVAN_HTTPS, $attempt, null, $authorize, $identity);
 
                 return new TargetConnectorResult(statusMessage: __(
                     'The registered HTTPS API root responded to an unauthenticated HEAD request with HTTP :status (redirect). HTTPS reachability was observed, but the redirect was NOT followed. Check that the API root points to the intended product API path. No API key was sent, authentication was NOT tested, and the connection state was NOT changed.',
@@ -295,6 +306,7 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                 ));
             }
 
+            $this->settleCheck($target, TargetCheckEvidence::ARVAN_HTTPS, $attempt, $exception->reason, $authorize, $identity);
             throw new TargetConnectorFailure(
                 __('The Gateway could not complete an HTTPS HEAD check of the registered API base (:reason). Check DNS, TLS, network access and the API root. No API key was sent and authentication was not tested.', [
                     'reason' => $exception->reason,
@@ -328,9 +340,13 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                 'api_probe_path', 'probe_not_configured',
             );
         }
+        $attempt = null;
+        $identity = null;
         try {
             $credential = $this->credential($target)
                 ?? throw new RuntimeException('ArvanCloud credential was disconnected.');
+            $identity = fn () => $this->assertProbeIdentity($target, $config, $credential);
+            $attempt = $this->beginCheck($target, TargetCheckEvidence::ARVAN_AUTH, $identity, $authorize);
             $key = $this->vault->open($target, $config, $credential);
             // Recheck immediately before invoking the transport. A pause or
             // removal after the initial form load cannot dispatch a new probe.
@@ -356,20 +372,66 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                 throw new TargetConnectorFailure($message, null, 'upstream_http_error', ['http_status' => $response->status]);
             }
 
-            // HTTP I/O happened WITHOUT a DB lock. The result is evidence
-            // only for the exact credential/configuration used to dispatch.
-            // The same short Target row lock serializes rotation, Disconnect
-            // and this conditional health update.
-            DB::transaction(function () use ($target, $config, $credential): void {
-                $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->first();
-                if (! $locked instanceof Target || TargetOperationGate::isPaused($locked)) {
-                    throw new TargetConnectorFailure(
-                        __('The Target was paused or removed during the probe; no connection state was changed.'),
-                        null, 'probe_stale',
-                    );
-                }
-                $this->assertProbeIdentity($target, $config, $credential);
+            $this->settleCheck($target, TargetCheckEvidence::ARVAN_AUTH, $attempt, null, $authorize, $identity);
 
+            return new TargetConnectorResult(statusMessage: __('Authenticated ArvanCloud GET probe succeeded.'));
+        } catch (TargetConnectorFailure $exception) {
+            if ($attempt !== null && $exception->reason === 'upstream_http_error') {
+                $this->settleCheck($target, TargetCheckEvidence::ARVAN_AUTH, $attempt, $exception->reason, $authorize, $identity);
+            }
+            throw $exception;
+        } catch (OutboundRequestException $exception) {
+            if ($attempt !== null) {
+                $this->settleCheck($target, TargetCheckEvidence::ARVAN_AUTH, $attempt, $exception->reason, $authorize, $identity);
+            }
+            throw new TargetConnectorFailure(
+                __('ArvanCloud connection test failed: :reason', ['reason' => $exception->reason]),
+                null, $exception->reason, $exception->details,
+            );
+        } catch (UnsafeOutboundTarget $exception) {
+            if ($attempt !== null) {
+                $this->settleCheck($target, TargetCheckEvidence::ARVAN_AUTH, $attempt, 'unsafe_target', $authorize, $identity);
+            }
+            throw new TargetConnectorFailure(__('The registered API endpoint is not allowed.'), null, 'unsafe_target');
+        } catch (RuntimeException $exception) {
+            if ($attempt !== null) {
+                $this->settleCheck($target, TargetCheckEvidence::ARVAN_AUTH, $attempt, 'credential_unavailable', $authorize, $identity);
+            }
+            throw new TargetConnectorFailure(
+                __('ArvanCloud API key is unavailable or no longer valid locally.'),
+                null, 'credential_unavailable', [],
+            );
+        }
+    }
+
+    /** Reserve only the exact admitted check. Target mutations invalidate its slot. */
+    private function beginCheck(Target $target, string $kind, Closure $identity, ?Closure $authorize): string
+    {
+        return DB::transaction(function () use ($target, $kind, $identity, $authorize): string {
+            $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->firstOrFail();
+            $this->assertControlAuthority($authorize);
+            $this->requireUnpaused($locked);
+            $identity();
+
+            return TargetCheckEvidence::beginLocked($locked, $kind);
+        });
+    }
+
+    private function settleCheck(Target $target, string $kind, string $attempt, ?string $reason, ?Closure $authorize, ?Closure $identity = null): void
+    {
+        DB::transaction(function () use ($target, $kind, $attempt, $reason, $authorize, $identity): void {
+            $locked = Target::query()->whereKey($target->getKey())->lockForUpdate()->first();
+            if (! $locked instanceof Target || $locked->operations_paused
+                || ! TargetCheckEvidence::isCurrentLocked($target, $locked, $kind, $attempt)
+                || ($authorize !== null && ! $authorize())) {
+                throw new TargetConnectorFailure(__('The Target or check changed; reload and verify current settings.'), null,
+                    $kind === TargetCheckEvidence::ARVAN_AUTH ? 'probe_stale' : 'endpoint_check_stale');
+            }
+            if ($identity !== null) {
+                $identity();
+            }
+            TargetCheckEvidence::recordLocked($locked, $kind, $reason);
+            if ($kind === TargetCheckEvidence::ARVAN_AUTH && $reason === null) {
                 $locked->forceFill([
                     'connection_state' => TargetConnectionState::Connected,
                     'connected_at' => now(),
@@ -377,22 +439,10 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
                     'last_success_at' => now(),
                     'last_error_code' => null,
                 ])->save();
-            });
-
-            return new TargetConnectorResult(statusMessage: __('Authenticated ArvanCloud GET probe succeeded.'));
-        } catch (TargetConnectorFailure $exception) {
-            throw $exception;
-        } catch (OutboundRequestException $exception) {
-            throw new TargetConnectorFailure(
-                __('ArvanCloud connection test failed: :reason', ['reason' => $exception->reason]),
-                null, $exception->reason, $exception->details,
-            );
-        } catch (RuntimeException $exception) {
-            throw new TargetConnectorFailure(
-                __('ArvanCloud API key is unavailable or no longer valid locally.'),
-                null, 'credential_unavailable', [],
-            );
-        }
+            } elseif ($reason !== null) {
+                $locked->forceFill(['last_failure_at' => now(), 'last_failure_code' => $reason])->save();
+            }
+        });
     }
 
     private function assertControlAuthority(?Closure $authorize): void
@@ -413,7 +463,6 @@ final readonly class ArvanApiTargetAdapter implements TargetConnectorAdapter, Ta
         if ((int) $current->transport_revision !== (int) $target->transport_revision
             || ! hash_equals($config->base_url, $currentConfig->base_url)
             || $config->probe_path !== $currentConfig->probe_path
-            || $config->spec_url !== $currentConfig->spec_url
             || ! $currentCredential instanceof TargetCredential
             || ! hash_equals($credential->dispatchFingerprint(), $currentCredential->dispatchFingerprint())) {
             throw new TargetConnectorFailure(

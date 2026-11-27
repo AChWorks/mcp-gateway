@@ -129,7 +129,9 @@ final readonly class SshTargetConnectionService
 
             SshTargetConfig::query()->where('target_record_id', $locked->getKey())
                 ->update(['verification_attempt_id' => null, 'observed_peer_ip' => null, 'observed_at' => null]);
+            TargetCheckEvidence::invalidateLocked($locked, TargetCheckEvidence::SSH_LOGIN);
             $locked->forceFill([
+                'last_tested_at' => null,
                 'connection_state' => TargetConnectionState::Disconnected,
                 'last_error_code' => null,
                 'connected_at' => null,

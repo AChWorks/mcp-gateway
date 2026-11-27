@@ -23,14 +23,11 @@
             <div class="eyebrow">{{ __('Connection and recovery') }}</div>
             <h2 id="target-recovery-title">{{ $recovery['title'] }}</h2>
         </div>
-        <span class="badge badge-{{ $recovery['tone'] === 'caution' ? 'warning' : 'neutral' }}">{{ $recovery['tone'] === 'caution' ? __('Action required') : __('Status') }}</span>
+        <span class="badge badge-{{ ($recovery['tone'] === 'caution' || ($health['attention'] ?? false)) ? 'warning' : 'neutral' }}">{{ ($recovery['tone'] === 'caution' || ($health['attention'] ?? false)) ? __('Action required') : __('Status') }}</span>
     </div>
     <p class="target-recovery-intro" role="status">{{ $recovery['description'] }}</p>
-    @if ($relayUnavailable ?? false)
-        <p class="field-help" role="status">{{ __('The selected Relay is disabled or unavailable. Target authorization remains unchanged. Restore the route or select another one.') }}</p>
-    @endif
     <dl class="target-recovery-grid">
-        <div><dt>{{ __('Reachability evidence') }}</dt><dd>{{ $recovery['reachability'] }}</dd></div>
+        <div><dt>{{ __('Reachability evidence') }}</dt><dd>@if (isset($health) && $health['checks'] !== []) @include('admin.targets.health-status', ['health' => $health]) @else {{ $recovery['reachability'] }} @endif</dd></div>
         <div><dt>{{ __('Authorization') }}</dt><dd>{{ $recovery['authorization'] }}</dd></div>
         <div><dt>{{ __('Ongoing operation') }}</dt><dd>{{ $recovery['operation'] }}</dd></div>
     </dl>

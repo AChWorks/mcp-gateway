@@ -53,6 +53,7 @@ final readonly class WpAiBridgeTargetConnectionService
         $recordId = (string) $target->getKey();
         $configuration = $this->configuration($recordId);
         $routeEpoch = (int) $target->transport_revision;
+        $attempt = $this->beginMetadataCheck($target, (string) $configuration->base_url, $authorize, false);
 
         // Discovery is untrusted remote I/O: never hold a database row lock.
         try {
@@ -61,11 +62,11 @@ final readonly class WpAiBridgeTargetConnectionService
                 $this->discoveryGuard($target, (string) $configuration->base_url, $authorize, false),
             );
         } catch (OutboundRequestException $exception) {
-            $this->recordDiscoveryFailure($recordId, $routeEpoch, (string) $configuration->base_url, $exception->reason);
+            $this->recordDiscoveryFailure($target, $attempt, (string) $configuration->base_url, $exception->reason, true, $authorize);
             throw new WpAiBridgeTargetConnectionException('relay_unavailable',
                 'The selected Connection Relay was not available for WordPress discovery.');
         } catch (BridgeDiscoveryException $exception) {
-            $this->recordDiscoveryFailure($recordId, $routeEpoch, (string) $configuration->base_url, $exception->reason);
+            $this->recordDiscoveryFailure($target, $attempt, (string) $configuration->base_url, $exception->reason, true, $authorize);
             throw new WpAiBridgeTargetConnectionException($exception->reason, 'WordPress metadata could not be verified safely.', $exception->diagnostics);
         }
 
@@ -78,7 +79,7 @@ final readonly class WpAiBridgeTargetConnectionService
         $expiresAt = now()->addSeconds(max(60, (int) config('bridge.oauth.flow_ttl_seconds', 600)));
 
         $this->withLockedTarget((string) $target->getKey(), function (Target $locked) use (
-            $configuration, $discovery, $clientId, $redirect, $stateHash, $verifier, $expiresAt, $routeEpoch, $authorize,
+            $configuration, $discovery, $clientId, $redirect, $stateHash, $verifier, $expiresAt, $routeEpoch, $authorize, $target, $attempt,
         ): void {
             if ($authorize !== null && ! $authorize()) {
                 throw new WpAiBridgeTargetConnectionException('forbidden', 'WordPress control authority changed.');
@@ -92,16 +93,20 @@ final readonly class WpAiBridgeTargetConnectionService
                 throw new WpAiBridgeTargetConnectionException('target_changed', 'The WordPress Target origin changed during discovery.');
             }
 
+            $currentObservation = TargetCheckEvidence::isCurrentLocked($target, $locked, TargetCheckEvidence::WORDPRESS_METADATA, $attempt);
             DB::table('wp_ai_bridge_target_configs')->where('target_record_id', $locked->getKey())->update([
                 'mcp_resource_url' => $discovery->resourceUrl,
                 'oauth_issuer_url' => $discovery->issuerUrl,
                 'oauth_authorization_url' => $discovery->authorizationUrl,
                 'oauth_token_url' => $discovery->tokenUrl,
                 'oauth_revocation_url' => $discovery->revocationUrl,
-                'metadata_checked_at' => now(),
-                'metadata_reachable' => true,
+                ...($currentObservation ? ['metadata_checked_at' => now(), 'metadata_reachable' => true] : []),
                 'updated_at' => now(),
             ]);
+
+            if ($currentObservation) {
+                TargetCheckEvidence::recordLocked($locked, TargetCheckEvidence::WORDPRESS_METADATA);
+            }
 
             $existing = DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->first();
             // A consumed callback may have an in-flight remote token exchange.
@@ -132,7 +137,7 @@ final readonly class WpAiBridgeTargetConnectionService
             $locked->forceFill([
                 'connection_state' => TargetConnectionState::Pending,
                 'last_error_code' => null,
-                'last_tested_at' => now(),
+                ...($currentObservation ? ['last_tested_at' => now()] : []),
             ])->save();
         });
 
@@ -1531,6 +1536,7 @@ final readonly class WpAiBridgeTargetConnectionService
         $recordId = (string) $target->getKey();
         $configuration = $this->configuration($recordId);
         $routeEpoch = (int) $target->transport_revision;
+        $attempt = $this->beginMetadataCheck($target, (string) $configuration->base_url, $authorize, true);
         try {
             $found = $this->discovery->discover(
                 $configuration->base_url, fn () => $this->relays->httpRouteAtEpoch($recordId, $routeEpoch),
@@ -1540,31 +1546,44 @@ final readonly class WpAiBridgeTargetConnectionService
                 throw new BridgeDiscoveryException('target_changed', 'Canonical WordPress origin changed.');
             }
         } catch (OutboundRequestException $exception) {
-            $this->recordDiscoveryFailure($recordId, $routeEpoch, (string) $configuration->base_url, $exception->reason);
+            $this->recordDiscoveryFailure($target, $attempt, (string) $configuration->base_url, $exception->reason, false, $authorize);
             throw new WpAiBridgeTargetConnectionException('relay_unavailable',
                 'The selected Connection Relay was not available for WordPress discovery.');
         } catch (BridgeDiscoveryException $exception) {
-            $this->recordDiscoveryFailure($recordId, $routeEpoch, (string) $configuration->base_url, $exception->reason);
+            $this->recordDiscoveryFailure($target, $attempt, (string) $configuration->base_url, $exception->reason, false, $authorize);
             throw new WpAiBridgeTargetConnectionException($exception->reason, 'WordPress metadata check failed.', $exception->diagnostics);
         }
 
-        $this->withLockedTarget($recordId, function (Target $locked) use ($configuration, $routeEpoch): void {
+        $this->withLockedTarget($recordId, function (Target $locked) use ($configuration, $routeEpoch, $target, $attempt, $authorize): void {
             $current = $this->configuration((string) $locked->getKey());
             if ((int) ($locked->getAttribute('transport_revision') ?? 0) !== $routeEpoch
-                || $current->base_url !== $configuration->base_url) {
+                || $current->base_url !== $configuration->base_url
+                || ($authorize !== null && ($locked->operations_paused || ! $authorize()))
+                || ! TargetCheckEvidence::isCurrentLocked($target, $locked, TargetCheckEvidence::WORDPRESS_METADATA, $attempt)) {
                 throw new WpAiBridgeTargetConnectionException('target_changed', 'WordPress Target changed during the test.');
             }
             // Discovery proof applies only to public metadata. The OAuth
             // credential and pending remote intents stay completely separate.
             DB::table('wp_ai_bridge_target_configs')->where('target_record_id', $locked->getKey())
                 ->update(['metadata_checked_at' => now(), 'metadata_reachable' => true, 'updated_at' => now()]);
+            $previous = DB::table('target_check_evidence')->where('target_record_id', $locked->getKey())
+                ->where('kind', TargetCheckEvidence::WORDPRESS_METADATA)->first();
+            TargetCheckEvidence::recordLocked($locked, TargetCheckEvidence::WORDPRESS_METADATA);
             // A successful metadata probe is not proof that a pending remote
             // revocation was completed; retain its failure status and intent.
             $fields = [
                 'last_tested_at' => now(),
                 'last_success_at' => now(),
             ];
-            if (! $this->hasRevocationIntent($locked) && ! $this->hasRefreshIntent($locked)) {
+
+            if ($previous !== null
+                && $previous->error_code !== null && $locked->last_error_code === $previous->error_code
+                && ! $this->credential($locked) instanceof TargetCredential
+                && ! $this->hasRevocationIntent($locked) && ! $this->hasRefreshIntent($locked)
+                && ! DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->exists()) {
+                if ($locked->getAttribute('connection_state') === TargetConnectionState::Error) {
+                    $fields['connection_state'] = TargetConnectionState::Disconnected;
+                }
                 $fields['last_error_code'] = null;
             }
             $locked->forceFill($fields)->save();
@@ -1689,30 +1708,54 @@ final readonly class WpAiBridgeTargetConnectionService
         });
     }
 
-    private function recordDiscoveryFailure(string $targetRecordId, int $routeEpoch, string $baseUrl, string $reason): void
+    private function beginMetadataCheck(Target $target, string $baseUrl, ?Closure $authorize, bool $test): string
     {
-        $this->withLockedTarget($targetRecordId, function (Target $locked) use ($targetRecordId, $routeEpoch, $baseUrl, $reason): void {
-            if ((int) $locked->transport_revision !== $routeEpoch
-                || (string) $this->configuration($targetRecordId)->base_url !== $baseUrl) {
-                return;
+        return $this->withLockedTarget((string) $target->getKey(), function (Target $locked) use ($target, $baseUrl, $authorize, $test): string {
+            if ($authorize !== null && ! $authorize()) {
+                throw new WpAiBridgeTargetConnectionException('forbidden', 'WordPress control authority changed.');
+            }
+            if ($test && $authorize !== null && $locked->operations_paused) {
+                throw new WpAiBridgeTargetConnectionException('target_paused', 'WordPress Target operations were paused.');
+            }
+            $this->assertCurrentRoute($target, $locked);
+            if ($this->configuration((string) $locked->getKey())->base_url !== $baseUrl) {
+                throw new WpAiBridgeTargetConnectionException('target_changed', 'WordPress Target origin changed.');
             }
 
+            return TargetCheckEvidence::beginLocked($locked, TargetCheckEvidence::WORDPRESS_METADATA);
+        });
+    }
+
+    private function recordDiscoveryFailure(Target $target, string $attempt, string $baseUrl, string $reason, bool $connecting, ?Closure $authorize): void
+    {
+        if (in_array($reason, ['forbidden', 'target_changed', 'target_paused', 'target_not_found'], true)) {
+            return;
+        }
+        $this->withLockedTarget((string) $target->getKey(), function (Target $locked) use ($target, $attempt, $baseUrl, $reason, $connecting, $authorize): void {
+            if (($authorize !== null && (! $authorize() || (! $connecting && $locked->operations_paused)))
+                || ! TargetCheckEvidence::isCurrentLocked($target, $locked, TargetCheckEvidence::WORDPRESS_METADATA, $attempt)
+                || (string) $this->configuration((string) $locked->getKey())->base_url !== $baseUrl) {
+                return;
+            }
+            TargetCheckEvidence::recordLocked($locked, TargetCheckEvidence::WORDPRESS_METADATA, $reason);
             DB::table('wp_ai_bridge_target_configs')->where('target_record_id', $locked->getKey())
                 ->update(['metadata_checked_at' => now(), 'metadata_reachable' => false, 'updated_at' => now()]);
-            if ($this->credential($locked) instanceof TargetCredential
-                || $this->hasRevocationIntent($locked)
-                || DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->exists()) {
-                // A failed metadata probe may not revoke or rebind an existing credential.
-                $locked->forceFill([
-                    'last_tested_at' => now(),
-                    'last_failure_at' => now(),
-                    'last_failure_code' => mb_substr($this->safeError($reason), 0, 64),
-                ])->save();
-
-                return;
+            if (! $this->credential($locked) instanceof TargetCredential
+                && ! $this->hasRevocationIntent($locked) && ! $this->hasRefreshIntent($locked)
+                && ! DB::table('wp_ai_bridge_oauth_flows')->where('target_record_id', $locked->getKey())->exists()) {
+                if ($connecting) {
+                    $this->setFailure($locked, $reason, TargetConnectionState::Error);
+                } else {
+                    // Keep existing diagnostics without inventing an OAuth transition.
+                    $locked->forceFill(['last_error_code' => mb_substr($this->safeError($reason), 0, 64)])->save();
+                }
             }
-            $this->setFailure($locked, $reason, TargetConnectionState::Error);
-            $locked->forceFill(['last_tested_at' => now()])->save();
+            // Public metadata cannot revoke or repair an independent OAuth grant.
+            $locked->forceFill([
+                'last_tested_at' => now(),
+                'last_failure_at' => now(),
+                'last_failure_code' => mb_substr($this->safeError($reason), 0, 64),
+            ])->save();
         });
     }
 

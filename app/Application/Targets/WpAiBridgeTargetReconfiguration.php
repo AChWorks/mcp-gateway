@@ -138,6 +138,7 @@ final readonly class WpAiBridgeTargetReconfiguration
                     'metadata_checked_at' => now(),
                     'metadata_reachable' => true,
                 ])->save();
+                TargetCheckEvidence::recordLocked($locked, TargetCheckEvidence::WORDPRESS_METADATA);
                 $locked->forceFill([
                     'connection_state' => TargetConnectionState::Disconnected,
                     'last_error_code' => null,

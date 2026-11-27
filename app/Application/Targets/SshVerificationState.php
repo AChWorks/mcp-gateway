@@ -101,6 +101,7 @@ final readonly class SshVerificationState
                 'connected_at' => $now,
                 'last_success_at' => $now,
             ])->save();
+            TargetCheckEvidence::recordLocked($locked, TargetCheckEvidence::SSH_LOGIN);
             // Initial managed enrollment can provision a login key until
             // its first successful authentication. Later tunnel reissues
             // must not re-provision that key.
@@ -155,6 +156,7 @@ final readonly class SshVerificationState
                 'last_failure_at' => $now,
                 'last_failure_code' => $reason,
             ])->save();
+            TargetCheckEvidence::recordLocked($locked, TargetCheckEvidence::SSH_LOGIN, $reason);
             $this->activity->recordRequired(CorrelationId::current(), 'ssh-login-verify', 'failure', $locked, $reason);
         });
     }

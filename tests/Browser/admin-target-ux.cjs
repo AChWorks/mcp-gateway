@@ -354,6 +354,9 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
           state+' authenticated test must reference existing and visible help');
       }
       assert.ok(!(await page.content()).includes('synthetic-browser-key-never-provider'));
+      if (state==='no-probe'||state==='no-key') {
+        assert.equal(await page.getByText('Authentication probe not configured (optional)',{exact:true}).count(),1);
+      }
       for(const width of [360,390,768,1440]){
         for(const dark of [false,true]){
           await page.setViewportSize({width,height:950});
@@ -378,6 +381,25 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
         }
       }
     }
+
+    for (const [phase,label] of [['success','Last check succeeded'],['failure','Last check failed'],['changed','Current route not verified']]) {
+      await page.goto(base+'/__browser__/health-evidence/'+phase);
+      assert.equal(await page.getByText(label,{exact:true}).count(),1);
+      if(phase==='changed') assert.ok(await page.getByText(/Historical check:/).count()>0);
+      if(phase==='failure') assert.ok(await page.getByText('fixture_metadata_failure',{exact:true}).count()>0);
+      for(const width of [360,768,1440]) for(const dark of [false,true]) {
+        await page.setViewportSize({width,height:950});
+        await page.emulateMedia({colorScheme:dark?'dark':'light',reducedMotion:'reduce'});
+        assert.ok(await page.getByText(label,{exact:true}).isVisible());
+        assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth<=2),
+          JSON.stringify({phase,width,dark}));
+      }
+    }
+    await page.goto(base+'/admin/targets?needs_review=1&search=ui-health');
+    assert.ok(await page.getByText('ui-health-failure',{exact:true}).count()>0);
+    assert.equal(await page.getByText('ui-health-success',{exact:true}).count(),0);
+    assert.equal(await page.getByText('ui-health-changed',{exact:true}).count(),0);
+    pass('current success, current failure, changed-route evidence and consistent review filter');
 
     // Test the actual native form payload, including CSRF and explicit modes.
     // The response is intercepted before any network/backend dispatch; PHP

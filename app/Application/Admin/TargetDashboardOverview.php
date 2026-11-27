@@ -17,12 +17,13 @@ final readonly class TargetDashboardOverview
         private AccessControl $access,
         private TargetReview $review,
         private TargetConnectorAdmin $connectors,
+        private TargetHealthAdmin $health,
     ) {}
 
     /**
      * Local, scoped and bounded. No connector detail/network call per Target.
      *
-     * @return array{targetCount:int,connectedCount:int,attentionCount:int,pausedCount:int,lifecycle:list<array{state:string,label:string,count:int}>,connectorBreakdown:list<array{type:string,label:string,count:int}>,reviewTargets:list<Target>}
+     * @return array{targetCount:int,connectedCount:int,attentionCount:int,pausedCount:int,lifecycle:list<array{state:string,label:string,count:int}>,connectorBreakdown:list<array{type:string,label:string,count:int}>,reviewTargets:list<Target>,reviewHealth:array<string,mixed>}
      */
     public function forUser(User $user): array
     {
@@ -88,6 +89,7 @@ final readonly class TargetDashboardOverview
             'targets.connector_type',
             'targets.connection_state',
             'targets.operations_paused',
+            'targets.transport_revision',
             'targets.last_failure_at',
             'targets.last_failure_code',
             'targets.last_tested_at',
@@ -103,6 +105,7 @@ final readonly class TargetDashboardOverview
             'lifecycle' => array_values($lifecycle),
             'connectorBreakdown' => $connectorBreakdown,
             'reviewTargets' => $reviewTargets,
+            'reviewHealth' => $this->health->forTargets($reviewTargets),
         ];
     }
 }

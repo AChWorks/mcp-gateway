@@ -69,6 +69,7 @@
                     @php
                         $state = $target->connection_state->value;
                         $attentionState = in_array($state, ['error', 'reconnect_required', 'reassigning'], true);
+                        $health = $reviewHealth[$target->target_id];
                         $evidenceAt = $target->last_failure_at ?? $target->last_tested_at ?? $target->last_success_at;
                         $evidenceLabel = $target->last_failure_at !== null
                             ? __('Failure observation recorded')
@@ -82,15 +83,16 @@
                         </td>
                         <td>
                             <span class="badge badge-{{ $state === 'error' ? 'danger' : 'warning' }}">
-                                {{ $attentionState ? $stateLabels[$state] : __('Unresolved recovery') }}
+                                {{ $attentionState ? $stateLabels[$state] : __('Needs review') }}
                             </span>
                             @if ($target->operations_paused)
                                 <span class="badge badge-neutral">{{ __('Paused') }}</span>
                             @endif
                         </td>
                         <td>
+                            @include('admin.targets.health-status', ['health' => $health, 'reviewOnly' => true])
                             @if ($evidenceAt !== null)
-                                {{ $evidenceLabel }}<br>
+                                {{ __('Diagnostic history') }}: {{ $evidenceLabel }}<br>
                                 <time datetime="{{ $evidenceAt->format(DATE_ATOM) }}">{{ $evidenceAt->format(DATE_ATOM) }}</time>
                             @else
                                 <span class="muted">{{ __('No recorded verification') }}</span>

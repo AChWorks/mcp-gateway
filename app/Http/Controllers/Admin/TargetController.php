@@ -7,6 +7,7 @@ use App\Application\Access\AdministratorPasswordConfirmation;
 use App\Application\Access\OperationAdmission;
 use App\Application\Admin\TargetConnectorAdmin;
 use App\Application\Admin\TargetConnectorAdminPresenter;
+use App\Application\Admin\TargetHealthAdmin;
 use App\Application\Targets\SshManagedReverseHostReadiness;
 use App\Application\Targets\TargetConnectorFailure;
 use App\Application\Targets\TargetConnectorRegistry;
@@ -324,7 +325,7 @@ final class TargetController extends Controller
             ->with('status', $presenter?->registrationStatus() ?? __('Target registered.'));
     }
 
-    public function show(Target $target, TargetConnectorRegistry $connectors, TargetConnectorAdmin $connectorAdmin): View
+    public function show(Target $target, TargetConnectorRegistry $connectors, TargetConnectorAdmin $connectorAdmin, TargetHealthAdmin $health): View
     {
         Gate::authorize(GatewayPermission::TargetsView->value, $target);
 
@@ -345,7 +346,7 @@ final class TargetController extends Controller
 
         return view('admin.targets.show', [
             'target' => $target,
-            'relayUnavailable' => $target->relay_record_id !== null && ! ConnectionRelay::query()->whereKey($target->relay_record_id)->where('enabled', true)->exists(),
+            'health' => $health->forTargets([$target])[$target->target_id],
             'connectorUi' => $presenter?->definition(),
             'canRemoveSafely' => $canRemoveSafely,
             ...$details,

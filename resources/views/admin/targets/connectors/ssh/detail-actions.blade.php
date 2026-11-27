@@ -28,10 +28,7 @@
         @endif
 @endif
 
-@php
-    $managedReverse = \App\Infrastructure\Connectors\SshDirect\SshManagedReverseEnrollment::query()
-        ->where('target_record_id', $target->getKey())->first();
-@endphp
+@php($initialSetup = $managedReverse !== null && $sshHasCredential && $managedReverse->login_public_key !== '')
 @if ($managedReverse !== null)
 @canany(['targets.configure', 'targets.disconnect'], $target)
     <div class="target-subsection">
@@ -46,7 +43,10 @@
         @if ($managedReverse->state !== 'revoked' && $target->usesReverseRoute())
             <details class="target-help-details" @if ($errors->any() && old('managed_reverse_action') === 'reissue') open @endif >
                 <summary><h3 class="admin-disclosure-heading">{{ __('Reissue Managed Reverse route (advanced)') }}</h3></summary>
-            <p class="field-help">{{ __('The managed transport can be reissued with the same Target ID and unchanged login credential. The old token and control key are fenced, and the old listener port is quarantined. Any old Target service must be stopped separately. The new install command is shown once.') }}</p>
+            <p class="field-help">{{ $initialSetup
+                ? __('The new setup command can install the current initial SSH login key.')
+                : __('The transport command preserves existing SSH login credentials and does not restore a deliberately removed login key.') }}
+                {{ __('The old token and control key are fenced, and the old listener port is quarantined. Any old Target service must be stopped separately. The new install command is shown once.') }}</p>
             <form class="form-stack" method="post" action="{{ route('admin.reverse-ssh.targets.reissue', ['target' => $target->target_id]) }}">
                 @csrf
                 <input type="hidden" name="managed_reverse_action" value="reissue">
@@ -58,7 +58,7 @@
                     <label for="reverse_reissue_password">{{ __('Your current Gateway password') }}</label>
                     <input id="reverse_reissue_password" type="password" name="current_password" data-admin-requires-intent required autocomplete="current-password">
                 </div>
-                <button class="button button-secondary" type="submit">{{ __('Reissue one-use install command') }}</button>
+                <button class="button button-secondary" type="submit">{{ $initialSetup ? __('Reissue setup command') : __('Reissue transport command') }}</button>
             </form>
             </details>
         @endif

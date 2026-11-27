@@ -100,13 +100,17 @@ final class AdminConnectorPresentationTest extends TestCase
         $target = $this->target('ssh-no-projection', 'ssh_direct');
         self::assertFalse($target->relationLoaded('sshConfig'));
         [$rows, $queries] = $this->presentWithQueries([$target]);
-        self::assertSame([], $queries);
+        // Two bounded health projection queries; neither lazily loads SSH config.
+        self::assertCount(2, $queries);
+        foreach ($queries as $query) {
+            self::assertStringNotContainsString('ssh_direct_target_configs', $query['query']);
+        }
         self::assertNull($rows['ssh-no-projection']['identity']);
         self::assertSame('SSH', $rows['ssh-no-projection']['label']);
 
         Http::preventStrayRequests();
         $this->actingAs($this->owner())->get('/admin/targets')->assertOk()
-            ->assertSee('No recorded SSH connection verification')
+            ->assertSee('Current route not verified')
             ->assertDontSee('SSH connection verification recorded; not a live check');
         Http::assertNothingSent();
     }
