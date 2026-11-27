@@ -63,6 +63,40 @@ $call = static function (Client $c, string $name, array $args, string $label, ?f
 
     return $result->structuredContent ?? [];
 };
+if (($argv[1] ?? '') === 'wp-oauth') {
+    $mode = $argv[2] ?? '';
+    $directHeaders = ['Authorization' => 'Bearer '.$state['wp_direct']['access_token']];
+    if ($mode === 'direct-denied') {
+        $reply = $http->post($state['wp_direct']['resource'], [
+            'headers' => $directHeaders + ['Accept' => 'application/json, text/event-stream',
+                'MCP-Protocol-Version' => '2025-11-25'],
+            'json' => ['jsonrpc' => '2.0', 'id' => 1, 'method' => 'initialize',
+                'params' => ['protocolVersion' => '2025-11-25', 'capabilities' => (object) [],
+                    'clientInfo' => ['name' => 'installed-oauth-expiry-probe', 'version' => '1']]],
+        ]);
+        echo json_encode(['http_status' => $reply->getStatusCode()], JSON_THROW_ON_ERROR)."\n";
+        exit(0);
+    }
+    $check(in_array($mode, ['direct', 'routed'], true), 'Unsupported disposable OAuth SDK probe.');
+    $direct = $mode === 'direct';
+    $ability = 'gateway-mixed-test/digest-read';
+    $input = ['payload' => 'idle-credential-probe'];
+    try {
+        $client->connect($direct
+            ? new HttpTransport(endpoint: $state['wp_direct']['resource'], headers: $directHeaders, httpClient: $http)
+            : $connect($state['owner_token']));
+        $reply = $direct
+            ? $call($client, 'mcp-adapter-execute-ability', ['ability_name' => $ability, 'parameters' => $input], 'oauth-direct')
+            : $call($client, 'wordpress-ability-execute', ['target_id' => $state['wp_target'], 'ability' => $ability, 'input' => $input], 'oauth-routed');
+        $result = ($reply[$direct ? 'success' : 'ok'] ?? false) === true
+            ? ['ok' => true, 'data' => $reply[$direct ? 'data' : 'result'] ?? null]
+            : ['ok' => false, 'error_code' => $direct ? 'provider_rejected' : ($reply['error']['code'] ?? 'missing')];
+    } finally {
+        $client->disconnect();
+    }
+    echo json_encode($result, JSON_THROW_ON_ERROR)."\n";
+    exit(0);
+}
 try {
     $client->connect($connect($state['owner_token']));
     $tools = array_map(static fn ($t) => $t->name, $client->listTools()->tools);
