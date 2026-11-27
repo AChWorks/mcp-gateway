@@ -82,6 +82,25 @@ final class SshSocketDeadlineTest extends TestCase
         }
     }
 
+    public function test_full_duplex_write_preserves_unread_buffered_packet_bytes(): void
+    {
+        $pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        self::assertIsArray($pair);
+        [$socket, $peer] = $pair;
+        $stream = SshSocketDeadline::wrap($socket, hrtime(true) + 1_000_000_000, 1);
+        try {
+            $packets = str_repeat('0123456789', 50);
+            fwrite($peer, $packets);
+            self::assertSame(substr($packets, 0, 8), stream_get_contents($stream, 8));
+            self::assertSame(5, fwrite($stream, 'reply'));
+            self::assertSame('reply', fread($peer, 5));
+            self::assertSame(substr($packets, 8), stream_get_contents($stream, strlen($packets) - 8));
+        } finally {
+            fclose($stream);
+            fclose($peer);
+        }
+    }
+
     public function test_library_timeout_reset_cannot_extend_a_blocked_write(): void
     {
         $sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);

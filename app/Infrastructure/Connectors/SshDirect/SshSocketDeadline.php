@@ -54,6 +54,17 @@ final class SshSocketDeadline
             throw new SshTargetConnectionException('transfer_unavailable');
         }
 
+        // PHP initially advertises user streams as seekable, even when the
+        // wrapper has no seek method. Its first read-to-write transition
+        // then attempts a seek and discards unread buffered packet bytes.
+        // Discover the non-seekable capability before any network I/O;
+        // this failed seek marks the stream as full-duplex/non-seekable.
+        @fseek($stream, 1, SEEK_CUR);
+        if (stream_get_meta_data($stream)['seekable']) {
+            fclose($stream);
+            throw new SshTargetConnectionException('transfer_unavailable');
+        }
+
         return $stream;
     }
 
