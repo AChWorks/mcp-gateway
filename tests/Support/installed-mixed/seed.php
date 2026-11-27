@@ -16,6 +16,8 @@ use App\Application\Targets\WordpressTargetOperations;
 use App\Application\Targets\WpAiBridgeTargetConnectionService;
 use App\Application\Targets\WpAiBridgeTargetRegistration;
 use App\Domain\Targets\Target;
+use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use App\Infrastructure\Http\SafeHttpClient;
 use App\Infrastructure\OAuth\ClientProfileRegistry;
 use App\Infrastructure\OAuth\League\Entities\ClientEntity;
@@ -24,12 +26,22 @@ use App\Infrastructure\OAuth\League\Repositories\AccessTokenRepository;
 use App\Infrastructure\OAuth\OAuthAuthorizationStore;
 use App\Models\User;
 use Illuminate\Contracts\Console\Kernel;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Support\Facades\DB;
 use League\OAuth2\Server\CryptKey;
+use Symfony\Component\Console\Output\ConsoleOutput;
 
 require dirname(__DIR__, 3).'/vendor/autoload.php';
 $app = require dirname(__DIR__, 3).'/bootstrap/app.php';
 $app->make(Kernel::class)->bootstrap();
+// Laravel's CLI exception renderer can return control to PHP without a
+// nonzero process status. An installed fixture must stop at the failed stage.
+set_exception_handler(static function (Throwable $error): never {
+    app(ExceptionHandler::class)->renderForConsole(
+        new ConsoleOutput, $error,
+    );
+    exit(1);
+});
 $stateFile = (string) getenv('MIXED_STATE_FILE');
 if ($stateFile === '' || ! str_starts_with($stateFile, '/')) {
     throw new RuntimeException('MIXED_STATE_FILE must be an absolute disposable fixture path.');
@@ -72,12 +84,12 @@ if ($mode === 'init') {
     $owner = app(UserAccessManager::class)->create([
         'name' => 'Installed mixed owner', 'email' => 'mixed-owner@example.invalid',
         'password' => bin2hex(random_bytes(20)),
-        'role' => 'owner', 'target_scope_mode' => 'all', 'access_enabled' => true,
+        'role' => 'owner', 'target_scope_mode' => 'all', 'access_enabled' => true, 'ai_access_enabled' => true,
     ], []);
     $operator = app(UserAccessManager::class)->create([
         'name' => 'Installed mixed operator', 'email' => 'mixed-operator@example.invalid',
         'password' => bin2hex(random_bytes(20)),
-        'role' => 'operator', 'target_scope_mode' => 'selected', 'access_enabled' => true,
+        'role' => 'operator', 'target_scope_mode' => 'selected', 'access_enabled' => true, 'ai_access_enabled' => true,
     ], []);
 
     // Exercise the real Owner-configurable DB settings, not just .env defaults.
@@ -89,6 +101,12 @@ if ($mode === 'init') {
         'wp_request_timeout_seconds' => 9,
         'ssh_transfer_max_kib' => 4096,
         'ssh_transfer_max_seconds' => 30,
+        'ssh_command_max_kib' => 512,
+        'ssh_command_stdout_kib' => 512,
+        'ssh_command_stderr_kib' => 512,
+        'ssh_file_read_window_kib' => 512,
+        'ssh_file_write_window_kib' => 512,
+        'wp_ability_input_kib' => 1024,
     ], $settings->state()['version']);
 
     $wp = app(WpAiBridgeTargetRegistration::class)->register(
@@ -122,9 +140,19 @@ if ($mode === 'init') {
     if (($query['state'] ?? null) !== ($callback['state'] ?? null)) {
         throw new RuntimeException('Real WordPress callback state mismatch.');
     }
-    app(WpAiBridgeTargetConnectionService::class)->completeCallback(
+    $wp = app(WpAiBridgeTargetConnectionService::class)->completeCallback(
         (string) $callback['state'], (string) $callback['code'], (string) $callback['iss'], null,
     );
+    // Direct comparison uses the very same downstream grant and WordPress
+    // principal. Never export the refresh token or log any bearer.
+    $credential = TargetCredential::query()->where('target_record_id', $wp->id)
+        ->where('purpose', WpAiBridgeTargetVault::PURPOSE)->sole();
+    $direct = app(WpAiBridgeTargetVault::class)->openCredential($wp, $credential);
+    if ($direct['client_id'] !== 'https://11.22.33.45/oauth/client.json'
+        || ! str_starts_with($direct['resource_url'], 'https://11.22.33.44/')) {
+        throw new RuntimeException('Unexpected disposable downstream grant identity.');
+    }
+    $state['wp_direct'] = ['resource' => $direct['resource_url'], 'access_token' => $direct['access_token']];
     $state['owner_token'] = $token((int) $state['owner_id'], 'https://mixed-sdk.example.test/allowed', true);
     $state['operator_token'] = $token((int) $state['operator_id'], 'https://mixed-sdk.example.test/allowed', true);
     // A once-authorized second profile is disabled after minting: even its

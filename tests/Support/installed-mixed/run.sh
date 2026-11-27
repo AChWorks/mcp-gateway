@@ -2,27 +2,20 @@
 # Disposal boundary: one temporary Unix user, local socket MariaDB and a private netns.
 set -Eeuo pipefail
 SOURCE="$(cd "$(dirname "$0")/../../.." && pwd)"
-EVIDENCE_BASE="${MIXED_EVIDENCE_DIR:-/srv/ai-workspace/mcp-gateway-acceptance-20261012}"
-WP_ARCHIVE="${MIXED_WORDPRESS_ARCHIVE:-/srv/ai-workspace/wpai-r004-agent-runtime/downloads/wordpress-6.9.tar.gz}"
-WP_CLI="${MIXED_WP_CLI_PHAR:-/srv/ai-workspace/wpai-r004-agent-runtime/downloads/wp-cli.phar}"
-WP_BRIDGE_ARCHIVE="${MIXED_WP_BRIDGE_ARCHIVE:-/srv/ai-workspace/mcp-gateway-acceptance-20261012/inputs/wp-ai-bridge-0.5.1.zip}"
-WP_ADAPTER_ARCHIVE="${MIXED_MCP_ADAPTER_ARCHIVE:-/srv/ai-workspace/wpai-r004-agent-runtime/downloads/mcp-adapter-0.7.0.zip}"
-# Released v0.5.1 remains the default. An exact-source Bridge main lane is
-# explicitly opt-in and separately pinned; it is NOT a public Bridge release.
-MIXED_BRIDGE_PROFILE="${MIXED_BRIDGE_PROFILE:-released-0.5.1}"
-case "$MIXED_BRIDGE_PROFILE" in
-  released-0.5.1)
-    PINS="$SOURCE/tests/Support/installed-mixed/fixture-pins.sha256"
-    BRIDGE_PIN_NAME=wp-ai-bridge-0.5.1.zip
-    ;;
-  merged-main-c522ae9)
-    PINS="$SOURCE/tests/Support/installed-mixed/fixture-pins-bridge-main-c522ae9.sha256"
-    BRIDGE_PIN_NAME=wp-ai-bridge-main-c522ae9.zip
-    ;;
-  *)
-    echo "Unsupported Bridge source fixture profile." >&2; exit 2
-    ;;
-esac
+INPUT_BASE="${MIXED_INPUT_DIR:-$(dirname "$SOURCE")/mcp-gateway-installed-inputs}"
+EVIDENCE_BASE="${MIXED_EVIDENCE_DIR:-$(dirname "$SOURCE")/mcp-gateway-installed-evidence}"
+WP_ARCHIVE="${MIXED_WORDPRESS_ARCHIVE:-$INPUT_BASE/wordpress-6.9.tar.gz}"
+WP_CLI="${MIXED_WP_CLI_PHAR:-$INPUT_BASE/wp-cli-2.12.0.phar}"
+WP_BRIDGE_ARCHIVE="${MIXED_WP_BRIDGE_ARCHIVE:-$INPUT_BASE/wp-ai-bridge-0.7.4.zip}"
+WP_ADAPTER_ARCHIVE="${MIXED_MCP_ADAPTER_ARCHIVE:-$INPUT_BASE/mcp-adapter-0.7.0.zip}"
+PINS="$SOURCE/tests/Support/installed-mixed/fixture-pins.sha256"
+WORKER="${MIXED_WORKER_USER:-${SUDO_USER:-aiworker}}"
+if [[ "$(id -u)" -ne 0 ]]; then echo "Disposable runner requires root for unshare/sshd." >&2; exit 2; fi
+if ! worker_uid="$(id -u "$WORKER" 2>/dev/null)" || [[ "$worker_uid" -eq 0 ]]; then
+  echo "Select an existing non-root disposable fixture worker via MIXED_WORKER_USER." >&2; exit 2
+fi
+WORKER_GROUP="$(id -gn "$WORKER")"
+export MIXED_WORKER_USER="$WORKER"
 
 # Pinned artifacts are explicitly sourced from upstream release distributions,
 # not mutable directories of an already installed WordPress site.
@@ -41,7 +34,6 @@ verify_input() {
   }
 }
 
-if [[ "$(id -u)" -ne 0 ]]; then echo "Disposable runner requires root for unshare/sshd." >&2; exit 2; fi
 if [[ "${1:-}" == inside ]]; then
   ROOT="$2"
   source "$ROOT/secrets/fixture-env"
@@ -54,11 +46,11 @@ if [[ "${1:-}" == inside ]]; then
     for pid in "${local_pids[@]}"; do wait "$pid" 2>/dev/null || true; done
   }
   trap finish_netns EXIT
-  runuser -u aiworker -- env PHP_CLI_SERVER_WORKERS=3 php -d curl.cainfo="$ROOT/secrets/tls.crt" \
+  runuser -u "$WORKER" -- env PHP_CLI_SERVER_WORKERS=3 php -d curl.cainfo="$ROOT/secrets/tls.crt" \
     -d openssl.cafile="$ROOT/secrets/tls.crt" -S 127.0.0.1:53801 \
     -t "$ROOT/wp" "$ROOT/wp/router.php" >"$ROOT/logs/wp-http.log" 2>&1 &
   local_pids+=("$!")
-  runuser -u aiworker -- env PHP_CLI_SERVER_WORKERS=3 php -d curl.cainfo="$ROOT/secrets/tls.crt" \
+  runuser -u "$WORKER" -- env PHP_CLI_SERVER_WORKERS=3 php -d curl.cainfo="$ROOT/secrets/tls.crt" \
     -d openssl.cafile="$ROOT/secrets/tls.crt" -S 127.0.0.1:53802 \
     -t "$ROOT/gateway/public" "$ROOT/gateway/public/index.php" >"$ROOT/logs/gateway-http.log" 2>&1 &
   local_pids+=("$!")
@@ -103,33 +95,33 @@ if [[ "${1:-}" == inside ]]; then
     -D - -o /dev/null "https://11.22.33.44/.well-known/oauth-protected-resource" \
     | grep -Ei '^(HTTP/|location:|content-type:)' || true
   cd "$ROOT/gateway"
-  runuser -u aiworker -- php -d curl.cainfo="$ROOT/secrets/tls.crt" \
+  runuser -u "$WORKER" -- php -d curl.cainfo="$ROOT/secrets/tls.crt" \
     -d openssl.cafile="$ROOT/secrets/tls.crt" tests/Support/installed-mixed/probe.php
-  runuser -u aiworker -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" MIXED_SSH_USER="$MIXED_SSH_USER" \
+  runuser -u "$WORKER" -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" MIXED_SSH_USER="$MIXED_SSH_USER" \
     MIXED_SSH_HOST_PUB="$ROOT/secrets/ssh_host.pin" MIXED_SSH_PASSWORD_FILE="$ROOT/secrets/ssh-password" \
     php -d curl.cainfo="$ROOT/secrets/tls.crt" -d openssl.cafile="$ROOT/secrets/tls.crt" \
     tests/Support/installed-mixed/seed.php init
-  runuser -u aiworker -- env MIXED_ROOT="$ROOT" \
+  runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" \
     php -d curl.cainfo="$ROOT/secrets/tls.crt" -d openssl.cafile="$ROOT/secrets/tls.crt" \
     tests/Support/installed-mixed/consent.php
-  runuser -u aiworker -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" MIXED_CALLBACK_FILE="$ROOT/secrets/callback.json" \
+  runuser -u "$WORKER" -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" MIXED_CALLBACK_FILE="$ROOT/secrets/callback.json" \
     php -d curl.cainfo="$ROOT/secrets/tls.crt" -d openssl.cafile="$ROOT/secrets/tls.crt" \
     tests/Support/installed-mixed/seed.php complete
-  runuser -u aiworker -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" \
+  runuser -u "$WORKER" -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" \
     php -d curl.cainfo="$ROOT/secrets/tls.crt" -d openssl.cafile="$ROOT/secrets/tls.crt" tests/Support/installed-mixed/seed.php diagnose
-  runuser -u aiworker -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" \
+  runuser -u "$WORKER" -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" \
     php tests/Support/installed-mixed/seed.php report >"$MIXED_EVIDENCE/report.json"
-  runuser -u aiworker -- env MIXED_BRIDGE_PROFILE="$MIXED_BRIDGE_PROFILE" MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
+  runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
     php "$ROOT/client/client.php" positive >"$MIXED_EVIDENCE/client.json"
-  runuser -u aiworker -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
+  runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
     php "$ROOT/client/file-client.php" >"$MIXED_EVIDENCE/file-client.json"
-  runuser -u aiworker -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
+  runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
     python3 "$ROOT/client/file-client.py" >"$MIXED_EVIDENCE/python-file-client.json"
-  runuser -u aiworker -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" \
+  runuser -u "$WORKER" -- env MIXED_STATE_FILE="$ROOT/secrets/state.json" \
     php tests/Support/installed-mixed/seed.php disable
-  runuser -u aiworker -- env MIXED_ROOT="$ROOT" \
+  runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" \
     php "$ROOT/client/client.php" revoked >"$MIXED_EVIDENCE/revoked.txt"
-  runuser -u aiworker -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
+  runuser -u "$WORKER" -- env MIXED_ROOT="$ROOT" MIXED_SSH_USER="$MIXED_SSH_USER" \
     php "$ROOT/client/file-client.php" revoked >"$MIXED_EVIDENCE/file-revoked.txt"
   echo "PASS installed WordPress and OpenSSH share one Gateway through a real external MCP SDK client."
   exit 0
@@ -144,13 +136,13 @@ fi
 # Validate every input before allocating test users, databases or listeners.
 verify_input wordpress-6.9.tar.gz "$WP_ARCHIVE"
 verify_input wp-cli-2.12.0.phar "$WP_CLI"
-verify_input "$BRIDGE_PIN_NAME" "$WP_BRIDGE_ARCHIVE"
+verify_input wp-ai-bridge-0.7.4.zip "$WP_BRIDGE_ARCHIVE"
 verify_input mcp-adapter-0.7.0.zip "$WP_ADAPTER_ARCHIVE"
 mkdir -p "$EVIDENCE_BASE"
-ROOT="$(mktemp -d /srv/ai-workspace/mcp-gateway-installed-112-XXXXXX)"
+WORK_BASE="$(realpath -e "${MIXED_WORK_ROOT:-${TMPDIR:-/tmp}}")"
+ROOT="$(mktemp -d "$WORK_BASE/mcp-gateway-installed-112-XXXXXX")"
 EVIDENCE="$(mktemp -d "$EVIDENCE_BASE/real-installed-mixed-112-XXXXXX")"
 MIXED_SSH_USER="mcpac$RANDOM$RANDOM"
-[[ ! -d "/home/$MIXED_SSH_USER" ]] || exit 2
 DB_PID=''
 CREATED_USER=0
 cleanup() {
@@ -177,21 +169,25 @@ cleanup() {
   fi
   if [[ -n "$DB_PID" ]]; then kill "$DB_PID" 2>/dev/null || true; wait "$DB_PID" 2>/dev/null || true; fi
   if [[ "$CREATED_USER" -eq 1 ]]; then userdel -r "$MIXED_SSH_USER" >/dev/null 2>&1 || true; fi
-  ssh_state=removed
-  if getent passwd "$MIXED_SSH_USER" >/dev/null; then ssh_state=LEAKED; status=1; fi
-  if [[ "$ROOT" == /srv/ai-workspace/mcp-gateway-installed-112-* ]]; then
+  ssh_state=not_created
+  if [[ "$CREATED_USER" -eq 1 ]]; then
+    ssh_state=removed
+    if getent passwd "$MIXED_SSH_USER" >/dev/null || [[ -d "/home/$MIXED_SSH_USER" ]]; then ssh_state=LEAKED; status=1; fi
+  fi
+  if [[ "$ROOT" == "$WORK_BASE"/mcp-gateway-installed-112-* ]]; then
     rm -rf -- "$ROOT"
   fi
   fixture_state=removed
   if [[ -e "$ROOT" ]]; then fixture_state=LEAKED; status=1; fi
   printf 'cleanup_status=%d\nnamespace_components=stopped\nssh_account=%s\ndatabase=removed\nprivate_fixture=%s\n' \
     "$status" "$ssh_state" "$fixture_state" >"$EVIDENCE/cleanup.txt"
-  chown -R aiworker:aiworker "$EVIDENCE"
+  chown -R "$WORKER:$WORKER_GROUP" "$EVIDENCE"
   chmod 600 "$EVIDENCE"/*.txt "$EVIDENCE"/*.json 2>/dev/null || true
   echo "Disposable cleanup completed; sanitized evidence: $EVIDENCE"
   exit "$status"
 }
 trap cleanup EXIT
+[[ ! -d "/home/$MIXED_SSH_USER" ]] && ! getent passwd "$MIXED_SSH_USER" >/dev/null || { echo "Disposable SSH account name already exists." >&2; exit 2; }
 mkdir -p "$ROOT"/{wp,gateway,secrets,db,client,logs}
 chmod 700 "$ROOT" "$ROOT/secrets"
 # Export only version-controlled bytes from the exact commit. Git-ignored
@@ -216,11 +212,11 @@ printf 'source_export=git_archive_exact_head\nignored_checkout_state_imported=no
 # Install dependencies independently from the committed Composer lockfile:
 # never copy the checkout's ignored vendor directory or generated autoload.
 # Keep the private fixture root accessible only to its dedicated worker.
-chown aiworker:aiworker "$ROOT"
-chown -R aiworker:aiworker "$ROOT/gateway"
-runuser -u aiworker -- sh -c 'cd "$1" && composer install --no-dev --no-interaction --prefer-dist --no-progress --optimize-autoloader' \
+chown "$WORKER:$WORKER_GROUP" "$ROOT"
+chown -R "$WORKER:$WORKER_GROUP" "$ROOT/gateway"
+runuser -u "$WORKER" -- sh -c 'cd "$1" && composer install --no-dev --no-interaction --prefer-dist --no-progress --optimize-autoloader' \
   sh "$ROOT/gateway" >"$ROOT/logs/composer-install.log" 2>&1
-runuser -u aiworker -- sh -c 'cd "$1" && composer check-platform-reqs --no-dev' sh "$ROOT/gateway" \
+runuser -u "$WORKER" -- sh -c 'cd "$1" && composer check-platform-reqs --no-dev' sh "$ROOT/gateway" \
   >"$ROOT/logs/composer-platform.log" 2>&1
 # Composer may create bootstrap manifests; freshly generate them on installed
 # first boot, not from prior builds. Every writable runtime path starts empty.
@@ -232,7 +228,7 @@ mkdir -p "$ROOT/gateway/bootstrap/cache" \
   "$ROOT/gateway/storage/framework/sessions" \
   "$ROOT/gateway/storage/framework/testing" \
   "$ROOT/gateway/storage/framework/views" "$ROOT/gateway/storage/logs"
-chown -R aiworker:aiworker "$ROOT/gateway/storage" "$ROOT/gateway/bootstrap/cache"
+chown -R "$WORKER:$WORKER_GROUP" "$ROOT/gateway/storage" "$ROOT/gateway/bootstrap/cache"
 if find "$ROOT/gateway/storage" "$ROOT/gateway/bootstrap/cache" -type f -print -quit | grep -q .; then
   echo 'Fresh installed Gateway unexpectedly contains runtime state.' >&2
   exit 1
@@ -363,12 +359,12 @@ BRIDGE_REMOTE_REQUEST_TIMEOUT_SECONDS=6
 BRIDGE_REMOTE_MAX_RESPONSE_BYTES=65536
 BRIDGE_REMOTE_READONLY_TOOL_MAX_RESPONSE_BYTES=262144
 EOF_LARAVEL
-chown -R aiworker:aiworker "$ROOT" "$EVIDENCE"
+chown -R "$WORKER:$WORKER_GROUP" "$ROOT" "$EVIDENCE"
 chmod 700 "$ROOT" "$ROOT/secrets"
 chmod 600 "$ROOT/gateway/.env" "$ROOT/secrets/"*
-runuser -u aiworker -- mariadb-install-db --no-defaults --datadir="$ROOT/db" \
+runuser -u "$WORKER" -- mariadb-install-db --no-defaults --datadir="$ROOT/db" \
     --auth-root-authentication-method=normal --skip-test-db >"$ROOT/logs/db-install.log" 2>&1
-runuser -u aiworker -- mariadbd --no-defaults --datadir="$ROOT/db" \
+runuser -u "$WORKER" -- mariadbd --no-defaults --datadir="$ROOT/db" \
     --socket="$ROOT/db.sock" --skip-networking --pid-file="$ROOT/db.pid" \
     --log-error="$ROOT/logs/mariadb.log" --innodb-buffer-pool-size=64M &
 DB_PID="$!"
@@ -382,39 +378,51 @@ done
 [[ "$ready_db" -eq 1 ]] || { echo "Private MariaDB socket startup failed." >&2; exit 1; }
 mysql --no-defaults -uroot --socket="$ROOT/db.sock" \
     -e 'CREATE DATABASE wordpress CHARACTER SET utf8mb4; CREATE DATABASE gateway CHARACTER SET utf8mb4;'
-runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
+runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
     config create --dbname=wordpress --dbuser=root --dbpass='' --dbhost="localhost:$ROOT/db.sock" \
     --skip-check >"$ROOT/logs/wp-config.log" 2>&1
-runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
+runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
     core install --url="https://11.22.33.44" --title="Disposable real WP" \
     --admin_user=mixedadmin --admin_password="$(cat "$ROOT/secrets/wp-password")" \
     --admin_email="mixed@example.invalid" --skip-email >"$ROOT/logs/wp-install.log" 2>&1
-runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
+runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
     option update home 'https://11.22.33.44' >"$ROOT/logs/wp-site-url.log" 2>&1
-runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
+runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
     option update siteurl 'https://11.22.33.44' >>"$ROOT/logs/wp-site-url.log" 2>&1
-runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
+runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
     plugin activate mcp-adapter wp-ai-bridge >"$ROOT/logs/wp-plugins.log" 2>&1
-if [[ "$MIXED_BRIDGE_PROFILE" == merged-main-c522ae9 ]]; then
-  runuser -u aiworker -- env MIXED_LARGE_POST_FILE="$ROOT/secrets/large-content.json" \
+runuser -u "$WORKER" -- env MIXED_LARGE_POST_FILE="$ROOT/secrets/large-content.json" \
     php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
     eval-file "$ROOT/gateway/tests/Support/installed-mixed/large-content.php" \
     >"$ROOT/logs/large-content.log" 2>&1
-fi
-runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
+runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
     option update permalink_structure '/%postname%/' >"$ROOT/logs/wp-rewrite.log" 2>&1
-runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
+runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
     rewrite flush >>"$ROOT/logs/wp-rewrite.log" 2>&1
 # Restrict all groups to their defaults except Native Abilities, needed solely
 # for the newly installed read-only provider; mutating groups remain off.
-echo "Stage: WordPress Bridge settings"; runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
-    option update wp_ai_bridge_settings '{"site_read":1,"native_abilities":1}' --format=json >/dev/null
-echo "Stage: WordPress OAuth client approval"; runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
-    option update wp_ai_bridge_oauth_clients '["https://11.22.33.45/oauth/client.json"]' --format=json >/dev/null
+echo "Stage: WordPress Bridge settings"; runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
+    --user=mixedadmin option update wp_ai_bridge_settings '{"site_read":1,"native_abilities":1}' --format=json >/dev/null
+echo "Stage: WordPress native payload settings"
+runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" --user=mixedadmin \
+    option update wp_ai_bridge_payload_limits '{"response_kib":512,"text_window_kib":128}' --format=json >/dev/null
+runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" --user=mixedadmin \
+    option update wp_ai_bridge_transfer_limits '{"request_kib":1024}' --format=json >/dev/null
+runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" --user=mixedadmin eval '
+    $payload=(new \WP_AI_Bridge\Support\Payload_Settings())->all();
+    $transfer=(new \WP_AI_Bridge\Support\Transfer_Settings())->all();
+    if ($payload["response_kib"] !== 512 || $payload["text_window_kib"] !== 128 || $transfer["request_kib"] !== 1024) {
+        throw new RuntimeException("Installed Bridge effective payload settings mismatch.");
+    }
+    echo json_encode(["response_kib"=>$payload["response_kib"],"text_window_kib"=>$payload["text_window_kib"],
+        "request_kib"=>$transfer["request_kib"]], JSON_THROW_ON_ERROR)."\n";
+' >"$EVIDENCE/wp-policy.json"
+echo "Stage: WordPress OAuth client approval"; runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" \
+    --user=mixedadmin option update wp_ai_bridge_oauth_clients '["https://11.22.33.45/oauth/client.json"]' --format=json >/dev/null
 echo "Stage: Gateway migration"; cd "$ROOT/gateway"
-runuser -u aiworker -- php artisan migrate --force >"$ROOT/logs/gateway-migrations.log" 2>&1
-runuser -u aiworker -- php artisan gateway:oauth-keygen --force >"$ROOT/logs/gateway-oauth-keygen.log" 2>&1
-runuser -u aiworker -- php artisan gateway:bridge-client-keygen --force >"$ROOT/logs/gateway-bridge-keygen.log" 2>&1
+runuser -u "$WORKER" -- php artisan migrate --force >"$ROOT/logs/gateway-migrations.log" 2>&1
+runuser -u "$WORKER" -- php artisan gateway:oauth-keygen --force >"$ROOT/logs/gateway-oauth-keygen.log" 2>&1
+runuser -u "$WORKER" -- php artisan gateway:bridge-client-keygen --force >"$ROOT/logs/gateway-bridge-keygen.log" 2>&1
 echo "PASS installed fresh WordPress 6.9, WP AI Bridge, MCP Adapter, private MariaDB migrations and Gateway keys."
 # Evidence is sanitized. Raw HTTP logs, bearer material and disposable secrets
 # are never copied into GitHub, chat responses or persistent evidence.
@@ -422,14 +430,11 @@ echo "PASS installed fresh WordPress 6.9, WP AI Bridge, MCP Adapter, private Mar
   printf 'source_head=%s\n' "$(git -c safe.directory="$SOURCE" -C "$SOURCE" rev-parse HEAD)"
   printf 'source_tree=%s\n' "$(git -c safe.directory="$SOURCE" -C "$SOURCE" rev-parse HEAD^{tree})"
   printf 'source_version=%s\n' "$(cat "$ROOT/gateway/VERSION")"
-  printf 'bridge_fixture_profile=%s\n' "$MIXED_BRIDGE_PROFILE"
-  if [[ "$MIXED_BRIDGE_PROFILE" == merged-main-c522ae9 ]]; then
-    printf 'bridge_merged_source_sha=%s\n' 'c522ae99bd11926eb74c007d187354013202fc4c'
-  fi
-  printf 'wordpress_version=%s\n' "$(runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" core version)"
+  printf 'bridge_fixture_profile=official_pinned_release\n'
+  printf 'wordpress_version=%s\n' "$(runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" core version)"
   for plugin in wp-ai-bridge mcp-adapter; do
     printf '%s_version=%s\n' "$plugin" \
-      "$(runuser -u aiworker -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" plugin get "$plugin" --field=version)"
+      "$(runuser -u "$WORKER" -- php "$ROOT/wp-cli.phar" --path="$ROOT/wp" plugin get "$plugin" --field=version)"
   done
   # Identical SHA-256 preflight on source inputs and retained identity evidence.
   for spec in \
@@ -444,8 +449,10 @@ echo "PASS installed fresh WordPress 6.9, WP AI Bridge, MCP Adapter, private Mar
   printf 'php_version=%s\n' "$(php -r 'echo PHP_VERSION;')"
   printf 'mariadb_version=%s\n' "$(mariadbd --version | head -1)"
   printf 'installed_identity=source-copy-plus-ephemeral-client-provider-only\n'
-  printf 'public_release=v2.0.3-not-deployed\n'
+  printf 'deployment=none_disposable_source_install_only\n'
 } >"$EVIDENCE/identity.txt"
 export MIXED_EVIDENCE="$EVIDENCE"
-unshare -nm -- "$ROOT/gateway/tests/Support/installed-mixed/run.sh" inside "$ROOT"
+# PID namespace lifetime guarantees that PHP/sshd/socat descendants cannot
+# outlive the private network fixture even when a child wrapper fails.
+unshare --net --mount --pid --fork --kill-child --mount-proc -- "$ROOT/gateway/tests/Support/installed-mixed/run.sh" inside "$ROOT"
 echo "PASS all live installed Gateway, WordPress and SSH acceptance stages."

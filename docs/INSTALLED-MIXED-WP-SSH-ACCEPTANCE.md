@@ -37,7 +37,7 @@ The installed Owner changes the existing typed operational settings through
 the normal settings service to prove DB overrides (3s connect, 9s request,
 96 KiB normal and 512 KiB readonly), plus 4 MiB/30 seconds for
 the optional SSH whole-file profile, distinct from the disposable
-configuration fallback. The fixed 8 MiB body bound remains enforced.
+configuration fallback. The fixture also sets the existing 512 KiB SSH command/output and inline file windows and a 1024 KiB WordPress Ability input setting. The installed Bridge's own native request and response budgets are configured independently (1024 KiB request, 512 KiB response and 128 KiB text windows). The independent HTTP body limit remains in force.
 No production account, web property, server listener, credential or SSRF
 policy is changed. Do not run on user-owned/production sites.
 
@@ -47,9 +47,9 @@ Prerequisites: root authorization for `unshare` and a temporary Unix SSH
 account, PHP 8.4 plus Composer dependencies, MariaDB, OpenSSH, `socat`,
 `ip`, `openssl`, `runuser`, WP-CLI, and a compatible Linux kernel.
 
-The runner uses deliberately pinned fixtures: WordPress 6.9 core archive, WP-CLI v2.12.0 PHAR, WordPress MCP Adapter v0.7.0 release ZIP and WP AI Bridge v0.5.1 release ZIP. Obtain the **actual required byte-identical artifacts** from the [official WordPress release archive](https://wordpress.org/download/releases/), [WP-CLI](https://github.com/wp-cli/wp-cli/releases/tag/v2.12.0), [MCP Adapter](https://github.com/WordPress/mcp-adapter/releases/tag/v0.7.0) and [WP AI Bridge](https://github.com/AChWorks/wp-ai-bridge/releases/tag/v0.5.1) when the runner's pinned fixtures require them. Existing plugin installation directories are **not** acceptable inputs.
+The runner uses deliberately pinned fixtures: WordPress 6.9 core archive, WP-CLI v2.12.0 PHAR, WordPress MCP Adapter v0.7.0 release ZIP and WP AI Bridge v0.7.4 release ZIP. Obtain the **actual required byte-identical artifacts** from the [official WordPress release archive](https://wordpress.org/download/releases/), [WP-CLI](https://github.com/wp-cli/wp-cli/releases/tag/v2.12.0), [MCP Adapter](https://github.com/WordPress/mcp-adapter/releases/tag/v0.7.0) and [WP AI Bridge](https://github.com/AChWorks/wp-ai-bridge/releases/tag/v0.7.4) when the runner's pinned fixtures require them. Existing plugin installation directories are **not** acceptable inputs.
 
-**Host portability boundary:** `tests/Support/installed-mixed/run.sh` currently uses explicit `/srv/ai-workspace/` defaults for fixture inputs, temporary installation and evidence output. The fixture input and evidence directories can be overridden with the supported `MIXED_*` variables, **but the script's temporary installed workroot itself is still hard-coded under that parent**. Do not claim the runner is portable to arbitrary hosts merely by changing the variables; provision an authorized disposable Linux host with that private writable workroot, or deliberately refactor/verify the runner separately before use. Never create/modify these fixtures on a production host.
+The [Installed Mixed Acceptance workflow](../.github/workflows/installed-mixed-acceptance.yml) runs on a disposable GitHub-hosted Linux runner when the fixture or its workflow changes, and can be dispatched separately for a selected revision. It fetches the official pinned inputs and runs the same script as a separately authorized Linux fixture host. The suite is deliberately not a full installed-provider test on every unrelated PR. Use it for relevant provider acceptance and before recording a final installed compatibility claim. Never run it on a production host.
 
 The committed `tests/Support/installed-mixed/fixture-pins.sha256` is the
 **single authoritative pin manifest**. The archive/PHAR digests match
@@ -70,15 +70,18 @@ actually match):
 sudo bash tests/Support/installed-mixed/run.sh
 ```
 
-The runner accepts these optional read-only fixture input paths (the shell script also provides its own host-specific defaults):
+The runner accepts these environment overrides. Defaults are relative to the checkout or the host's temporary directory; input and evidence directories can be outside the checkout.
 
-| Environment variable | Expected source artifact |
+| Environment variable | Expected source artifact or setting |
 | --- | --- |
 | `MIXED_WORDPRESS_ARCHIVE` | Pinned official WordPress 6.9 `.tar.gz` |
 | `MIXED_WP_CLI_PHAR` | Pinned WP-CLI v2.12.0 `.phar` |
-| `MIXED_WP_BRIDGE_ARCHIVE` | Pinned WP AI Bridge v0.5.1 release ZIP |
+| `MIXED_WP_BRIDGE_ARCHIVE` | Pinned WP AI Bridge v0.7.4 release ZIP |
 | `MIXED_MCP_ADAPTER_ARCHIVE` | Pinned MCP Adapter v0.7.0 release ZIP |
-| `MIXED_EVIDENCE_DIR` | writable private evidence destination |
+| `MIXED_INPUT_DIR` | Directory of four pinned artifacts; defaults to sibling mcp-gateway-installed-inputs |
+| `MIXED_EVIDENCE_DIR` | Private evidence destination; defaults to sibling mcp-gateway-installed-evidence |
+| `MIXED_WORK_ROOT` | Existing temporary parent; defaults to TMPDIR or /tmp |
+| `MIXED_WORKER_USER` | Existing non-root fixture user; defaults to SUDO_USER or aiworker |
 
 Use byte-identical, pinned artifacts at an alternate trusted local path if
 the default path is unavailable. Unsupported versions or a changed archive
@@ -105,12 +108,11 @@ MariaDB directory. After success or failure, the test namespace exits and
 the owned SSH account, database, listeners and private files are removed.
 Do not preserve sensitive fixture data for debugging.
 
-The runner prints the actual private sanitized evidence destination under its configured `MIXED_EVIDENCE_DIR` (or the script's host-specific default).
+The runner prints the actual private sanitized evidence destination under its configured `MIXED_EVIDENCE_DIR`. The hosted workflow reports only explicitly selected sanitized files, not fixture state, tokens, keys or raw HTTP logs.
 Review `identity.txt`, `source-export.txt`, `report.json`, `client.json`,
 `revoked.txt` and `cleanup.txt` (all owner-readable with private permissions). The report
 includes effective Owner settings and finite HTTP limits; the client report
-includes SFTP byte size, digest, representative latency and peak SDK
-memory. Repeat the command to prove clean reproducibility.
+includes actual wire body sizes, SFTP byte size, digest, representative latency and peak SDK memory. The Bridge effective settings are recorded separately in `wp-policy.json`. Repeat the command to prove clean reproducibility.
 
 ## Required same-runtime assertions
 
@@ -119,8 +121,17 @@ memory. Repeat the command to prove clean reproducibility.
 - Introduce a **new** WordPress mu-plugin native Ability while the
   independent SDK session is already established; rediscover and execute it
   without touching Gateway allowlists. Another provider Ability must deny.
-- Verified OpenSSH host key, SSH command, real SFTP write/stat/read,
+- Compare direct Adapter and routed MCP discovery/results using the same real
+  downstream WordPress grant and principal. A disposable native read-only
+  Ability hashes 1,000,000 input bytes and reports its WordPress principal;
+  both routes must return the exact expected size, SHA-256 and identity.
+- Read a complete native Unicode document through source-bound 128 KiB windows
+  and verify its SHA-256, completion and wrong-hash continuation rejection.
+- Verified OpenSSH host key, SSH command, real 512 KiB inline SFTP write/stat/read,
   byte and SHA-256 equality; denied path and cross-Target misuse.
+- Independently captured 512 KiB stdout and stderr through real HTTPS MCP,
+  truthful truncation when stdout exceeds its window by one byte, and exit 7.
+- Preserve the separate PHP and Python whole-file transfer proofs.
 - Default deny, signed user/Target isolation and ungranted client-profile
   rejection; a previously valid bearer must be rejected after user disable.
 - Bounded HTTP deadlines, representative latency, transferred bytes,
@@ -128,7 +139,7 @@ memory. Repeat the command to prove clean reproducibility.
 
 ## Boundaries and review gate
 
-The isolated clients can prove that **their own** authenticated inbound/outbound SSH file bytes are complete; they cannot prove full external OAuth client enrollment, every reverse-proxy/DNS topology, arbitrary third-party host compatibility, WordPress-native raw binary transfer or actual ChatGPT model-file ingestion. Use distinct real-host acceptance for those properties.
+The isolated clients can prove that **their own** authenticated inbound/outbound SSH file bytes are complete; they cannot prove full external OAuth client enrollment, every reverse-proxy/DNS topology, arbitrary third-party host compatibility, WordPress-native raw binary transfer or actual ChatGPT model-file ingestion. The near-1 MiB native read-only Ability is not a proof for every mutating Ability, arbitrary request encoding, SSH maximum command input or detached Job script size. Host proxy limits, near-maximum durations, concurrency and actual external client capacity require separate evidence. Use distinct real-host acceptance for those properties.
 
 The Gateway source `VERSION` and public release tags must be reported
 separately from installed identities; passing tests is not deployment.
