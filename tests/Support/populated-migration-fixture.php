@@ -12,13 +12,19 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Infrastructure\Connectors\SshDirect\SshTargetVault;
 use App\Infrastructure\Connectors\WpAiBridge\WpAiBridgeTargetVault;
 use Illuminate\Contracts\Console\Kernel;
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Symfony\Component\Process\Process;
 
-if ($argc !== 4 || ! in_array($argv[2], ['seed', 'verify', 'digest'], true)) {
-    throw new RuntimeException('Usage: populated-migration-fixture.php <installation> seed|verify|digest <snapshot>');
+$mode = $argv[2] ?? '';
+if (! in_array($mode, ['seed', 'verify', 'digest', 'schema', 'observations', 'restart', 'interrupt'], true)
+    || $argc !== ($mode === 'interrupt' ? 6 : 4)) {
+    throw new RuntimeException('Invalid populated migration fixture invocation.');
 }
 chdir($argv[1]);
 require 'vendor/autoload.php';
@@ -79,7 +85,7 @@ function fixtureRows(string $table): array
     return $rows;
 }
 
-function fixtureDigest(): string
+function fixtureDigest(bool $schemaOnly = false): string
 {
     $tables = DB::select('SHOW FULL TABLES WHERE Table_type = "BASE TABLE"');
     $names = array_map(static fn ($row) => (string) array_values((array) $row)[0], $tables);
@@ -88,7 +94,9 @@ function fixtureDigest(): string
     foreach ($names as $name) {
         requireFixture(preg_match('/^[a-z0-9_]+$/D', $name) === 1, 'Unexpected fixture table name.');
         $ddl = array_values((array) DB::selectOne('SHOW CREATE TABLE '.$name))[1];
-        $data[$name] = ['schema' => $ddl, 'rows' => fixtureRows($name)];
+        $data[$name] = $schemaOnly
+            ? preg_replace('/ AUTO_INCREMENT=\d+/', '', $ddl)
+            : ['schema' => $ddl, 'rows' => fixtureRows($name)];
     }
 
     return hash('sha256', json_encode($data, JSON_THROW_ON_ERROR));
@@ -136,8 +144,130 @@ function fixtureBatch(Target $target, int $actor, string $state, string $binding
     return $id;
 }
 
-if ($argv[2] === 'digest') {
-    echo fixtureDigest();
+/**
+ * Real executed SQL boundaries, not simulated migration objects. The child
+ * exits before Laravel can write its migration-ledger entry. Closing its DB
+ * connection rolls back uncommitted DML but cannot undo MariaDB DDL.
+ */
+function fixtureInterruptions(): array
+{
+    return [
+        '0001_01_01_000003_preserve_delegated_permission_boundaries' => [['insert ignore into user_permission_denials', 1]],
+        '0001_01_01_000004_detach_ssh_login_from_transport' => [['update target_credentials', 1]],
+        '0001_01_01_000005_move_reverse_to_target_transport' => [['alter table targets rename column relay_binding_revision', 1]],
+        '0001_01_01_000006_add_credential_authority_revision' => [['alter table target_credentials add authority_revision', 1]],
+        '0001_01_01_000007_bind_queued_batches_to_credential_authority' => [['update target_batch_items', 2]],
+        '0001_01_01_000008_record_batch_dispatch_evidence' => [['alter table target_batch_items add effect_admitted', 1]],
+        '0001_01_01_000009_record_ssh_job_attempt_evidence' => [['alter table ssh_command_jobs add original_peer_fingerprint', 1]],
+        '0001_01_01_000010_record_target_check_evidence' => [
+            ['create table target_check_evidence', 1],
+            ['insert ignore into target_check_evidence', 1],
+            ['update targets set last_error_check_kind', 1],
+        ],
+    ];
+}
+
+function fixtureAssertOwnedDatabase(string $snapshot): void
+{
+    $data = json_decode(file_get_contents($snapshot), true, 512, JSON_THROW_ON_ERROR);
+    foreach ($data['targets'] as $id => $unused) {
+        requireFixture(DB::table('targets')->where('id', $id)->where('target_id', 'like', 'qa-pop-%')->exists(),
+            'Interrupted migration fixture must own the exact populated test database.');
+    }
+    requireFixture(count($data['targets']) > 0, 'Missing populated fixture identity.');
+}
+
+if ($mode === 'digest' || $mode === 'schema') {
+    echo fixtureDigest($mode === 'schema');
+    exit(0);
+}
+
+if ($mode === 'observations') {
+    echo hash('sha256', json_encode(fixtureRows('target_check_evidence'), JSON_THROW_ON_ERROR));
+    exit(0);
+}
+
+if ($mode === 'interrupt') {
+    fixtureAssertOwnedDatabase($argv[3]);
+    $migration = $argv[4];
+    $boundary = (int) $argv[5];
+    [$prefix, $occurrence] = fixtureInterruptions()[$migration][$boundary] ?? throw new RuntimeException('Unknown migration checkpoint.');
+    requireFixture(! DB::table('migrations')->where('migration', $migration)->exists(), 'Migration already recorded.');
+    $seen = 0;
+    DB::listen(static function (QueryExecuted $query) use ($prefix, $occurrence, &$seen): void {
+        $sql = strtolower(str_replace(chr(96), '', $query->sql));
+        if (str_starts_with($sql, $prefix) && ++$seen === $occurrence) {
+            echo 'INTERRUPTED after executed SQL: '.$prefix.' #'.$occurrence."\n";
+            exit(86);
+        }
+    });
+    Artisan::call('migrate', ['--force' => true, '--path' => 'database/migrations/'.$migration.'.php']);
+    throw new RuntimeException('Expected interruption did not occur: '.$migration.' / '.$prefix);
+}
+
+if ($mode === 'restart') {
+    fixtureAssertOwnedDatabase($argv[3]);
+    $script = __FILE__;
+    $snapshot = json_decode(file_get_contents($argv[3]), true, 512, JSON_THROW_ON_ERROR);
+    $applied = DB::table('migrations')->pluck('migration')->all();
+    $files = app('migrator')->getMigrationFiles(database_path('migrations'));
+    foreach ($files as $migration => $path) {
+        if (in_array($migration, $applied, true)) {
+            continue;
+        }
+        foreach (fixtureInterruptions()[$migration] ?? [] as $boundary => [$prefix, $occurrence]) {
+            $before = $migration === '0001_01_01_000004_detach_ssh_login_from_transport' ? fixtureDigest() : null;
+            $queued = $migration === '0001_01_01_000007_bind_queued_batches_to_credential_authority'
+                ? DB::table('target_batch_items')->whereIn('id', $snapshot['converted'])->pluck('target_binding_hash', 'id')->all() : null;
+            $child = new Process([PHP_BINARY, $script, $argv[1], 'interrupt', $argv[3], $migration, (string) $boundary]);
+            $child->setTimeout(60);
+            $child->run();
+            requireFixture($child->getExitCode() === 86 && str_contains($child->getOutput(), 'INTERRUPTED after executed SQL: '.$prefix),
+                'Expected SQL interruption not observed: '.$migration.' / '.$prefix.' (exit '.($child->getExitCode() ?? 'unknown').')');
+            echo $child->getOutput();
+            requireFixture(! DB::table('migrations')->where('migration', $migration)->exists(), 'Interrupted migration was falsely recorded.');
+            if ($before !== null) {
+                requireFixture(fixtureDigest() === $before, 'Uncommitted SSH credential conversion did not roll back exactly.');
+            }
+            if ($queued !== null) {
+                $after = DB::table('target_batch_items')->whereIn('id', array_keys($queued))->pluck('target_binding_hash', 'id')->all();
+                requireFixture(count(array_diff_assoc($after, $queued)) === 1,
+                    'Expected exactly one committed queued authority conversion before interruption.');
+            }
+            if ($prefix === 'update targets set last_error_check_kind') {
+                $target = DB::table('targets')->where('target_id', 'qa-pop-wp-metadata-error')->sole();
+                requireFixture($target->last_error_check_kind === null
+                    && ! DB::table('target_check_evidence')->where('target_record_id', $target->id)->exists(),
+                    'Uncommitted WordPress observation and lifecycle provenance must roll back together.');
+            }
+        }
+        // Resume through the normal installed Artisan entrypoint, not
+        // direct calls to up(). This also works when a newer baseline has
+        // already recorded part or all of these historical migrations.
+        $resume = new Process([PHP_BINARY, 'artisan', 'migrate', '--force', '--no-interaction', '--path=database/migrations/'.$migration.'.php']);
+        $resume->setTimeout(60);
+        $resume->mustRun();
+        requireFixture(DB::table('migrations')->where('migration', $migration)->count() === 1,
+            'Resumed migration was not recorded exactly once: '.$migration);
+        echo 'PASS: resumed '.$migration."\n";
+    }
+    requireFixture(array_keys($files) === DB::table('migrations')->orderBy('migration')->pluck('migration')->all(),
+        'Migration ledger incomplete after restart.');
+    if (Schema::hasTable('target_check_evidence')) {
+        requireFixture(collect(Schema::getForeignKeys('target_check_evidence'))->contains(
+            static fn (array $key): bool => $key['columns'] === ['target_record_id']
+                && $key['foreign_table'] === 'targets' && $key['foreign_columns'] === ['id']
+                && $key['on_delete'] === 'cascade',
+        ), 'Resumed check-evidence table lost its Target cascade foreign key.');
+        DB::transaction(static function (): void {
+            $target = fixtureTarget('qa-pop-restart-cascade', 'ssh_direct', 'connected');
+            DB::table('target_check_evidence')->insert(['target_record_id' => $target->id, 'kind' => 'ssh_login']);
+            DB::table('targets')->where('id', $target->id)->delete();
+            requireFixture(! DB::table('target_check_evidence')->where('target_record_id', $target->id)->exists(),
+                'Native Target deletion did not cascade after migration restart.');
+        });
+    }
+    echo "PASS: all pending migrations resumed with exact ledger identities.\n";
     exit(0);
 }
 
@@ -197,8 +327,19 @@ if ($argv[2] === 'seed') {
             'original_auth_method' => $config->auth_method, 'original_host_key_digest' => hash('sha256', $pin)]);
     }
     DB::table('ssh_reverse_managed_retired_ports')->insert(['listener_port' => 18499, 'target_id' => 'qa-retired', 'retired_at' => now()]);
-    foreach (['ready', 'refresh', 'revoke', 'flow'] as $kind) {
-        $target = fixtureTarget('qa-pop-wp-'.$kind, 'wp_ai_bridge', $kind === 'flow' ? 'pending' : 'connected');
+    $wordpressKinds = ['ready', 'refresh', 'revoke', 'flow'];
+    if (! Schema::hasTable('target_check_evidence')) {
+        $wordpressKinds[] = 'metadata-error';
+    }
+    foreach ($wordpressKinds as $kind) {
+        $metadataError = $kind === 'metadata-error';
+        $failedAt = now()->subMinute();
+        $target = fixtureTarget('qa-pop-wp-'.$kind, 'wp_ai_bridge',
+            $metadataError ? 'error' : ($kind === 'flow' ? 'pending' : 'connected'),
+            $metadataError ? [
+                'last_error_code' => 'metadata_unreachable', 'last_failure_code' => 'metadata_unreachable',
+                'last_failure_at' => $failedAt, 'last_tested_at' => $failedAt,
+            ] : []);
         $base = 'https://'.$kind.'.example.test';
         $resource = $base.'/mcp';
         $client = 'https://gateway.example.test/client.json';
@@ -206,7 +347,10 @@ if ($argv[2] === 'seed') {
             'base_url' => $base, 'base_url_hash' => hash('sha256', $base), 'mcp_resource_url' => $resource,
             'oauth_issuer_url' => $base, 'oauth_authorization_url' => $base.'/authorize',
             'oauth_token_url' => $base.'/token', 'oauth_revocation_url' => $base.'/revoke',
-            'metadata_checked_at' => now(), 'metadata_reachable' => true]);
+            'metadata_checked_at' => $metadataError ? now()->subMinutes(2) : now(), 'metadata_reachable' => ! $metadataError]);
+        if ($metadataError) {
+            continue;
+        }
         $vault = app(WpAiBridgeTargetVault::class);
         $expires = now()->addHour();
         if ($kind === 'flow') {
@@ -363,7 +507,14 @@ if ($upgrade) {
         && ! DB::table('target_batch_items')->whereNotNull('late_observation_ciphertext')->exists()
         && ! DB::table('ssh_command_jobs')->whereNotNull('original_peer_fingerprint')->exists()
         && ! DB::table('ssh_command_jobs')->whereNotNull('launch_observation_ciphertext')->exists(), 'Legacy dispatch evidence was invented.');
-    requireFixture(DB::table('target_check_evidence')->where('kind', 'ssh_login')->count() >= 4,
-        'Recorded SSH check evidence was not imported.');
+    requireFixture(DB::table('target_check_evidence')->where('kind', 'ssh_login')->count() === 4,
+        'Recorded SSH check evidence was not imported exactly.');
+    $metadataError = DB::table('targets')->where('target_id', 'qa-pop-wp-metadata-error')->sole();
+    $observation = DB::table('target_check_evidence')->where('target_record_id', $metadataError->id)
+        ->where('kind', 'wordpress_metadata')->sole();
+    requireFixture($metadataError->last_error_check_kind === 'wordpress_metadata'
+        && $observation->error_code === 'metadata_unreachable'
+        && Carbon::parse($observation->observed_at)->equalTo(Carbon::parse($metadataError->last_tested_at)),
+        'Metadata-only error provenance or observation was lost.');
 }
 echo "Verified populated installed identities, native secrets, protocol intents and retained journals.\n";

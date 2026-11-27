@@ -27,6 +27,15 @@ return new class extends Migration
                 $table->primary(['target_record_id', 'kind']);
             });
         }
+        // MariaDB/MySQL commit CREATE TABLE and ADD FOREIGN KEY separately.
+        // If the process stopped between them, the table exists but the
+        // cascade contract is still missing. Complete it before any backfill.
+        if (! Schema::hasForeignKey('target_check_evidence', ['target_record_id'])) {
+            Schema::table('target_check_evidence', static function (Blueprint $table): void {
+                $table->foreign('target_record_id')->references('id')->on('targets')->cascadeOnDelete();
+            });
+        }
+
         // Import only observations whose legacy fields establish the same
         // current generation. Ambiguous older records remain diagnostic history.
         DB::table('targets')->where('connector_type', 'ssh_direct')

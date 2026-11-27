@@ -213,6 +213,8 @@ bash "$(dirname "$0")/test-v3-updater-http.sh" "$site" "$tmp" "$from" "$to"
 ( cd "$site" && sha256sum --check --strict "$tmp/preserve.sha256" >/dev/null )
 ( cd "$site" && php artisan gateway:check --no-interaction >/dev/null )
 php "$fixture" "$site" verify "$tmp/populated.json"
+upgraded_schema="$(php "$fixture" "$site" schema "$tmp/populated.json")"
+upgraded_observations="$(php "$fixture" "$site" observations "$tmp/populated.json")"
 # Reconstruct the original schema from the backup, not by overlaying a dump
 # onto the new tables. The explicit disposable-db guard above also governs
 # the existing migrate:fresh. Never do this against an installed Gateway.
@@ -223,10 +225,19 @@ db_native mariadb < "$tmp/baseline.sql"
 }
 php "$fixture" "$tmp/baseline" verify "$tmp/populated.json"
 [[ "$(php "$tmp/snapshot.php" "$tmp/baseline")" == "$before_data" ]] || { echo "Restored baseline identity mismatch." >&2; exit 1; }
-# Reapply the candidate migrations to the restored released schema, proving
-# recovery is usable and the translated authorities remain deterministic.
-( cd "$site" && php artisan migrate --force --no-interaction >/dev/null )
+# Interrupt actual pending migrations at committed DDL/DML and transaction
+# boundaries, then resume using the installed candidate. The final schema
+# (including constraints/indexes) must match an uninterrupted browser update.
+php "$fixture" "$site" restart "$tmp/populated.json"
 php "$fixture" "$site" verify "$tmp/populated.json"
-echo "PASS: native MariaDB backup restored to an empty schema, exact row digest and original native vaults verified, then migrated again."
+[[ "$(php "$fixture" "$site" schema "$tmp/populated.json")" == "$upgraded_schema" ]] || {
+  echo "Interrupted migration recovery produced a different schema." >&2; exit 1;
+}
+[[ "$(php "$fixture" "$site" observations "$tmp/populated.json")" == "$upgraded_observations" ]] || {
+  echo "Interrupted migration recovery produced different check observations." >&2; exit 1;
+}
+[[ "$(php "$tmp/snapshot.php" "$site")" == "$before_data" ]] || { echo "Resumed installation identity mismatch." >&2; exit 1; }
+( cd "$site" && php artisan gateway:check --no-interaction >/dev/null )
+echo "PASS: native MariaDB backup restored to an empty schema, exact row digest and native vaults verified, interrupted migrations resumed with identical schema and healthy runtime."
 [[ -d "$site/storage/app/private/update-backups" ]] || { echo "Code backup not retained." >&2; exit 1; }
 printf 'PASS: verified released v%s -> v%s v3 browser updater stage+finish; persistent data, keys, grants, public host state, and health intact.\n' "$from" "$to"
