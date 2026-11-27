@@ -149,7 +149,7 @@ names = ["queue", "busy", "wp", "wp-denied", "sftp", "foreign", "cancel", "wp-st
          "status", "recovered", "cancel-status", "capacity-wp-cancel", "interrupt-status", "processes"]
 data = {name: json.loads((p / (name + ".json")).read_text()) for name in names}
 data["db_status_samples"] = {
-    name: {k: int(v) for k, v in (line.split("\t") for line in
+    name: {k: None if v == "NULL" else int(v) for k, v in (line.split("\t") for line in
            (p / (name + ".tsv")).read_text().splitlines())}
     for name in ("db-before", "db-overlap", "db-after")
 }
