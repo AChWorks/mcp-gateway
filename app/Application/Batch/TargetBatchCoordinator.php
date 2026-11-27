@@ -20,6 +20,7 @@ final readonly class TargetBatchCoordinator
     public function __construct(
         private TargetBatchPlanner $planner,
         private DeferredBatchAuthority $authority,
+        private TargetBatchJournal $journal,
     ) {}
 
     /**
@@ -187,13 +188,17 @@ final readonly class TargetBatchCoordinator
             DB::table('target_batches')->where('id', $batch->id)->update([
                 'cancel_requested_at' => $now, 'status' => 'cancel_requested', 'updated_at' => $now,
             ]);
-            // Queued = definitely not dispatched. In-flight means only a
-            // cancellation REQUEST, not remote process termination.
+            // Queued or explicitly never-admitted claims can be retired.
+            // Other in-flight claims only receive a cancellation request;
+            // this is not remote process termination.
             DB::table('target_batch_items')->where('batch_id', $batch->id)->where('status', 'queued')
                 ->update(['status' => 'canceled', 'finished_at' => $now, 'updated_at' => $now]);
             DB::table('target_batch_items')->where('batch_id', $batch->id)->where('status', 'dispatching')
+                ->where('effect_admitted', false)
+                ->update(['status' => 'canceled', 'finished_at' => $now, 'updated_at' => $now]);
+            DB::table('target_batch_items')->where('batch_id', $batch->id)->where('status', 'dispatching')
                 ->update(['status' => 'cancel_requested', 'updated_at' => $now]);
-            $this->aggregate($current->id);
+            $this->journal->aggregate($current->id);
         }, 3);
 
         return $this->summary(DB::table('target_batches')->where('id', $id)->firstOrFail());
@@ -289,31 +294,5 @@ final readonly class TargetBatchCoordinator
         }
 
         return $batch;
-    }
-
-    /** Locked parent context; recompute parent state from real child evidence. */
-    private function aggregate(string $id): void
-    {
-        $batch = DB::table('target_batches')->where('id', $id)->first();
-        if ($batch === null) {
-            return;
-        }
-        $counts = DB::table('target_batch_items')->where('batch_id', $id)
-            ->selectRaw('status, count(*) as total')->groupBy('status')->pluck('total', 'status')->all();
-        $pending = (int) ($counts['queued'] ?? 0) + (int) ($counts['dispatching'] ?? 0)
-            + (int) ($counts['cancel_requested'] ?? 0);
-        $succeeded = (int) ($counts['completed'] ?? 0);
-        $unknown = (int) ($counts['outcome_unknown'] ?? 0);
-        $canceled = (int) ($counts['canceled'] ?? 0);
-        $state = $pending > 0
-            ? ($batch->cancel_requested_at !== null ? 'cancel_requested' : ($succeeded > 0 ? 'running' : 'queued'))
-            : ($unknown > 0 ? 'outcome_unknown'
-                : ($succeeded === (int) $batch->target_count ? 'completed'
-                    : ($canceled === (int) $batch->target_count ? 'canceled'
-                        : ($succeeded > 0 || $canceled > 0 ? 'partial' : 'failed'))));
-        DB::table('target_batches')->where('id', $id)->update([
-            'status' => $state, 'updated_at' => now(),
-            'finished_at' => $pending === 0 ? now() : null,
-        ]);
     }
 }

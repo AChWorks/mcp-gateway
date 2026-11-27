@@ -2,13 +2,16 @@
 
 namespace Tests\Feature\Mcp;
 
+use App\Application\Access\AccessControl;
 use App\Application\Mcp\SshCommandMcpToolHandlers;
 use App\Application\Mcp\SshJobMcpToolHandlers;
 use App\Application\Targets\SshCommandRuntime;
+use App\Application\Targets\SshFileRuntime;
 use App\Application\Targets\SshJobCoordinator;
 use App\Application\Targets\SshTargetConnectionService;
 use App\Application\Targets\SshTargetReconfiguration;
 use App\Application\Targets\SshTargetRegistration;
+use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
@@ -19,6 +22,7 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetConfig;
 use App\Models\User;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -161,13 +165,15 @@ final class SshJobFixtureTest extends TestCase
         self::assertSame($binding, SshTargetBinding::hash($target->fresh(), $config->fresh()));
         self::assertNotSame($credential->encrypted_payload, $credential->fresh()->encrypted_payload);
         self::assertFalse($denied['ok']);
-        self::assertSame('outcome_unknown', $denied['error']['code']);
-        self::assertSame('launch_unknown', $denied['result']['status']);
-        self::assertFalse($denied['result']['complete']);
+        self::assertSame('target_changed', $denied['error']['code']);
+        self::assertSame('failed', $denied['result']['status']);
+        self::assertTrue($denied['result']['complete']);
+        self::assertFalse($denied['result']['launch_admitted']);
+        self::assertSame('pre_launch_failed', $denied['result']['terminal_reason']);
         self::assertFalse($denied['result']['retry_safe']);
         $id = $denied['result']['job_id'];
         self::assertSame('/var/tmp/.mcp-gateway-job-'.$id, $directory);
-        self::assertSame('launch_unknown', DB::table('ssh_command_jobs')->where('id', $id)->value('status'));
+        self::assertSame('failed', DB::table('ssh_command_jobs')->where('id', $id)->value('status'));
 
         // Inspect the original endpoint independently: no published script,
         // wrapper, detached systemd unit or script effect, and no staging
@@ -181,8 +187,9 @@ final class SshJobFixtureTest extends TestCase
                 .')" = not-found && find '.escapeshellarg($directory).' -mindepth 1 -print',
         );
         self::assertSame(0, $proof['exit_code'], json_encode($proof));
-        self::assertSame('', $proof['stdout'], 'No script, wrapper, or temporary file may remain.');
-        $cleanup = app(SshCommandRuntime::class)->run($owner, $proofTarget, 'rmdir -- '.escapeshellarg($directory));
+        self::assertSame($directory.'/.job-identity'."\n", $proof['stdout'], 'Only the private artifact witness may remain.');
+        $cleanup = app(SshCommandRuntime::class)->run($owner, $proofTarget,
+            'rm -- '.escapeshellarg($directory.'/.job-identity').' && rmdir -- '.escapeshellarg($directory));
         self::assertSame(0, $cleanup['exit_code'], json_encode($cleanup));
     }
 
@@ -216,6 +223,15 @@ final class SshJobFixtureTest extends TestCase
         self::assertFalse($started['ok']);
         self::assertSame('job_unsupported', $started['error']['code']);
         self::assertSame('unsupported', $started['result']['status']);
+        self::assertSame('host_unsupported', $started['result']['terminal_reason']);
+        self::assertFalse($started['result']['launch_admitted']);
+        $evidence = json_decode(Crypt::decryptString(
+            DB::table('ssh_command_jobs')->where('id', $started['result']['job_id'])->value('launch_observation_ciphertext'),
+        ), true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame('completed', $evidence['status']);
+        self::assertSame(0, $evidence['exit_code']);
+        self::assertSame('job_unsupported', $evidence['error_code']);
+        self::assertArrayNotHasKey('provider_cause', $evidence['diagnostics']);
         $directory = '/var/tmp/.mcp-gateway-job-'.$started['result']['job_id'];
 
         $probe = app(SshCommandMcpToolHandlers::class)->run(
@@ -337,8 +353,8 @@ SH;
             'reverse-job-fixture', 'Reverse SSH Job fixture', 'fixture.example.test',
             (int) getenv('SSH_FIXTURE_PORT_MODERN'), (string) getenv('SSH_FIXTURE_USER'),
             trim((string) file_get_contents((string) getenv('SSH_FIXTURE_ED25519_HOST_PUB'))),
-            'private_key', (string) file_get_contents((string) getenv('SSH_FIXTURE_RSA_LOGIN_KEY')),
-            (string) getenv('SSH_FIXTURE_KEY_PASSPHRASE'),
+            'private_key', (string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_PRIVATE_KEY')),
+            getenv('SSH_JOB_FIXTURE_PASSPHRASE') ?: null,
             null, 'reverse', $forwardPort, 'job-test-forward',
         );
         // Use actual transport login, not merely a fake Connected flag.
@@ -360,7 +376,42 @@ SH;
         self::assertTrue($start['ok'], json_encode($start));
         $id = $start['result']['job_id'];
         self::assertSame($expectedBinding, DB::table('ssh_command_jobs')->where('id', $id)->value('target_binding_hash'));
+        $otherRequest = (string) Str::uuid();
+        $active = $tools->start($owner, $target->target_id, $client, $otherRequest, 'sleep 90', 120);
+        self::assertTrue($active['ok'], json_encode($active));
+        $activeId = $active['result']['job_id'];
+        $firstPage = $tools->list($owner, $target->target_id, $client, limit: 1);
+        self::assertSame($activeId, $firstPage['result']['jobs'][0]['job_id']);
+        $cursor = $firstPage['result']['next_cursor'];
+        self::assertIsString($cursor);
 
+        // Switch only the path, using the real reconfiguration and pinned
+        // login. No old route/grant is reused for these fresh follow-ups.
+        $reconfiguration = app(SshTargetReconfiguration::class);
+        $reconfiguration->update($target, [
+            'configuration_revision' => $reconfiguration->revision($target),
+            'ssh_host' => $config->host, 'ssh_port' => $config->port,
+            'ssh_username' => $config->username, 'ssh_host_key' => $config->pinned_host_key,
+            'ssh_auth_method' => 'private_key', 'ssh_trust_confirmed' => 'yes',
+            'ssh_route_mode' => 'direct',
+        ]);
+        $target->refresh();
+        // Route-only changes preserve the credential/connection lifecycle
+        // but invalidate the previous path's verification observation.
+        self::assertSame(TargetConnectionState::Connected, $target->connection_state);
+        self::assertNull($target->last_tested_at);
+        self::assertSame('direct', $target->transportKind());
+        self::assertNotSame($expectedBinding, SshTargetBinding::hash($target, $config->fresh()));
+        self::assertSame($id, $tools->list($owner, $target->target_id, $client, cursor: $cursor, limit: 1)['result']['jobs'][0]['job_id']);
+        self::assertSame($id, $tools->start($owner, $target->target_id, $client, $requestId, 'printf reverse_retained_job_ok', 60)['result']['job_id']);
+        app(SshTargetConnectionService::class)->test($target);
+        $target->refresh();
+        self::assertSame(TargetConnectionState::Connected, $target->connection_state);
+        self::assertNotSame($expectedBinding, SshTargetBinding::hash($target, $config->fresh()));
+
+        $stop = $tools->cancel($owner, $target->target_id, $client, $activeId);
+        self::assertSame('canceled', $stop['result']['status'] ?? null, json_encode($stop));
+        self::assertTrue($stop['result']['remote_observed']);
         $status = null;
         for ($attempt = 0; $attempt < 30; $attempt++) {
             $status = $tools->status($owner, $target->target_id, $client, $id);
@@ -375,9 +426,375 @@ SH;
         $output = $tools->output($owner, $target->target_id, $client, $id, 'stdout', 0, 16384);
         self::assertTrue($output['ok'], json_encode($output));
         self::assertSame('reverse_retained_job_ok', base64_decode((string) $output['result']['data'], true));
+        self::assertSame($expectedBinding, DB::table('ssh_command_jobs')->where('id', $id)->value('target_binding_hash'));
+
+        // Refuse output on a fresh route if the private original artifact
+        // witness is not present. Restore the exact fixture witness after.
+        $marker = '/var/tmp/.mcp-gateway-job-'.$id.'/.job-identity';
+        $runtime = app(SshCommandRuntime::class);
+        $hide = $runtime->run($owner, $target, 'mv -- '.escapeshellarg($marker).' '.escapeshellarg($marker.'.fixture'));
+        self::assertSame(0, $hide['exit_code']);
+        try {
+            $denied = $tools->output($owner, $target->target_id, $client, $id, 'stdout');
+            self::assertFalse($denied['ok'], json_encode($denied));
+            self::assertSame('job_identity_unverified', $denied['error']['code']);
+            self::assertArrayNotHasKey('result', $denied);
+        } finally {
+            $restore = $runtime->run($owner, $target, 'mv -- '.escapeshellarg($marker.'.fixture').' '.escapeshellarg($marker));
+            self::assertSame(0, $restore['exit_code']);
+        }
         $discovered = $tools->list($owner, $target->target_id, $client);
         self::assertTrue($discovered['ok'], json_encode($discovered));
-        self::assertNotEmpty($discovered['result']['jobs']);
+        self::assertCount(2, $discovered['result']['jobs']);
+        DB::table('ssh_command_jobs')->whereIn('id', [$id, $activeId])->update(['expires_at' => now()->subMinute()]);
+        self::assertSame(2, app(SshJobCoordinator::class)->prune());
+    }
+
+    public function test_retained_job_sftp_reads_recheck_command_scope_on_every_native_session(): void
+    {
+        $actor = User::query()->create([
+            'name' => 'Retained read scope fixture',
+            'email' => 'retained-scope-'.bin2hex(random_bytes(5)).'@example.test',
+            'password' => 'CorrectHorse!234', 'role' => 'operator',
+            'target_scope_mode' => 'all', 'access_enabled' => true,
+        ]);
+        $target = app(SshTargetRegistration::class)->register(
+            'retained-read-fixture', 'Disposable retained read fixture', 'fixture.example.test',
+            (int) getenv('SSH_JOB_FIXTURE_PORT'), (string) getenv('SSH_JOB_FIXTURE_USER'),
+            trim((string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_HOST_KEY'))),
+            'private_key', (string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_PRIVATE_KEY')),
+            getenv('SSH_JOB_FIXTURE_PASSPHRASE') ?: null,
+        );
+        app(SshTargetConnectionService::class)->test($target);
+        $target->refresh();
+        self::assertSame(TargetConnectionState::Connected, $target->connection_state);
+        $client = hash('sha256', 'retained-read-scope');
+        $tools = app(SshJobMcpToolHandlers::class);
+        $request = (string) Str::uuid();
+        $script = 'head -c 1114112 /dev/zero';
+        $start = $tools->start($actor, $target->target_id, $client, $request, $script, 60);
+        self::assertTrue($start['ok'], json_encode($start));
+        $id = $start['result']['job_id'];
+        // Use a fresh builder: SQLite limited updates mutate the selected
+        // columns to rowid, so reusing a builder after value()/update()
+        // can read rowid instead of the requested journal field.
+        $row = static fn () => DB::table('ssh_command_jobs')->where('id', $id);
+        $binding = $row()->value('target_binding_hash');
+        for ($i = 0; $i < 10; $i++) {
+            $status = $tools->status($actor, $target->target_id, $client, $id);
+            if (($status['result']['status'] ?? null) === 'completed') {
+                break;
+            }
+            sleep(1);
+        }
+        self::assertSame('completed', $status['result']['status'] ?? null, json_encode($status));
+        $directory = '/var/tmp/.mcp-gateway-job-'.$id;
+        $grant = static fn (GatewayPermission $permission) => DB::table('user_target_permission_denials')
+            ->where('user_id', $actor->getKey())->where('target_record_id', $target->getKey())
+            ->where('permission', $permission->value);
+        $deny = static function (GatewayPermission $permission) use ($actor, $target): void {
+            DB::table('user_target_permission_denials')->insert([
+                'user_id' => $actor->getKey(), 'target_record_id' => $target->getKey(),
+                'permission' => $permission->value, 'created_at' => now(), 'updated_at' => now(),
+            ]);
+        };
+        $credential = TargetCredential::query()->where('target_record_id', $target->getKey())->sole();
+        $credentialId = (string) $credential->getKey();
+        $fence = 0;
+        $reads = 0;
+        DB::listen(static function (QueryExecuted $event) use (&$fence, &$reads, &$credentialId, $deny): void {
+            if ($fence > 0 && SftpAdmissionProbe::readsCredential($event, $credentialId) && ++$reads === $fence) {
+                // This listener is at the real native admission's credential
+                // read, BEFORE its current combined permission decision.
+                $deny(GatewayPermission::SshCommandRun);
+            }
+        });
+        $atFence = static function (int $boundary, callable $operation) use (&$fence, &$reads): array {
+            $reads = 0;
+            $fence = $boundary;
+            try {
+                $response = $operation();
+                self::assertSame($boundary, $reads, json_encode($response));
+                self::assertFalse($response['ok'], json_encode($response));
+                self::assertSame('forbidden', $response['error']['code']);
+
+                return $response;
+            } finally {
+                $fence = 0;
+            }
+        };
+        $output = static fn () => $tools->output($actor, $target->target_id, $client, $id, 'stdout', 1048570, 16);
+        $positive = $output();
+        self::assertTrue($positive['ok'], json_encode($positive));
+        self::assertTrue($positive['result']['truncated']);
+
+        // Original binding: pre-login, before the actual payload get, and
+        // the next session's pre-login for the separate truncation marker.
+        foreach ([1, 3, 5] as $boundary) {
+            try {
+                $rejected = $atFence($boundary, $output);
+                self::assertArrayNotHasKey('result', $rejected);
+                self::assertTrue(app(AccessControl::class)->allows($actor, GatewayPermission::SshFileRead, $target));
+                self::assertFalse(app(AccessControl::class)->allows($actor, GatewayPermission::SshCommandRun, $target));
+                if ($boundary === 1) {
+                    // Independent ordinary SFTP scope must remain usable.
+                    $plain = app(SshFileRuntime::class)->read($actor, $target, $directory.'/stdout', 0, 1);
+                    self::assertSame(base64_encode("\0"), $plain['data']);
+                }
+            } finally {
+                $grant(GatewayPermission::SshCommandRun)->delete();
+            }
+        }
+
+        // Simulate a remote-completed Job whose last local status response
+        // was lost. Its actual exit marker exists on the disposable host.
+        self::assertSame(1, $row()->update(['status' => 'running', 'exit_code' => null, 'terminal_reason' => null]));
+        self::assertNull($row()->value('exit_code'));
+        foreach (['status', 'cancel'] as $operation) {
+            try {
+                $rejected = $atFence(3, static fn () => $tools->{$operation}($actor, $target->target_id, $client, $id));
+                self::assertFalse($rejected['result']['remote_observed']);
+                self::assertNull($row()->value('exit_code'));
+                self::assertSame($operation === 'cancel' ? 'cancel_requested' : 'running', $row()->value('status'));
+            } finally {
+                $grant(GatewayPermission::SshCommandRun)->delete();
+            }
+        }
+        self::assertSame('completed', $tools->status($actor, $target->target_id, $client, $id)['result']['status']);
+
+        // Reconfigure an alias, not the peer/account. Reverify using the
+        // real transport. The retained Job now needs the artifact witness.
+        $config = SshTargetConfig::query()->where('target_record_id', $target->getKey())->sole();
+        $reconfigure = app(SshTargetReconfiguration::class);
+        $reconfigure->update($target, [
+            'configuration_revision' => $reconfigure->revision($target),
+            'ssh_host' => 'fixture-rebound.example.test', 'ssh_port' => $config->port,
+            'ssh_username' => $config->username, 'ssh_host_key' => $config->pinned_host_key,
+            'ssh_auth_method' => 'private_key', 'ssh_trust_confirmed' => 'yes',
+            'ssh_route_mode' => 'direct',
+        ]);
+        app(SshTargetConnectionService::class)->test($target->fresh());
+        $target->refresh();
+        self::assertSame(TargetConnectionState::Connected, $target->connection_state);
+        self::assertNotSame($binding, SshTargetBinding::hash($target, $config->fresh()));
+        $credentialId = (string) TargetCredential::query()->where('target_record_id', $target->getKey())->sole()->getKey();
+        // Pre-login, post-login, directory/marker metadata, witness bytes,
+        // then post-witness authority before the requested file's metadata.
+        foreach ([5, 6, 7] as $boundary) {
+            try {
+                $rejected = $atFence($boundary, $output);
+                self::assertArrayNotHasKey('result', $rejected);
+            } finally {
+                $grant(GatewayPermission::SshCommandRun)->delete();
+            }
+        }
+        $positive = $output();
+        self::assertTrue($positive['ok'], json_encode($positive));
+        self::assertSame(base64_encode(str_repeat("\0", 6)), $positive['result']['data']);
+        self::assertTrue($positive['result']['truncated']);
+        self::assertSame(1, $row()->update(['status' => 'running', 'exit_code' => null, 'terminal_reason' => null]));
+        self::assertNull($row()->value('exit_code'));
+        try {
+            $rejected = $atFence(6, static fn () => $tools->status($actor, $target->target_id, $client, $id));
+            self::assertFalse($rejected['result']['remote_observed']);
+            self::assertNull($row()->value('exit_code'));
+        } finally {
+            $grant(GatewayPermission::SshCommandRun)->delete();
+        }
+        self::assertSame('completed', $tools->status($actor, $target->target_id, $client, $id)['result']['status']);
+
+        // Optional SFTP rights do not become mandatory for command-only
+        // status or local history. Nor can retained reads borrow write scope.
+        $active = $tools->start($actor, $target->target_id, $client, (string) Str::uuid(), 'sleep 30', 60);
+        self::assertTrue($active['ok'], json_encode($active));
+        $activeId = $active['result']['job_id'];
+        $deny(GatewayPermission::SshFileRead);
+        $deny(GatewayPermission::SshFileWrite);
+        try {
+            $status = $tools->status($actor, $target->target_id, $client, $activeId);
+            self::assertTrue($status['ok'], json_encode($status));
+            self::assertSame('running', $status['result']['status']);
+            self::assertTrue($status['result']['remote_observed']);
+            self::assertCount(2, $tools->list($actor, $target->target_id, $client)['result']['jobs']);
+            self::assertSame($id, $tools->start($actor, $target->target_id, $client, $request, $script, 60)['result']['job_id']);
+        } finally {
+            $grant(GatewayPermission::SshFileRead)->delete();
+            $grant(GatewayPermission::SshFileWrite)->delete();
+        }
+        $stop = $tools->cancel($actor, $target->target_id, $client, $activeId);
+        self::assertSame('canceled', $stop['result']['status'], json_encode($stop));
+        DB::table('ssh_command_jobs')->whereIn('id', [$id, $activeId])->update(['expires_at' => now()->subMinute()]);
+        self::assertSame(2, app(SshJobCoordinator::class)->prune());
+    }
+
+    public function test_real_job_probe_preserves_native_connection_and_admission_failures(): void
+    {
+        $actor = User::query()->create([
+            'name' => 'Native probe failure fixture',
+            'email' => 'probe-failure-'.bin2hex(random_bytes(5)).'@example.test',
+            'password' => 'CorrectHorse!234', 'role' => 'operator',
+            'target_scope_mode' => 'all', 'access_enabled' => true,
+        ]);
+        $pin = trim((string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_HOST_KEY')));
+        $wrongPin = trim((string) file_get_contents((string) getenv('SSH_FIXTURE_WRONG_ED25519_HOST_PUB')));
+        self::assertNotSame($pin, $wrongPin);
+        $key = (string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_PRIVATE_KEY'));
+        $passphrase = getenv('SSH_JOB_FIXTURE_PASSPHRASE') ?: null;
+        $client = hash('sha256', 'native-probe-failure');
+        $ids = [];
+        foreach ([
+            'host_key_mismatch' => 'pin', 'authentication_failed' => 'auth',
+            'dispatch_lease_expired' => 'lease', 'forbidden' => 'grant',
+        ] as $code => $kind) {
+            $target = app(SshTargetRegistration::class)->register(
+                'probe-failure-'.$kind, 'Disposable probe failure', 'fixture.example.test',
+                (int) getenv('SSH_JOB_FIXTURE_PORT'), (string) getenv('SSH_JOB_FIXTURE_USER'),
+                $kind === 'pin' ? $wrongPin : $pin,
+                $kind === 'auth' ? 'password' : 'private_key',
+                $kind === 'auth' ? 'invalid-fixture-password' : $key,
+                $kind === 'auth' ? null : $passphrase,
+            );
+            // Model a previously connected Target whose next native probe
+            // now encounters the actual pinned-login/admission failure.
+            $target->forceFill(['connection_state' => TargetConnectionState::Connected])->save();
+            $request = (string) Str::uuid();
+            $dialed = false;
+            $onDial = static function () use (&$dialed, $kind, $actor, $target, $request): void {
+                $dialed = true;
+                if ($kind === 'lease') {
+                    $row = DB::table('ssh_command_jobs')->where('request_id', $request);
+                    self::assertSame('preparing', $row->value('status'));
+                    $row->update(['preparing_expires_at' => now()->subSecond()]);
+                } elseif ($kind === 'grant') {
+                    DB::table('user_target_permission_denials')->insert([
+                        'user_id' => $actor->getKey(), 'target_record_id' => $target->getKey(),
+                        'permission' => GatewayPermission::SshCommandRun->value,
+                        'created_at' => now(), 'updated_at' => now(),
+                    ]);
+                }
+            };
+            $this->app->instance(SshDialAddressPolicy::class, new class($onDial) implements SshDialAddressPolicy
+            {
+                public function __construct(private readonly \Closure $onDial) {}
+
+                public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+                {
+                    ($this->onDial)();
+
+                    return ['127.0.0.1'];
+                }
+            });
+            $jobs = app(SshJobMcpToolHandlers::class);
+            try {
+                $response = $jobs->start($actor, $target->target_id, $client, $request, 'printf must-not-launch', 60);
+                self::assertTrue($dialed);
+                self::assertFalse($response['ok'], json_encode($response));
+                self::assertSame($code, $response['error']['code'], json_encode($response));
+                self::assertSame('failed', $response['result']['status']);
+                self::assertSame('pre_dispatch_failed', $response['result']['terminal_reason']);
+                self::assertFalse($response['result']['launch_admitted']);
+                $id = $response['result']['job_id'];
+                $ids[] = $id;
+                $row = DB::table('ssh_command_jobs')->where('id', $id)->sole();
+                self::assertNull($row->unit_mode);
+                $evidence = json_decode(Crypt::decryptString($row->launch_observation_ciphertext), true, flags: JSON_THROW_ON_ERROR);
+                self::assertSame($code, $evidence['error_code']);
+                self::assertSame('probe', $evidence['stage']);
+                self::assertSame(in_array($kind, ['pin', 'auth'], true) ? 'gateway_transport' : 'gateway_admission', $evidence['diagnostics']['failure_origin']);
+                self::assertFalse($evidence['diagnostics']['job_launch_admitted']);
+            } finally {
+                DB::table('user_target_permission_denials')
+                    ->where('user_id', $actor->getKey())->where('target_record_id', $target->getKey())
+                    ->where('permission', GatewayPermission::SshCommandRun->value)->delete();
+            }
+            $dialed = false;
+            $same = $jobs->start($actor, $target->target_id, $client, $request, 'printf must-not-launch', 60);
+            self::assertFalse($dialed, 'Exact failed request recovery must never probe again.');
+            self::assertSame($id, $same['result']['job_id']);
+            self::assertSame($code, $same['error']['code']);
+        }
+        // The final Target has correct fixture credentials and its command
+        // grant is restored. Prove there was no staging directory for any
+        // of the failed preparations, using a normal authorized command.
+        $this->app->instance(SshDialAddressPolicy::class, new class implements SshDialAddressPolicy
+        {
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                return ['127.0.0.1'];
+            }
+        });
+        $proof = app(SshCommandRuntime::class)->run($actor, $target, implode(' && ', array_map(
+            static fn (string $id): string => 'test ! -e '.escapeshellarg('/var/tmp/.mcp-gateway-job-'.$id),
+            $ids,
+        )));
+        self::assertSame(0, $proof['exit_code'], json_encode($proof));
+        DB::table('ssh_command_jobs')->whereIn('id', $ids)->update(['expires_at' => now()->subMinute()]);
+        self::assertSame(count($ids), app(SshJobCoordinator::class)->prune());
+    }
+
+    public function test_final_launch_lease_expiry_after_reservation_fences_real_systemd_exec(): void
+    {
+        $owner = User::query()->create([
+            'name' => 'Final launch lease fixture', 'email' => 'final-lease-'.bin2hex(random_bytes(5)).'@example.test',
+            'password' => 'CorrectHorse!234', 'role' => 'owner', 'target_scope_mode' => 'all', 'access_enabled' => true,
+        ]);
+        $target = app(SshTargetRegistration::class)->register(
+            'job-final-lease-fixture', 'Disposable final launch lease fixture', 'fixture.example.test',
+            (int) getenv('SSH_JOB_FIXTURE_PORT'), (string) getenv('SSH_JOB_FIXTURE_USER'),
+            trim((string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_HOST_KEY'))),
+            'private_key', (string) file_get_contents((string) getenv('SSH_JOB_FIXTURE_PRIVATE_KEY')),
+            getenv('SSH_JOB_FIXTURE_PASSPHRASE') ?: null,
+        );
+        app(SshTargetConnectionService::class)->test($target);
+        $target->refresh();
+        self::assertSame(TargetConnectionState::Connected, $target->connection_state);
+        $requestId = (string) Str::uuid();
+        $expired = false;
+        $expire = static function () use (&$expired, $requestId): void {
+            if ($expired) {
+                return;
+            }
+            foreach (debug_backtrace() as $frame) {
+                if (($frame['class'] ?? '') === SshCommandRuntime::class && ($frame['function'] ?? '') === 'run'
+                    && str_contains((string) ($frame['args'][2] ?? ''), '--unit=')) {
+                    $row = DB::table('ssh_command_jobs')->where('request_id', $requestId)->sole();
+                    self::assertSame('launch_unknown', $row->status);
+                    self::assertFalse((bool) $row->launch_admitted);
+                    self::assertTrue(now()->lt($row->admission_expires_at));
+                    DB::table('ssh_command_jobs')->where('id', $row->id)->update(['admission_expires_at' => now()->subSecond()]);
+                    $expired = true;
+
+                    return;
+                }
+            }
+        };
+        $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class($expire) implements SshDialAddressPolicy
+        {
+            public function __construct(private readonly \Closure $expire) {}
+
+            public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
+            {
+                ($this->expire)();
+
+                return ['127.0.0.1'];
+            }
+        });
+        $marker = '/home/'.getenv('SSH_JOB_FIXTURE_USER').'/lease-fenced-'.bin2hex(random_bytes(8));
+        $result = app(SshJobMcpToolHandlers::class)->start($owner, $target->target_id, hash('sha256', 'final-lease'), $requestId,
+            'printf must-not-run > '.escapeshellarg($marker), 60);
+        self::assertTrue($expired, json_encode($result));
+        self::assertFalse($result['ok'], json_encode($result));
+        self::assertSame('dispatch_lease_expired', $result['error']['code']);
+        self::assertFalse($result['result']['launch_admitted']);
+        self::assertSame('failed', $result['result']['status']);
+        $id = $result['result']['job_id'];
+        $proof = app(SshCommandRuntime::class)->run($owner, $target,
+            'test ! -e '.escapeshellarg($marker)
+                .' && test "$(XDG_RUNTIME_DIR=/run/user/$(id -u) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus'
+                .' systemctl --user show -p LoadState --value '.escapeshellarg('mgw-'.strtolower($id).'.service').')" = not-found');
+        self::assertSame(0, $proof['exit_code'], json_encode($proof));
+        DB::table('ssh_command_jobs')->where('id', $id)->update(['expires_at' => now()->subMinute()]);
+        self::assertSame(1, app(SshJobCoordinator::class)->prune());
     }
 
     public function test_job_longer_than_http_budget_has_bounded_output_durable_exit_and_verified_cancel(): void

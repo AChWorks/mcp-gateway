@@ -664,7 +664,7 @@ final class SshFileMcpTest extends TestCase
             ->where('connector_type', 'ssh_direct')->where('purpose', SshTargetVault::PURPOSE)->firstOrFail();
 
         return app(SshExecutionAdmission::class)->guard(VerifiedExecutionContext::local($user), $user,
-            $target, GatewayPermission::SshFileWrite, $config, $credential);
+            $target, [GatewayPermission::SshFileWrite], $config, $credential);
     }
 
     /** @return array{string, string, string} */

@@ -154,7 +154,7 @@ final class OperationDiagnostics
         // SFTP failures distinguish a confirmed destination preflight
         // rejection from an ambiguous publish. Stage residue is tracked
         // separately; only safe booleans enter Activity diagnostics.
-        foreach (['publication_attempted', 'temporary_cleanup_confirmed'] as $field) {
+        foreach (['publication_attempted', 'temporary_cleanup_confirmed', 'batch_effect_admitted', 'job_launch_admitted'] as $field) {
             if (is_bool($details[$field] ?? null)) {
                 $safe[$field] = $details[$field];
             }
@@ -178,11 +178,15 @@ final class OperationDiagnostics
 
         // Trusted deferred Batch identity and provider cause-chain. Preserve
         // bounded references, but never inputs, secrets or command output.
-        foreach (['batch_id', 'batch_child_id'] as $key) {
+        foreach (['batch_id', 'batch_child_id', 'job_id'] as $key) {
             $value = $details[$key] ?? null;
             if (is_string($value) && Str::isUlid($value)) {
                 $safe[$key] = $value;
             }
+        }
+        $jobStage = $details['job_stage'] ?? null;
+        if (is_string($jobStage) && in_array($jobStage, ['probe', 'staging_directory', 'staging_files', 'dispatch_admission', 'launch'], true)) {
+            $safe['job_stage'] = $jobStage;
         }
         foreach (['attempt_id', 'downstream_diagnostic_reference'] as $key) {
             $value = $details[$key] ?? null;
@@ -195,6 +199,7 @@ final class OperationDiagnostics
             if (is_string($value) && in_array($value, [
                 'queued', 'running', 'dispatching', 'cancel_requested',
                 'canceled', 'completed', 'failed', 'blocked', 'partial', 'outcome_unknown',
+                'preparing', 'launch_unknown', 'unsupported', 'retired',
             ], true)) {
                 $safe[$key] = $value;
             }
@@ -417,6 +422,9 @@ final class OperationDiagnostics
             'connection_busy', 'rate_limited', 'admission_unavailable' => __('Wait for the existing attempt or the advertised limit to clear; avoid parallel retries.'),
             'timeout_unsupported' => __('Ask the Owner to qualify and adjust the PHP worker, reverse-proxy and MCP client deadlines before selecting a long synchronous command. Use retained SSH Jobs if those hops cannot support it.'),
             'ssh_output_collector_unavailable' => __('Review the installed phpseclib SSH2 stdout/stderr callback contract and restore the supported library version before retrying.'),
+            'job_identity_unverified' => __('Retain the Job record. Verify the original peer, account and private Job artifact before any remote follow-up; never replay the launch.'),
+            'job_attempt_retired', 'dispatch_lease_expired' => __('Inspect the retained attempt state and diagnostic evidence. An expired or retired attempt must not dispatch.'),
+            'job_state_unconfirmed' => __('Poll this same Job after restoring the authorized route. Do not infer completion or re-launch.'),
             'outcome_unknown' => __('Inspect the remote state and any transfer receipt before deciding whether another command or write is safe.'),
             'downstream_rejected' => __('A downstream MCP Tool reported an error but its provider cause may be unavailable. Use the diagnostic reference in authorized Admin Activity or the operation-diagnostics-read MCP Tool to inspect the original observed error. If the upstream Adapter stripped the provider cause, inspect Bridge/WordPress. Reconcile uncertain remote effects before any retry.'),
             'response_too_large', 'file_too_large' => __('Reduce the payload or use a supported bounded transfer mode. Do not disable resource limits.'),

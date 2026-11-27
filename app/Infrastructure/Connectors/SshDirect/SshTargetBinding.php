@@ -42,7 +42,7 @@ final class SshTargetBinding
     }
 
     /**
-     * Retained Job/cursor endpoint/route identity, including its persisted
+     * Retained Job launch endpoint/route identity, including its persisted
      * evidence format. This is a single historical artifact contract, not an
      * alternative admission hash. Do not rewrite already-dispatched Jobs.
      */

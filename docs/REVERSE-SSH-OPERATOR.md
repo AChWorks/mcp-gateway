@@ -173,7 +173,7 @@ dedicated key/account and listener using the agreed host change plan, and
 verify no unexpected listener remains. **Application route rollback and
 schema downgrade are different operations.** Target transport changes advance the shared transport revision independently
 of the SSH login binding revision. A Direct → Reverse → Direct round trip
-cannot reactivate an earlier retained Job. Encrypted login credentials remain
+cannot reactivate earlier dispatch authority. Fresh authorized follow-up may use a new verified route only when the original retained artifact can be proven. Encrypted login credentials remain
 bound to the actual endpoint/account/host key, not to the transport revision.
 
 For the v3 application, database rollback is a verified pre-update database

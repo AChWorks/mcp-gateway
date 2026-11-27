@@ -3,14 +3,13 @@
 namespace App\Application\Batch;
 
 use App\Application\Operations\OperationalSettings;
+use App\Application\Targets\WordpressOperationEvidence;
 use App\Application\Targets\WordpressTargetOperations;
 use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
+use App\Infrastructure\Activity\ActivityAttribution;
 use App\Models\User;
-use App\Support\OperationDiagnostics;
 use Closure;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 /** Only this fixed read-only Bridge capability enters Batch; no publishing. */
 final readonly class WordpressBridgeInfoBatchProvider implements TargetBatchOperationProvider
@@ -60,18 +59,18 @@ final readonly class WordpressBridgeInfoBatchProvider implements TargetBatchOper
         return 5 * $requestSeconds + 45;
     }
 
-    public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess): array
+    public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess, Closure $admitRemoteEffect, ActivityAttribution $attribution): array
     {
+        $evidence = new WordpressOperationEvidence($attribution);
         $result = $this->wordpress->execute(
             $user, $target->target_id, 'wp-ai-bridge/bridge-info', [],
             readonlyOnly: true, requiresAiAccess: $requiresAiAccess, beforeRemoteEffect: $beforeRemoteEffect,
+            admitRemoteEffect: $admitRemoteEffect, evidence: $evidence,
         );
         if (! ($result['ok'] ?? false)) {
             $error = is_array($result['error'] ?? null) ? $result['error'] : [];
             $code = (string) ($error['code'] ?? 'wordpress_read_failed');
             $diagnostics = [
-                'failure_origin' => 'downstream_mcp',
-                'failure_stage' => 'operation',
                 'source_error_code' => $code,
             ];
             if (is_string($error['diagnostic_reference'] ?? null)) {
@@ -84,33 +83,12 @@ final readonly class WordpressBridgeInfoBatchProvider implements TargetBatchOper
                 $diagnostics['source_error_details'] = ['provider_next_step' => $error['next_step']];
             }
 
-            // Native WordPress already stored its redacted source failure under
-            // a separate diagnostic reference. Restore that precise cause into
-            // the initiating Batch actor's scoped Activity record: CLI's native
-            // system-actor row is otherwise unreadable by non-Owner MCP users.
-            // Require the same Target record; never copy raw Tool payloads.
-            $reference = $diagnostics['downstream_diagnostic_reference'] ?? null;
-            if (is_string($reference) && Str::isUuid($reference)) {
-                $native = DB::table('activity_events')
-                    ->where('correlation_id', $reference)
-                    ->where('target_record_id', $target->getKey())
-                    ->where('outcome', '!=', 'success')
-                    ->orderByDesc('id')->first(['error_code', 'diagnostic_context']);
-                if ($native !== null) {
-                    $context = json_decode((string) $native->diagnostic_context, true);
-                    if (is_array($context)) {
-                        $details = OperationDiagnostics::safeContext($context);
-                        $diagnostics = [...$diagnostics, ...$details,
-                            'downstream_diagnostic_reference' => $reference];
-                    }
-                    if (is_string($native->error_code) && $native->error_code !== '') {
-                        $diagnostics['provider_error_code'] = $native->error_code;
-                    }
-                }
-            }
+            // Native result evidence is captured before best-effort Activity.
+            // Neither retention nor a failed Activity insert changes truth.
+            $diagnostics = [...$diagnostics, ...$evidence->diagnostics];
 
             return [
-                'ok' => false, 'status' => $code === 'outcome_unknown' ? 'outcome_unknown' : 'failed',
+                'ok' => false, 'status' => $code === 'outcome_unknown' || ($diagnostics['effect_unconfirmed'] ?? false) === true ? 'outcome_unknown' : 'failed',
                 'error_code' => $code, 'diagnostics' => $diagnostics,
             ];
         }

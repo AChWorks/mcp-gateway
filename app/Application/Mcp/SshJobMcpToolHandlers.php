@@ -89,17 +89,46 @@ final readonly class SshJobMcpToolHandlers
             ]);
         }
         $status = $response['status'] ?? null;
+        if (is_string($response['remote_error_code'] ?? null)) {
+            return ['ok' => false, 'result' => $response, 'error' => [
+                'code' => $response['remote_error_code'],
+                'message' => 'Retained Job metadata is available; the current remote operation was not confirmed.',
+                'next_step' => OperationDiagnostics::nextStep($response['remote_error_code']),
+                ...isset($response['diagnostic_reference']) ? ['diagnostic_reference' => $response['diagnostic_reference']] : [],
+            ]];
+        }
+        if ($status === 'failed' && in_array($response['terminal_reason'] ?? null, ['pre_dispatch_failed', 'pre_launch_failed', 'pre_launch_abandoned'], true)) {
+            $beforeStaging = $response['terminal_reason'] === 'pre_dispatch_failed';
+            $code = $response['launch_error_code'] ?? ($beforeStaging ? 'job_state_unconfirmed' : 'dispatch_lease_expired');
+
+            return ['ok' => false, 'result' => $response, 'error' => [
+                'code' => $code,
+                'message' => $beforeStaging
+                    ? 'The detached script was not admitted for launch. The intent ended before staging; inspect the retained native evidence when available.'
+                    : 'The detached script was not admitted for launch. Staging evidence is retained; do not replay this request.',
+                'next_step' => $beforeStaging && $code === 'outcome_unknown'
+                    ? 'Inspect the probe diagnostic reference; no detached script was admitted. Recover this exact request without relaunch.'
+                    : OperationDiagnostics::nextStep($code),
+                ...isset($response['launch_diagnostic_reference']) ? ['diagnostic_reference' => $response['launch_diagnostic_reference']] : [],
+            ]];
+        }
         if ($status === 'launch_unknown') {
             return ['ok' => false, 'result' => $response, 'error' => [
                 'code' => 'outcome_unknown',
-                'message' => 'The launch may have happened. Poll this exact job ID; never repeat a new launch.',
+                'message' => ($response['launch_admitted'] ?? null) === false
+                    ? 'Script launch has not been admitted. Poll this exact job ID; never repeat a new launch.'
+                    : 'The launch may have happened. Poll this exact job ID; never repeat a new launch.',
                 'next_step' => OperationDiagnostics::nextStep('outcome_unknown'),
+                ...isset($response['launch_diagnostic_reference']) ? ['diagnostic_reference' => $response['launch_diagnostic_reference']] : [],
             ]];
         }
         if ($status === 'unsupported') {
             return ['ok' => false, 'result' => $response, 'error' => [
                 'code' => 'job_unsupported',
-                'message' => 'A supported persistent systemd manager could not be verified on this SSH host. No detached job was launched.',
+                'message' => ($response['terminal_reason'] ?? null) === 'host_unsupported'
+                    ? 'The SSH host reported that a required persistent Job capability is unavailable. No detached job was launched.'
+                    : 'A previous Job probe did not establish support. No detached job was launched.',
+                ...isset($response['launch_diagnostic_reference']) ? ['diagnostic_reference' => $response['launch_diagnostic_reference']] : [],
             ]];
         }
 

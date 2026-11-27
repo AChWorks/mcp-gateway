@@ -126,6 +126,7 @@ trait StreamsSshFiles
         bool $overwrite = false, ?int $expectedSize = null, ?int $expectedMtime = null,
         ?string $expectedTargetBinding = null, ?int $overallDeadlineNs = null,
         ?string $expectedCredentialDispatch = null, ?string $expectedExecution = null,
+        ?Closure $admitRemoteEffect = null,
     ): array {
         $this->validatePath($path);
         $this->validatePath($privateStagingDir);
@@ -149,7 +150,7 @@ trait StreamsSshFiles
         return $this->operate($user, $target, GatewayPermission::SshFileWrite,
             function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $assertWriteAuthority, string $routeMode) use (
                 $path, $source, $expectedBytes, $expectedSha256, $deadline, $privateStagingDir,
-                $overwrite, $expectedSize, $expectedMtime,
+                $overwrite, $expectedSize, $expectedMtime, $admitRemoteEffect,
             ): array {
                 $sftp->disableStatCache();
                 try {
@@ -341,7 +342,7 @@ trait StreamsSshFiles
                     if (! $overwrite) {
                         $sftp->delete($temporary, false);
                     }
-                } catch (Throwable) {
+                } catch (Throwable $exception) {
                     $cleanup = false;
                     try {
                         $sftp->delete($temporary, false);
@@ -356,6 +357,11 @@ trait StreamsSshFiles
                         'complete' => false,
                         'possible_remote_effect' => true,
                         'temporary_cleanup_confirmed' => $cleanup,
+                        // Internal Job caller retains native evidence; the
+                        // public whole-file response contract stays unchanged.
+                        ...($admitRemoteEffect === null ? [] : [
+                            '__diagnostic_context' => $this->writeStagingDiagnostics($exception),
+                        ]),
                     ];
                 }
 
@@ -371,7 +377,7 @@ trait StreamsSshFiles
                     'overwrote' => $overwrite,
                     'published_mode' => sprintf('%04o', $publishedMode),
                 ];
-            }, $deadline, expectedTargetBinding: $expectedTargetBinding, expectedCredentialDispatch: $expectedCredentialDispatch, expectedExecution: $expectedExecution);
+            }, $deadline, expectedTargetBinding: $expectedTargetBinding, expectedCredentialDispatch: $expectedCredentialDispatch, expectedExecution: $expectedExecution, admitRemoteEffect: $admitRemoteEffect);
     }
 
     private function validateTransferLimit(int $maxBytes): void

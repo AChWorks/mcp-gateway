@@ -19,6 +19,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /** Only a disposable, explicitly launched loopback sshd; no real Target use. */
@@ -26,15 +27,28 @@ final class TargetBatchOpenSshFixtureTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_native_ssh_nonzero_exit_retains_original_failure_and_target_batch_correlation(): void
+    public static function sshDispatchCases(): array
+    {
+        return ['native nonzero exit' => [false], 'lease expires before login' => [true]];
+    }
+
+    #[DataProvider('sshDispatchCases')]
+    public function test_native_ssh_dispatch_preserves_certainty_and_target_batch_correlation(bool $expireBeforeLogin): void
     {
         if (getenv('SSH_FIXTURE_ENABLED') !== '1') {
             $this->markTestSkipped('Requires the established CI disposable loopback OpenSSH fixture.');
         }
-        $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class implements SshDialAddressPolicy
+        $this->app->bind(SshDialAddressPolicy::class, static fn (): SshDialAddressPolicy => new class($expireBeforeLogin) implements SshDialAddressPolicy
         {
+            public function __construct(private readonly bool $expireBeforeLogin) {}
+
             public function approvedDialAddresses(SshRegisteredEndpoint $endpoint, ?int $deadlineNs = null): array
             {
+                if ($this->expireBeforeLogin) {
+                    DB::table('target_batch_items')->where('status', 'dispatching')
+                        ->update(['lease_expires_at' => now()->subSecond()]);
+                }
+
                 return ['127.0.0.1'];
             }
         });
@@ -62,6 +76,18 @@ final class TargetBatchOpenSshFixtureTest extends TestCase
         $batch = $core->create($user, $origin, (string) Str::uuid(), 'ssh.command.run',
             [$target->target_id], $arguments, $preview['preview_token']);
         $worked = app(TargetBatchWorker::class)->workOnce();
+        if ($expireBeforeLogin) {
+            self::assertSame('blocked', $worked['status']);
+            self::assertSame('dispatch_lease_expired', $worked['error_code']);
+            $child = DB::table('target_batch_items')->where('batch_id', $batch['batch_id'])->sole();
+            self::assertNotNull($child->effect_admitted);
+            self::assertFalse((bool) $child->effect_admitted);
+            $result = $core->status($user, $origin, $batch['batch_id'])['items'][0]['result'];
+            self::assertArrayNotHasKey('result', $result);
+            self::assertNull(app(TargetBatchWorker::class)->workOnce());
+
+            return;
+        }
         self::assertSame('failed', $worked['status']);
         self::assertSame('remote_exit_nonzero', $worked['error_code']);
         $event = DB::table('activity_events')
@@ -161,7 +187,7 @@ final class TargetBatchOpenSshFixtureTest extends TestCase
         for ($i = 0; $i < 2; $i++) {
             $outcome = $worker->workOnce();
             self::assertSame('blocked', $outcome['status']);
-            self::assertSame('authorization_revoked', $outcome['error_code']);
+            self::assertSame('target_changed', $outcome['error_code']);
         }
         foreach ([$old, $duringDisable] as $batch) {
             self::assertSame('blocked', $core->status($user, $origin, $batch['batch_id'])['items'][0]['status']);

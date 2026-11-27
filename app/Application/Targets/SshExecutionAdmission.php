@@ -24,16 +24,19 @@ final readonly class SshExecutionAdmission
         private ConnectionRelayRoutes $relayRoutes,
     ) {}
 
-    /** @return Closure():void */
+    /**
+     * @param  non-empty-list<GatewayPermission>  $permissions
+     * @return Closure():void
+     */
     public function guard(VerifiedExecutionContext $context, User $user, Target $target,
-        GatewayPermission $permission, SshTargetConfig $config, TargetCredential $credential): Closure
+        array $permissions, SshTargetConfig $config, TargetCredential $credential): Closure
     {
         $fingerprint = SshTargetBinding::executionFingerprint($target, $config, $credential);
         $recordId = $target->getKey();
         $configId = $config->getKey();
         $credentialId = $credential->getKey();
 
-        return function () use ($context, $user, $permission, $fingerprint, $recordId, $configId, $credentialId): void {
+        return function () use ($context, $user, $permissions, $fingerprint, $recordId, $configId, $credentialId): void {
             $current = Target::query()->find($recordId);
             if ($current instanceof Target && $current->operations_paused) {
                 throw new SshTargetConnectionException('target_paused');
@@ -50,7 +53,8 @@ final readonly class SshExecutionAdmission
                 || ! hash_equals($fingerprint, SshTargetBinding::executionFingerprint($current, $currentConfig, $currentCredential))) {
                 throw new SshTargetConnectionException('target_changed');
             }
-            if (! $this->admission->allows($context, $user, $current, $permission)) {
+            $grants = $this->admission->permissions($context, $user, $current, $permissions);
+            if ($grants === [] || in_array(false, $grants, true)) {
                 throw new SshTargetConnectionException($context->channel === 'deferred' ? 'authorization_revoked' : 'forbidden');
             }
             $this->reverseRoutes->forTarget($current);

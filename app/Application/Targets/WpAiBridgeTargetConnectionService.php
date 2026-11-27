@@ -307,9 +307,9 @@ final readonly class WpAiBridgeTargetConnectionService
      *
      * @return RoutingSnapshot
      */
-    public function routingContext(Target $target, bool $renewIfDue = false, ?Closure $authorize = null): array
+    public function routingContext(Target $target, bool $renewIfDue = false, ?Closure $authorize = null, ?Closure $admitRemoteEffect = null): array
     {
-        return $this->resolveRoutingContext($target, $renewIfDue, $authorize);
+        return $this->resolveRoutingContext($target, $renewIfDue, $authorize, admitRemoteEffect: $admitRemoteEffect);
     }
 
     /**
@@ -320,7 +320,7 @@ final readonly class WpAiBridgeTargetConnectionService
      * @return RoutingSnapshot
      */
     private function resolveRoutingContext(Target $target, bool $renewIfDue, ?Closure $authorize,
-        ?WpAiBridgeRefreshIdentity $expected = null, bool $successorOnly = false): array
+        ?WpAiBridgeRefreshIdentity $expected = null, bool $successorOnly = false, ?Closure $admitRemoteEffect = null): array
     {
         $recordId = (string) $target->getKey();
         /** @var array<string,mixed> $plan */
@@ -486,7 +486,7 @@ final readonly class WpAiBridgeTargetConnectionService
             ];
         }
 
-        $context = $this->exchangeRefresh($recordId, $plan, $authorize);
+        $context = $this->exchangeRefresh($recordId, $plan, $authorize, $admitRemoteEffect);
 
         return [
             ...$context,
@@ -553,10 +553,10 @@ final readonly class WpAiBridgeTargetConnectionService
      *
      * @return RoutingSnapshot
      */
-    public function routingContextWithRecovery(Target $target, bool $renewIfDue = false, ?Closure $authorize = null): array
+    public function routingContextWithRecovery(Target $target, bool $renewIfDue = false, ?Closure $authorize = null, ?Closure $admitRemoteEffect = null): array
     {
         try {
-            return $this->routingContext($target, $renewIfDue, $authorize);
+            return $this->routingContext($target, $renewIfDue, $authorize, $admitRemoteEffect);
         } catch (WpAiBridgeTargetConnectionException $exception) {
             $identity = $exception->refreshIdentity;
             if ($identity === null) {
@@ -682,7 +682,7 @@ final readonly class WpAiBridgeTargetConnectionService
      * @param  array{identity:WpAiBridgeRefreshIdentity,resource_url:string,refresh_token:string,client_id:string,scopes:list<string>,token_url:string,database_session_id:?int,is_recovery:bool,refresh_started_at:int}  $plan
      * @return array{resource_url:string,access_token:string,credential_dispatch:string}
      */
-    private function exchangeRefresh(string $recordId, array $plan, ?Closure $authorize): array
+    private function exchangeRefresh(string $recordId, array $plan, ?Closure $authorize, ?Closure $admitRemoteEffect): array
     {
         try {
             // Local assertion generation happens AFTER the exact refresh
@@ -709,31 +709,40 @@ final readonly class WpAiBridgeTargetConnectionService
                     'resource' => $plan['resource_url'],
                     'client_assertion_type' => GatewayBridgeClientIdentity::ASSERTION_TYPE,
                     'client_assertion' => $assertion,
-                ], relay: $relay, beforeDispatch: function () use ($recordId, $plan, $authorize, $relay): void {
-                    if (! $plan['is_recovery'] && $authorize !== null && ! $authorize()) {
-                        throw new OutboundRequestException('forbidden', 'WordPress operation authority changed before refresh.', [], true);
-                    }
-                    $this->relays->httpRouteAtEpoch($recordId, $plan['identity']->routeEpoch, $relay, true);
-                    $current = Target::query()->find($recordId);
-                    $intent = DB::table('wp_ai_bridge_refresh_intents')->where('target_record_id', $recordId)->first();
-                    $credential = $current instanceof Target ? $this->credential($current) : null;
-                    if (! $current instanceof Target || ! $credential instanceof TargetCredential
-                        || $intent === null || ! $plan['identity']->matchesIntent($intent)
-                        || (int) $intent->attempts !== ($plan['is_recovery'] ? 2 : 1)
-                        || ! $plan['identity']->matchesGrant($current, $credential)
-                        || ! $plan['identity']->matchesMaterial($credential)
-                        || (int) DB::table('wp_ai_bridge_credential_metadata')
-                            ->where('credential_id', $credential->getKey())->value('generation') !== $plan['identity']->generation
-                        || $this->hasRevocationIntent($current)
-                        || ! hash_equals((string) $this->configuration($recordId)->oauth_token_url, $plan['token_url'])) {
-                        throw new OutboundRequestException('target_changed', 'WordPress refresh authority changed.', [], true);
-                    }
-                    if ($plan['is_recovery']
-                        && time() - $plan['refresh_started_at'] >= 45) {
-                        throw new OutboundRequestException('refresh_pending', 'WordPress refresh recovery window expired before dispatch.', [], true);
-                    }
-                    if (! $plan['is_recovery'] && $authorize !== null && $current->operations_paused) {
-                        throw new OutboundRequestException('target_paused', 'WordPress Target operations were paused.', [], true);
+                ], relay: $relay, beforeDispatch: function () use ($recordId, $plan, $authorize, $relay, $admitRemoteEffect): void {
+                    $verify = function () use ($recordId, $plan, $authorize, $relay): void {
+                        if (! $plan['is_recovery'] && $authorize !== null && ! $authorize()) {
+                            throw new OutboundRequestException('forbidden', 'WordPress operation authority changed before refresh.', [], true);
+                        }
+                        $this->relays->httpRouteAtEpoch($recordId, $plan['identity']->routeEpoch, $relay, true);
+                        $current = Target::query()->find($recordId);
+                        $intent = DB::table('wp_ai_bridge_refresh_intents')->where('target_record_id', $recordId)->first();
+                        $credential = $current instanceof Target ? $this->credential($current) : null;
+                        if (! $current instanceof Target || ! $credential instanceof TargetCredential
+                            || $intent === null || ! $plan['identity']->matchesIntent($intent)
+                            || (int) $intent->attempts !== ($plan['is_recovery'] ? 2 : 1)
+                            || ! $plan['identity']->matchesGrant($current, $credential)
+                            || ! $plan['identity']->matchesMaterial($credential)
+                            || (int) DB::table('wp_ai_bridge_credential_metadata')
+                                ->where('credential_id', $credential->getKey())->value('generation') !== $plan['identity']->generation
+                            || $this->hasRevocationIntent($current)
+                            || ! hash_equals((string) $this->configuration($recordId)->oauth_token_url, $plan['token_url'])) {
+                            throw new OutboundRequestException('target_changed', 'WordPress refresh authority changed.', [], true);
+                        }
+                        if ($plan['is_recovery']
+                            && time() - $plan['refresh_started_at'] >= 45) {
+                            throw new OutboundRequestException('refresh_pending', 'WordPress refresh recovery window expired before dispatch.', [], true);
+                        }
+                        if (! $plan['is_recovery'] && $authorize !== null && $current->operations_paused) {
+                            throw new OutboundRequestException('target_paused', 'WordPress Target operations were paused.', [], true);
+                        }
+                    };
+                    // Exact old-token recovery is settlement of an already
+                    // admitted refresh, not authority for another operation.
+                    if ($plan['is_recovery'] || $admitRemoteEffect === null) {
+                        $verify();
+                    } elseif (! $admitRemoteEffect($verify)) {
+                        throw new OutboundRequestException('forbidden', 'WordPress durable attempt changed before refresh.', [], true);
                     }
                 });
             } catch (UnsafeOutboundTarget) {

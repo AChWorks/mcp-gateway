@@ -59,7 +59,7 @@ final readonly class SshMcpToolRegistrar
                     $request_id, $script, $max_runtime_seconds,
                 ),
                 name: 'ssh-job-start',
-                description: 'Start a bounded background systemd SSH Job; requires command and file read/write grants. Script size is Owner-configurable in UTF-8 bytes. Identical UUID and arguments deduplicate while the Job record is retained. On uncertain launch, poll job_id; never re-launch with a new UUID.',
+                description: 'Start a bounded background systemd SSH Job; requires command and file read/write grants. Script size is Owner-configurable in UTF-8 bytes. Identical UUID and arguments recover the retained Job without dispatch, even after route changes. On uncertain launch, poll job_id; never re-launch with a new UUID.',
                 annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
@@ -81,7 +81,7 @@ final readonly class SshMcpToolRegistrar
                     $status, $cursor, $limit,
                 ),
                 name: 'ssh-jobs-list',
-                description: 'Discover retained SSH Jobs for this exact authenticated user, OAuth client/profile and authorized Target, including uncertain Jobs. Database-only: no SSH connection, polling or relaunch. Use ssh-job-status for a selected job_id.',
+                description: 'Discover retained SSH Jobs for this exact authenticated user, OAuth client/profile and authorized Target, including uncertain Jobs. Database-only, even if the authorized Target is paused or disconnected: no SSH connection, polling or relaunch. Use ssh-job-status for a selected job_id.',
                 annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: false),
                 inputSchema: [
                     'type' => 'object',
@@ -103,7 +103,7 @@ final readonly class SshMcpToolRegistrar
                     $this->principal->user($request), $target_id, $this->principal->clientHash($request), $job_id,
                 ),
                 name: 'ssh-job-status',
-                description: 'Poll a previous Job by job_id for the same user/client/Target. On launch_unknown or connection_busy, retry status later using the same ID, never re-run the script.',
+                description: 'Read retained Job metadata for the same user/client/Target. Fresh remote reconciliation requires current rights and original peer/artifact evidence. If remote state cannot be confirmed, preserve the recorded state and poll the same ID; never re-run the script.',
                 annotations: new ToolAnnotations(readOnlyHint: true, destructiveHint: false, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',
@@ -144,7 +144,7 @@ final readonly class SshMcpToolRegistrar
                     $this->principal->user($request), $target_id, $this->principal->clientHash($request), $job_id,
                 ),
                 name: 'ssh-job-cancel',
-                description: 'Stop an exact systemd Job. canceled means the unit was verified inactive with MainPID/ControlPID zero; cancel_requested remains unconfirmed until reconciled.',
+                description: 'Stop an exact systemd Job. canceled means either the script was never admitted or the exact unit was stopped and verified inactive with MainPID/ControlPID zero; cancel_requested remains unconfirmed until reconciled.',
                 annotations: new ToolAnnotations(readOnlyHint: false, destructiveHint: true, openWorldHint: true),
                 inputSchema: [
                     'type' => 'object',

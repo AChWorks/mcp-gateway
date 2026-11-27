@@ -162,11 +162,17 @@ final readonly class SshFileRuntime
         ]), (string) config('app.key'));
     }
 
-    /** @return array<string,mixed> */
+    /**
+     * @param  list<GatewayPermission>  $additionalPermissions
+     * @param  (Closure(SFTP, Closure():void):void)|null  $verifySource
+     * @return array<string,mixed>
+     */
     public function read(
         User $user, Target $target, string $path, int $offset = 0, int $length = 16384,
         ?int $expectedSize = null, ?int $expectedMtime = null,
         ?string $expectedTargetBinding = null,
+        ?string $expectedCredentialDispatch = null, ?Closure $verifySource = null,
+        array $additionalPermissions = [],
     ): array {
         $this->validatePath($path);
         $maxReadBytes = $this->settings->sshFileLimits()['read_bytes'];
@@ -182,17 +188,27 @@ final readonly class SshFileRuntime
         $this->validatePrecondition($expectedSize, $expectedMtime);
 
         return $this->operate($user, $target, GatewayPermission::SshFileRead,
-            function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $_assertWriteAuthority, string $routeMode) use (
-                $path, $offset, $length, $expectedSize, $expectedMtime,
+            function (SFTP $sftp, string $ip, SshTargetConfig $config, Closure $assertAuthority, string $routeMode) use (
+                $path, $offset, $length, $expectedSize, $expectedMtime, $verifySource, $additionalPermissions,
             ): array {
                 $sftp->disableStatCache();
                 try {
+                    if ($verifySource !== null) {
+                        $verifySource($sftp, $assertAuthority);
+                        $assertAuthority();
+                    }
                     $before = $this->stableRegularFile($sftp, $path);
                     $this->requireVersion($before, $expectedSize, $expectedMtime);
                     $bytesToRead = max(0, min($length, $before['size'] - $offset));
+                    if ($additionalPermissions !== []) {
+                        $assertAuthority();
+                    }
                     $bytes = $bytesToRead > 0 ? $sftp->get($path, null, $offset, $bytesToRead) : '';
                     if (strlen($bytes) !== $bytesToRead) {
                         throw new SshTargetConnectionException('source_changed');
+                    }
+                    if ($additionalPermissions !== []) {
+                        $assertAuthority();
                     }
                     $after = $this->stableRegularFile($sftp, $path);
                     $this->requireVersion($after, $before['size'], $before['mtime']);
@@ -217,7 +233,8 @@ final readonly class SshFileRuntime
                     'complete' => true,
                     'source_check' => 'size_mtime_best_effort',
                 ];
-            }, expectedTargetBinding: $expectedTargetBinding);
+            }, expectedTargetBinding: $expectedTargetBinding, expectedCredentialDispatch: $expectedCredentialDispatch,
+            additionalPermissions: $additionalPermissions);
     }
 
     /**
@@ -287,7 +304,7 @@ final readonly class SshFileRuntime
         User $user, Target $target, string $path, string $contentBase64,
         bool $overwrite = false, ?int $expectedSize = null, ?int $expectedMtime = null,
         ?string $expectedTargetBinding = null, bool $preserveOriginalOwner = false,
-        ?string $expectedCredentialDispatch = null,
+        ?string $expectedCredentialDispatch = null, ?Closure $admitRemoteEffect = null,
     ): array {
         $this->validatePath($path);
         if ($path === '/' || str_ends_with($path, '/')
@@ -569,16 +586,18 @@ final readonly class SshFileRuntime
                     'publish_method' => $overwrite ? 'posix_replace' : 'exclusive_hardlink',
                     'overwrote' => $overwrite,
                 ];
-            }, expectedTargetBinding: $expectedTargetBinding, expectedCredentialDispatch: $expectedCredentialDispatch);
+            }, expectedTargetBinding: $expectedTargetBinding, expectedCredentialDispatch: $expectedCredentialDispatch, admitRemoteEffect: $admitRemoteEffect);
     }
 
     /** @param Closure(SFTP,string,SshTargetConfig,Closure():void,string):array<string,mixed> $operation
+     * @param  list<GatewayPermission>  $additionalPermissions
      * @return array<string,mixed>
      */
     private function operate(
         User $user, Target $target, GatewayPermission $permission,
         Closure $operation, ?int $deadlineNs = null, ?string $expectedTargetBinding = null,
         ?string $expectedCredentialDispatch = null, ?string $expectedExecution = null,
+        ?Closure $admitRemoteEffect = null, array $additionalPermissions = [],
     ): array {
         // This is an end-to-end budget, including admission and credential
         // lookups, not a fresh timeout for each SFTP packet or path operation.
@@ -590,12 +609,13 @@ final readonly class SshFileRuntime
         }
 
         $context = $this->operationAdmission->capture($user);
-        if (! $this->access->allows($user, $permission, $target)) {
+        $permissions = [$permission, ...$additionalPermissions];
+        if (in_array(false, $this->access->allowsTargetPermissions($user, $target, $permissions), true)) {
             throw new SshTargetConnectionException('target_not_found');
         }
 
         return $this->admission->run((string) $target->getKey(), function () use (
-            $context, $user, $target, $permission, $operation, $deadlineNs, $expectedTargetBinding, $expectedCredentialDispatch, $expectedExecution,
+            $context, $user, $target, $operation, $deadlineNs, $expectedTargetBinding, $expectedCredentialDispatch, $expectedExecution, $admitRemoteEffect, $permissions,
         ): array {
             $this->ensureFileDeadline($deadlineNs);
             $fresh = Target::query()->whereKey($target->getKey())->first();
@@ -607,8 +627,11 @@ final readonly class SshFileRuntime
             // opening SSH credentials or contacting a remote Target.
             if (! $fresh instanceof Target || $fresh->connector_type !== 'ssh_direct'
                 || $fresh->getAttribute('connection_state') !== TargetConnectionState::Connected
-                || ! hash_equals((string) $target->target_id, (string) $fresh->target_id)
-                || ! $this->operationAdmission->allows($context, $user, $fresh, $permission)) {
+                || ! hash_equals((string) $target->target_id, (string) $fresh->target_id)) {
+                throw new SshTargetConnectionException('target_not_found');
+            }
+            $grants = $this->operationAdmission->permissions($context, $user, $fresh, $permissions);
+            if ($grants === [] || in_array(false, $grants, true)) {
                 throw new SshTargetConnectionException('target_not_found');
             }
 
@@ -636,7 +659,15 @@ final readonly class SshFileRuntime
                 throw new SshTargetConnectionException('credential_unavailable');
             }
 
-            $guard = $this->executionAdmission->guard($context, $user, $fresh, $permission, $config, $credential);
+            $guard = $this->executionAdmission->guard($context, $user, $fresh, $permissions, $config, $credential);
+            if ($admitRemoteEffect !== null) {
+                $nativeGuard = $guard;
+                $guard = static function () use ($nativeGuard, $admitRemoteEffect): void {
+                    if (! $admitRemoteEffect($nativeGuard, 'file')) {
+                        throw new SshTargetConnectionException('job_attempt_retired');
+                    }
+                };
+            }
             $route = $this->reverseRoutes->forTarget($fresh);
             $relay = $this->relayRoutes->sshRouteForTarget($fresh);
             $this->ensureFileDeadline($deadlineNs);
@@ -777,6 +808,7 @@ final readonly class SshFileRuntime
                     'gateway_error_message' => 'SFTP write failed during staging: '.$exception->reason,
                 ];
             }
+            $details['provider_error_code'] = $exception->reason;
         } else {
             $details = $this->unexpectedSftpFailure($exception)->diagnostics;
         }

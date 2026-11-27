@@ -10,6 +10,7 @@ use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\PreserveGlobalState;
@@ -91,6 +92,43 @@ final class TargetBatchAuthorityMigrationTest extends TestCase
             self::assertSame($intents, DB::table('wp_ai_bridge_revocation_intents')->orderBy('id')->get()->map(fn ($row) => (array) $row)->all());
             self::assertSame($parents, DB::table('target_batches')->orderBy('id')->get()->map(fn ($row) => (array) $row)->all());
         }
+    }
+
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function test_dispatch_evidence_migration_preserves_populated_history_and_rejects_loss(): void
+    {
+        if (DB::getDriverName() !== 'sqlite') {
+            $this->markTestSkipped('DDL interruption is also exercised in the isolated MariaDB worker fixture, not a transaction-wrapped database.');
+        }
+        $target = $this->wordpress('migration-dispatch-evidence');
+        $migration = require database_path('migrations/0001_01_01_000008_record_batch_dispatch_evidence.php');
+        $migration->down();
+        $ids = [];
+        foreach (['queued', 'dispatching', 'completed', 'outcome_unknown'] as $state) {
+            $ids[] = $this->item($target, $state, hash('sha256', 'legacy-binding'),
+                $state === 'queued' ? null : (string) Str::uuid(), $target->target_id);
+        }
+        $before = DB::table('target_batch_items')->orderBy('id')->get()->map(fn ($row) => (array) $row)->all();
+        // Simulate interruption after the first successful DDL statement.
+        Schema::table('target_batch_items', static function ($table): void {
+            $table->boolean('effect_admitted')->nullable();
+        });
+        $migration->up();
+        $migration->up();
+        $after = DB::table('target_batch_items')->orderBy('id')->get()->map(function ($row): array {
+            self::assertNull($row->effect_admitted);
+            self::assertNull($row->late_observation_ciphertext);
+            $data = (array) $row;
+            unset($data['effect_admitted'], $data['late_observation_ciphertext']);
+
+            return $data;
+        })->all();
+        self::assertSame($before, $after);
+        DB::table('target_batch_items')->where('id', $ids[1])->update(['effect_admitted' => false]);
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Restore the pre-update database');
+        $migration->down();
     }
 
     private function wordpress(string $slug): Target

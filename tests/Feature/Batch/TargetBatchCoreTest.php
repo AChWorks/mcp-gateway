@@ -18,6 +18,7 @@ use App\Domain\Access\GatewayPermission;
 use App\Domain\Targets\Target;
 use App\Domain\Targets\TargetConnectionState;
 use App\Domain\Targets\TargetCredential;
+use App\Infrastructure\Activity\ActivityAttribution;
 use App\Infrastructure\Connectors\Relay\ConnectionRelay;
 use App\Infrastructure\Connectors\Relay\ConnectionRelayRoutes;
 use App\Infrastructure\Connectors\SshDirect\SshTargetBinding;
@@ -28,8 +29,10 @@ use App\Infrastructure\OAuth\OAuthAuthorizationStore;
 use App\Models\User;
 use Carbon\Carbon;
 use Closure;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
@@ -49,6 +52,8 @@ final class FakeAuthorizedBatchProvider implements TargetBatchOperationProvider
     public ?Closure $onDispatch = null;
 
     public ?Closure $afterEffect = null;
+
+    public ?Closure $duringAdmission = null;
 
     public function key(): string
     {
@@ -81,12 +86,12 @@ final class FakeAuthorizedBatchProvider implements TargetBatchOperationProvider
         return $this->remoteSeconds;
     }
 
-    public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess): array
+    public function execute(User $user, Target $target, array $arguments, Closure $beforeRemoteEffect, bool $requiresAiAccess, Closure $admitRemoteEffect, ActivityAttribution $attribution): array
     {
         if ($this->onDispatch instanceof Closure) {
             ($this->onDispatch)();
         }
-        if (! $beforeRemoteEffect()) {
+        if (! $beforeRemoteEffect() || ! $admitRemoteEffect($this->duringAdmission ?? static function (): void {})) {
             return ['ok' => false, 'status' => 'blocked', 'error_code' => 'authorization_revoked'];
         }
         $this->effects[] = $target->target_id;
@@ -286,6 +291,15 @@ final class TargetBatchCoreTest extends TestCase
         self::assertSame('completed', $details['late_provider_status']);
         self::assertTrue($details['late_response_after_lease']);
         self::assertSame((string) $events[0]->correlation_id, $worked['diagnostic_reference']);
+        $child = DB::table('target_batch_items')->where('batch_id', $batchId)->sole();
+        self::assertTrue((bool) $child->effect_admitted);
+        self::assertNull($child->result_ciphertext);
+        $late = json_decode(Crypt::decryptString($child->late_observation_ciphertext), true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame($child->dispatch_attempt_id, $late['attempt_id']);
+        self::assertSame($worked['diagnostic_reference'], $late['diagnostic_reference']);
+        self::assertSame('completed', $late['observation']['status']);
+        self::assertSame(0, $late['observation']['result']['exit_code']);
+        self::assertSame($targets[0]->target_id, $late['observation']['result']['target_id']);
     }
 
     public function test_historical_mcp_request_recovers_under_new_consent_and_profile_generation_without_dispatch(): void
@@ -579,7 +593,7 @@ final class TargetBatchCoreTest extends TestCase
         self::assertNotSame($original, $binding->hash($fresh));
         $blocked = $worker->workOnce();
         self::assertSame('blocked', $blocked['status']);
-        self::assertSame('authorization_revoked', $blocked['error_code']);
+        self::assertSame('target_changed', $blocked['error_code']);
         self::assertSame('blocked', app(TargetBatchCoordinator::class)->status($user, $origin, $old)['items'][0]['status']);
         self::assertSame([$target->target_id], $this->fake->effects);
         $new = $this->create($user, $origin, [$fresh]);
@@ -727,6 +741,98 @@ final class TargetBatchCoreTest extends TestCase
         self::assertSame([$targets[1]->target_id], $this->fake->effects);
         self::assertNull(app(TargetBatchWorker::class)->workOnce());
         self::assertSame('outcome_unknown', app(TargetBatchCoordinator::class)->status($user, $origin, $id)['status']);
+    }
+
+    public function test_lease_expiry_during_final_binding_lookup_cannot_admit_effect(): void
+    {
+        $user = $this->owner();
+        $target = $this->targets(1)[0];
+        $id = $this->create($user, $this->web($user), [$target]);
+        $armed = false;
+        $expired = false;
+        $this->fake->onDispatch = static function () use (&$armed): void {
+            $armed = true;
+        };
+        DB::listen(static function (QueryExecuted $query) use ($id, &$armed, &$expired): void {
+            $sql = str_replace(['"', chr(96)], '', strtolower($query->sql));
+            if ($armed && ! $expired && str_contains($sql, 'from target_credentials')
+                && in_array('hashMany', array_column(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS), 'function'), true)) {
+                $expired = true;
+                DB::table('target_batch_items')->where('batch_id', $id)->update([
+                    'lease_expires_at' => now()->subSecond(),
+                ]);
+            }
+        });
+
+        $worked = app(TargetBatchWorker::class)->workOnce();
+        self::assertTrue($expired, 'Expire the lease after its initial read during final binding resolution.');
+        self::assertSame([], $this->fake->effects);
+        self::assertSame('blocked', $worked['status']);
+        self::assertSame('dispatch_lease_expired', $worked['error_code']);
+    }
+
+    public function test_lease_is_checked_again_after_native_verification_inside_locked_admission(): void
+    {
+        $user = $this->owner();
+        $id = $this->create($user, $this->web($user), $this->targets(1));
+        $this->fake->duringAdmission = static function () use ($id): void {
+            DB::table('target_batch_items')->where('batch_id', $id)->update([
+                'lease_expires_at' => now()->subSecond(),
+            ]);
+        };
+        $worked = app(TargetBatchWorker::class)->workOnce();
+        self::assertSame('blocked', $worked['status']);
+        self::assertSame('dispatch_lease_expired', $worked['error_code']);
+        self::assertSame([], $this->fake->effects);
+        $child = DB::table('target_batch_items')->where('batch_id', $id)->sole();
+        self::assertNotNull($child->effect_admitted);
+        self::assertFalse((bool) $child->effect_admitted);
+    }
+
+    public function test_expired_never_admitted_claim_is_retired_without_unknown_or_replay(): void
+    {
+        $user = $this->owner();
+        $origin = $this->web($user);
+        $id = $this->create($user, $origin, $this->targets(1));
+        $this->fake->onDispatch = static function () use ($id): void {
+            DB::table('target_batch_items')->where('batch_id', $id)->update([
+                'lease_expires_at' => now()->subSecond(),
+            ]);
+            self::assertNull(app(TargetBatchWorker::class)->workOnce());
+        };
+        $worked = app(TargetBatchWorker::class)->workOnce();
+        self::assertSame('blocked', $worked['status']);
+        self::assertSame('dispatch_lease_expired', $worked['error_code']);
+        self::assertSame([], $this->fake->effects);
+        $child = DB::table('target_batch_items')->where('batch_id', $id)->sole();
+        self::assertNotNull($child->effect_admitted);
+        self::assertFalse((bool) $child->effect_admitted);
+        self::assertNull($child->result_ciphertext);
+        self::assertSame('failed', app(TargetBatchCoordinator::class)->status($user, $origin, $id)['status']);
+        self::assertNull(app(TargetBatchWorker::class)->workOnce());
+    }
+
+    public function test_cancel_retires_never_admitted_claim_but_preserves_admitted_result(): void
+    {
+        $user = $this->owner();
+        $origin = $this->web($user);
+        $targets = $this->targets(2);
+        $core = app(TargetBatchCoordinator::class);
+        $before = $this->create($user, $origin, [$targets[0]]);
+        $this->fake->onDispatch = static function () use ($core, $user, $origin, $before): void {
+            self::assertSame('canceled', $core->cancel($user, $origin, $before)['status']);
+        };
+        self::assertSame('canceled', app(TargetBatchWorker::class)->workOnce()['status']);
+        self::assertSame([], $this->fake->effects);
+        $this->fake->onDispatch = null;
+
+        $after = $this->create($user, $origin, [$targets[1]]);
+        $this->fake->afterEffect = static function () use ($core, $user, $origin, $after): void {
+            self::assertSame('cancel_requested', $core->cancel($user, $origin, $after)['status']);
+        };
+        self::assertSame('completed', app(TargetBatchWorker::class)->workOnce()['status']);
+        self::assertSame([$targets[1]->target_id], $this->fake->effects);
+        self::assertSame('completed', $core->status($user, $origin, $after)['status']);
     }
 
     public function test_claim_lease_respects_provider_declared_remote_budget_not_known_connector(): void
