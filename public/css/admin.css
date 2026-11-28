@@ -1667,17 +1667,6 @@ td input[type="checkbox"] {
     min-width: 0;
 }
 
-.target-ssh-shortcuts {
-    display: grid;
-    gap: 0.65rem;
-    min-width: 0;
-}
-
-.target-ssh-shortcuts .field-help {
-    margin: 0;
-}
-
-.target-ssh-shortcut-actions,
 .target-fingerprint-tools,
 .target-create-actions,
 .operations-save-row {
@@ -1723,7 +1712,6 @@ td input[type="checkbox"] {
 [data-ssh-managed][hidden],
 [data-ssh-reverse-route][hidden],
 [data-target-preflight][hidden],
-[data-target-ssh-shortcuts][hidden],
 [data-target-preflight-help][hidden],
 [data-relay-owner-group][hidden],
 [data-edit-ssh-credential][hidden],

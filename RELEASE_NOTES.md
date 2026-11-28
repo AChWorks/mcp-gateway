@@ -1,3 +1,11 @@
+# MCP Gateway v3.1.1
+
+**Stable v3.1.1 — Connector-first Add Target presentation.**
+
+- **Admin UI:** Remove the redundant global SSH quick-start buttons. The selected connector alone exposes its connection fields; the existing SSH method selector retains Direct, Managed Reverse and Manual Reverse options and native no-JavaScript links. Switching connectors preserves the shared identity draft and restores the correct submission/preflight state.
+- **Compatibility:** No new migrations, MCP tools, configuration requirements, authorization changes or host setup changes. The 31-tool standard catalog is unchanged from v3.1.0.
+- **Deployment:** The separate versioned browser Update ZIP targets the three actual preceding stable v3 releases, v3.0.1, v3.0.2 and v3.1.0, subject to exact package qualification. For installed v3.1.0, the schema is unchanged; older supported baselines still require the v3.1.0 migrations and a verified recovery set.
+
 # MCP Gateway v3.1.0
 
 **Stable v3.1.0 — Target authority, connector lifecycle and durable execution foundation.**
