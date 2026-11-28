@@ -1130,7 +1130,9 @@ final class AdminUiPresentationTest extends TestCase
             ->assertDontSee('Password + private key')
             ->assertSee('name="connector_type"', false)
             ->assertSee('data-connector-panel="wp_ai_bridge"', false)
-            ->assertSee('data-connector-panel="ssh_direct"', false);
+            ->assertSee('data-connector-panel="ssh_direct"', false)
+            ->assertDontSee('data-target-ssh-shortcut', false)
+            ->assertDontSee('SSH connection methods');
     }
 
     public function test_user_and_group_denials_are_grouped_without_exposing_future_connectors_as_active(): void

@@ -187,6 +187,7 @@ final class TargetManagementAdminTest extends TestCase
         foreach ([
             ['', '', true, true],
             ['?connector_type=wp_ai_bridge', 'wp_ai_bridge', false, true],
+            ['?connector_type=arvancloud', 'arvancloud', true, true],
             ['?connector_type=ssh_direct', 'ssh_direct', true, false],
             ['?connector_type=ai_server_agent', '', true, true],
         ] as [$query, $selected, $wpDisabled, $sshDisabled]) {
@@ -199,6 +200,12 @@ final class TargetManagementAdminTest extends TestCase
             $xpath = new \DOMXPath($dom);
             self::assertSame(1, (int) $xpath->evaluate('count(//form[@id="target-create-form"])'));
             self::assertSame(1, (int) $xpath->evaluate('count(//select[@name="connector_type"])'));
+            self::assertSame(0, (int) $xpath->evaluate('count(//*[@data-target-ssh-shortcuts or @data-target-ssh-shortcut])'));
+            self::assertSame(1, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="ssh_direct"]//select[@name="ssh_mode"])'));
+            self::assertSame(3, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="ssh_direct"]//noscript//a[contains(@href,"ssh_mode=")])'));
+            self::assertSame(0, (int) $xpath->evaluate('count(//a[contains(@href,"ssh_mode=") and not(ancestor::fieldset[@data-connector-panel="ssh_direct"])])'));
+            self::assertSame($sshDisabled ? 1 : 0, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="ssh_direct"][@hidden])'));
+            self::assertSame($selected === 'arvancloud' ? 0 : 1, (int) $xpath->evaluate('count(//fieldset[@data-connector-panel="arvancloud"][@hidden][@disabled])'));
             self::assertSame(0, (int) $xpath->evaluate('count(//option[@value="ai_server_agent"])'));
             self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="target_id"])'));
             self::assertSame(1, (int) $xpath->evaluate('count(//input[@name="display_name"])'));

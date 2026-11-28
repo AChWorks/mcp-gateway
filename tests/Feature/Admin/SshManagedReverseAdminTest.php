@@ -115,10 +115,9 @@ final class SshManagedReverseAdminTest extends TestCase
     {
         $this->actingAs($this->user('owner'));
         $this->get('/admin/targets/create')->assertOk()
-            ->assertSee('data-target-ssh-shortcut="direct"', false)
-            ->assertSee('data-target-ssh-shortcut="managed"', false)
-            ->assertSee('data-target-ssh-shortcut="manual"', false)
-            ->assertSee('SSH connection methods');
+            ->assertDontSee('data-target-ssh-shortcut', false)
+            ->assertDontSee('SSH connection methods')
+            ->assertSee('connector_type=ssh_direct', false);
         $normal = $this->get('/admin/targets/create?connector_type=ssh_direct')
             ->assertOk()->assertSee('name="connector_type"', false)
             ->assertSee('name="ssh_mode" aria-describedby="ssh-mode-help" disabled', false)

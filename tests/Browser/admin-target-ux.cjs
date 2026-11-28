@@ -26,15 +26,35 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
     page.on('pageerror',e=>jsErrors.push(e.message));
     await entry(page);
     await page.goto(base+'/admin/targets/create');
-    assert.equal(await page.locator('[data-target-ssh-shortcuts]').isVisible(),true);
     const startingUrl=page.url();
-    await page.getByRole('link',{name:'Managed Reverse SSH',exact:true}).click();
-    assert.equal(page.url(),startingUrl,'JavaScript shortcut must select within this form without navigation');
+    const sshPanel=page.locator('[data-connector-panel="ssh_direct"]');
+    const method=page.locator('#ssh_mode');
+    assert.equal(await page.locator('[data-target-ssh-shortcuts], [data-target-ssh-shortcut]').count(),0);
+    for (const connector of ['', 'arvancloud', 'wp_ai_bridge']) {
+      await page.locator('#connector_type').selectOption(connector);
+      assert.equal(await sshPanel.isVisible(),false,connector+' must not expose SSH fields');
+      assert.equal(await method.isEnabled(),false);
+      assert.equal(await page.locator('#target-create-form').evaluate(f=>new FormData(f).has('ssh_mode')),false);
+    }
+    await page.locator('#connector_type').selectOption('ssh_direct');
+    assert.equal(page.url(),startingUrl,'connector selection must stay in the same form');
+    assert.equal(await method.isVisible(),true);
+    assert.equal(await method.isEnabled(),true);
+    assert.deepEqual(await method.locator('option').evaluateAll(options=>options.map(x=>x.value)),
+      ['direct','managed','manual']);
+    await page.locator('#target_id').fill('connector-draft');
+    await method.selectOption('managed');
     assert.equal((await summary(page)).route,'managed');
     assert.equal((await summary(page)).action,'/admin/targets/managed-reverse');
-    assert.equal(await page.locator('[data-target-ssh-shortcuts]').isVisible(),false);
-    assert.equal(await page.evaluate(()=>document.activeElement?.id),'target_id');
-    pass('Owner sees Managed Reverse from initial Add Target and selects it in-place');
+    await page.locator('#connector_type').selectOption('arvancloud');
+    assert.equal(await method.isVisible(),false);
+    assert.equal(await method.isEnabled(),false);
+    assert.equal((await summary(page)).action,'/admin/targets');
+    assert.equal((await summary(page)).submitDisabled,false);
+    assert.equal(await page.locator('[data-target-preflight]').isVisible(),true);
+    assert.equal(await page.locator('#target_id').inputValue(),'connector-draft');
+    await page.locator('#target_id').fill('');
+    pass('connector-first enrollment; SSH-only methods, standard action and shared draft preserved');
     await page.goto(base+'/admin/targets/create?connector_type=ssh_direct');
     assert.deepEqual(await summary(page),{
       route:'direct',manual:false,managed:false,standard:true,action:'/admin/targets',dirty:false,submitDisabled:false});
@@ -308,8 +328,12 @@ const summary = page => page.locator('#target-create-form').evaluate(f => ({
     const plain=await nojs.newPage();
     await entry(plain);
     await plain.goto(base+'/admin/targets/create');
-    assert.equal(await plain.locator('[data-target-ssh-shortcut="managed"]').isVisible(),true);
-    await plain.locator('[data-target-ssh-shortcut="managed"]').click();
+    assert.equal(await plain.locator('[data-target-ssh-shortcuts], [data-target-ssh-shortcut]').count(),0);
+    assert.equal(await plain.locator('#ssh_mode').isVisible(),false);
+    await plain.locator('noscript a[href*="connector_type=ssh_direct"]').first().click();
+    assert.equal(new URL(plain.url()).searchParams.get('connector_type'),'ssh_direct');
+    assert.equal(await plain.locator('#ssh_mode').isVisible(),true);
+    await plain.locator('noscript a[href*="ssh_mode=managed"]').click();
     assert.equal(new URL(plain.url()).searchParams.get('ssh_mode'),'managed');
     let res=await plain.goto(base+'/admin/targets/create?connector_type=ssh_direct&ssh_mode=managed');
     assert.equal(res.status(),200);
